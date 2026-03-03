@@ -1,0 +1,53 @@
+---
+title: "Control"
+description: "Send control commands from gamepads, VR controllers, and code"
+---
+
+## Enabling Control Relay
+
+Add the following to your `config.yaml`:
+
+```yaml
+control:
+  enabled: true
+```
+
+That's it. The adamo binary receives control messages over the Adamo network and relays them to ROS topics on the robot.
+
+## Input Methods
+
+The web interface supports gamepad input out of the box. Inputs are serialized, sent over the Adamo network, and relayed to ROS topics on the robot.
+
+**Gamepad** — Plug in a USB or Bluetooth gamepad (Xbox, PlayStation, or similar). The web app detects it automatically. Published to `/joy` as `sensor_msgs/msg/Joy`.
+
+### VR Controllers
+
+When viewing a stereo video stream in immersive VR mode, head pose and VR controller tracking data are captured and forwarded to the robot. This is only active while in the VR view. The following ROS topics are published:
+
+| Topic | Type | Description |
+|-------|------|-------------|
+| `/head_pose` | `geometry_msgs/msg/PoseStamped` | VR headset position and orientation |
+| `/controller/left` | `geometry_msgs/msg/PoseStamped` | Left controller pose |
+| `/controller/right` | `geometry_msgs/msg/PoseStamped` | Right controller pose |
+
+## Custom Control Topics
+
+For programmatic control beyond the web interface, use the Python SDK:
+
+```python
+import adamo
+
+session = adamo.connect(api_key="ak_your_key")
+
+# Send a JointState command
+from adamo import JointState
+js = JointState(
+    names=["joint1", "joint2", "joint3"],
+    positions=[0.1, 0.5, -0.3],
+)
+
+pub = session.control_publisher("my-robot", "joint_states")
+pub.put(js.to_json())
+```
+
+`control_publisher()` uses real-time priority and drop-on-congestion. This is the correct behavior for control loops — you want the latest command delivered fast, not old commands queued up.

@@ -1,0 +1,1213 @@
+---
+title: "TypeScript SDK"
+description: "Full API reference for building custom teleoperation UIs with React"
+---
+
+This is the complete LLM-context reference for the Adamo TypeScript/React SDK. An LLM given this page should be able to generate a fully working robot teleoperation UI without reading any source code.
+
+## 1. Overview
+
+The SDK is split across four packages:
+
+| Package | Purpose |
+|---|---|
+| `@adamo/react` | React hooks and components. This is the primary package for building UIs. |
+| `@adamo/media` | Low-level H.264 video decoding, FEC recovery, TWCC congestion control, XR stereo rendering. Used internally by `@adamo/react`. |
+| `@adamo/teleop` | Gamepad (joystick) input management and ROS Joy message encoding. |
+| `@adamo/fleet` | Imperative (non-React) topic discovery and subscription utilities. |
+
+All transport is over Zenoh via WebSocket (`wss://`) or QUIC. The Zenoh router URL is typically `wss://router.adamohq.com:443`.
+
+### Installation
+
+```bash
+npm install @adamo/react @adamo/media @adamo/teleop
+```
+
+## 2. Session Setup
+
+### `<AdamoProvider>`
+
+Wrap your entire app in `<AdamoProvider>`. It creates a Zenoh session and provides it via React context to all child components. It also manages an internal `StreamManager` that ref-counts active video streams so they survive page navigation without reconnecting.
+
+```tsx
+import { AdamoProvider } from "@adamo/react";
+
+// Connect by URL (recommended)
+function App() {
+  return (
+    <AdamoProvider url="wss://router.adamohq.com:443" org="my-org">
+      <RobotUI />
+    </AdamoProvider>
+  );
+}
+```
+
+You can also pass a pre-existing session (useful in Tauri where the session lives in native code):
+
+```tsx
+import { AdamoProvider } from "@adamo/react";
+import type { Session } from "@adamo/react";
+
+function App({ session }: { session: Session }) {
+  return (
+    <AdamoProvider session={session} org="my-org">
+      <RobotUI />
+    </AdamoProvider>
+  );
+}
+```
+
+### Props
+
+| Prop | Type | Description |
+|---|---|---|
+| `url` | `string` (optional) | WebSocket URL of the Zenoh router. Used when `session` is not provided. |
+| `session` | `Session` (optional) | Pre-existing Zenoh session. Takes precedence over `url`. |
+| `org` | `string` (optional) | Organization slug used for topic namespacing. All built-in hooks and components prepend `adamo/{org}/` to topics. |
+| `children` | `React.ReactNode` | Child components. |
+
+Exactly one of `url` or `session` should be provided.
+
+### Session and Org Hooks
+
+```tsx
+import { useSession, useOrg } from "@adamo/react";
+
+function MyComponent() {
+  const session = useSession(); // Session | null
+  const org = useOrg();         // string | null
+
+  if (!session) return <p>Connecting...</p>;
+  return <p>Connected to org: {org}</p>;
+}
+```
+
+`useSession()` returns `Session | null`. It is `null` until the WebSocket connection is established.
+
+`useOrg()` returns `string | null` — the org slug passed to `<AdamoProvider>`.
+
+## 3. Robot and Track Discovery
+
+### `useRobots()`
+
+Discovers online robots by subscribing to Zenoh liveliness tokens at `adamo/{org}/*/alive`. Returns the list sorted alphabetically.
+
+```tsx
+import { useRobots } from "@adamo/react";
+import type { Robot } from "@adamo/react";
+
+function RobotList() {
+  const robots = useRobots(); // Robot[]
+
+  return (
+    <ul>
+      {robots.map((robot) => (
+        <li key={robot.id}>
+          {robot.id} — {robot.isStreaming ? "online" : "offline"}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+### `Robot` type
+
+```ts
+type Robot = {
+  id: string;          // Robot identifier (e.g., "arm-01")
+  isStreaming: boolean; // true when liveliness token is active
+};
+```
+
+### `useTracks(robotId?)`
+
+Discovers video tracks for a specific robot (or all robots if `robotId` is omitted) by subscribing to liveliness tokens at `adamo/{org}/{robotId}/video/*/alive`. Returns tracks sorted with `"main"` first, then alphabetically.
+
+```tsx
+import { useTracks } from "@adamo/react";
+import type { Track } from "@adamo/react";
+
+function TrackSelector({ robotId }: { robotId: string }) {
+  const tracks = useTracks(robotId); // Track[]
+
+  return (
+    <select>
+      {tracks.map((track) => (
+        <option key={track.name} value={track.name}>
+          {track.name} {track.isActive ? "" : "(inactive)"}
+        </option>
+      ))}
+    </select>
+  );
+}
+```
+
+### `Track` type
+
+```ts
+type Track = {
+  name: string;     // Track name (e.g., "main", "kinect_rgb")
+  robotId: string;  // Robot this track belongs to
+  isActive: boolean; // true when liveliness token is active
+};
+```
+
+### Robot list with track selector
+
+```tsx
+import { useState } from "react";
+import { useRobots, useTracks, Stream } from "@adamo/react";
+
+function RobotBrowser() {
+  const robots = useRobots();
+  const [selectedRobot, setSelectedRobot] = useState<string | null>(null);
+  const [selectedTrack, setSelectedTrack] = useState("main");
+  const tracks = useTracks(selectedRobot ?? undefined);
+
+  return (
+    <div>
+      <div>
+        {robots.map((r) => (
+          <button
+            key={r.id}
+            onClick={() => {
+              setSelectedRobot(r.id);
+              setSelectedTrack("main");
+            }}
+            style={{ fontWeight: selectedRobot === r.id ? "bold" : "normal" }}
+          >
+            {r.id}
+          </button>
+        ))}
+      </div>
+
+      {selectedRobot && (
+        <div>
+          <select
+            value={selectedTrack}
+            onChange={(e) => setSelectedTrack(e.target.value)}
+          >
+            {tracks.map((t) => (
+              <option key={t.name} value={t.name}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+
+          <Stream
+            robot={selectedRobot}
+            track={selectedTrack}
+            style={{ width: "100%", aspectRatio: "16/9" }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+## 4. Video Streaming
+
+### `<Stream>`
+
+The primary video component. Subscribes to an H.264 stream over Zenoh, decodes using the WebCodecs API, and renders frames to a canvas. Streams are ref-counted internally so navigating away and back does not cause a reconnect.
+
+The stream automatically sends resize hints to the robot encoder so it only encodes at the resolution the viewer needs.
+
+```tsx
+import { Stream } from "@adamo/react";
+
+// Recommended: identify by robot + track (org comes from AdamoProvider)
+<Stream
+  robot="arm-01"
+  track="main"
+  className="w-full h-full"
+/>
+
+// Alternative: provide the full topic directly
+<Stream
+  topic="adamo/my-org/arm-01/video/main"
+  className="w-full h-full"
+/>
+```
+
+### Props
+
+| Prop | Type | Default | Description |
+|---|---|---|---|
+| `robot` | `string` | — | Robot ID. Used with `track` to build the topic `adamo/{org}/{robot}/video/{track}`. |
+| `track` | `string` | `"main"` | Track name. Used with `robot`. |
+| `topic` | `string` | — | Full Zenoh key expression for the video topic. Overrides `robot`/`track`. |
+| `crop` | `{ top, right, bottom, left }` | — | Fractional crop insets (0–1) applied via CSS transform. Lets you show a sub-region of the video without re-encoding. |
+| `onStats` | `(stats: StreamStats) => void` | — | Called every second with stream health metrics. |
+| `className` | `string` | — | CSS class applied to the outer `<div>`. |
+| `style` | `React.CSSProperties` | — | Inline styles for the outer `<div>`. The component sets `overflow: hidden` internally. |
+
+Either `topic` or `robot` (with optional `track`) must be provided.
+
+### `StreamStats` type
+
+```ts
+type StreamStats = {
+  fps: number;           // Decoded frames per second
+  kbps: number;          // Received bitrate in kilobits per second
+  jitterMs: number;      // Network jitter in milliseconds
+  rttMs: number;         // Round-trip time in milliseconds (from ping/pong)
+  queueMs: number;       // Time a packet waits in the decode buffer (ms)
+  decodeMs: number;      // Time to decode the last frame (ms)
+  renderMs: number;      // Time to render the last frame (ms)
+  totalPackets: number;  // Total video packets received
+  fecRecovered: number;  // Packets recovered via Reed-Solomon FEC
+  nackRecovered: number; // Packets recovered via NACK retransmission
+};
+```
+
+### Crop example
+
+```tsx
+// Show only the left half of the video (e.g., for a side-by-side stereo camera)
+<Stream
+  robot="arm-01"
+  track="stereo"
+  crop={{ top: 0, right: 0.5, bottom: 0, left: 0 }}
+  className="w-full h-full"
+/>
+```
+
+### Stats overlay example
+
+```tsx
+import { useState } from "react";
+import { Stream } from "@adamo/react";
+import type { StreamStats } from "@adamo/react";
+
+function StreamWithStats({ robotId }: { robotId: string }) {
+  const [stats, setStats] = useState<StreamStats | null>(null);
+
+  return (
+    <div style={{ position: "relative" }}>
+      <Stream robot={robotId} track="main" onStats={setStats} style={{ width: "100%", aspectRatio: "16/9" }} />
+      {stats && (
+        <div style={{ position: "absolute", top: 8, left: 8, color: "white", fontSize: 12 }}>
+          {stats.fps.toFixed(1)} fps | {stats.kbps.toFixed(0)} kbps | RTT {stats.rttMs.toFixed(0)} ms
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+## 5. Publishing and Subscribing
+
+### `useSubscription(keyexpr, onSample, options?)`
+
+Subscribes to a Zenoh key expression and calls a callback for each received `Sample`. Uses a `RingChannel` internally — old messages are dropped when the buffer fills, which is the correct behaviour for real-time streams.
+
+```tsx
+import { useSubscription, json } from "@adamo/react";
+
+function SystemStats({ robotId, org }: { robotId: string; org: string }) {
+  useSubscription(
+    `adamo/${org}/${robotId}/stats/system`,
+    (sample) => {
+      const stats = json.decode<{ cpu: number; memoryMb: number }>(
+        sample.payload().toBytes()
+      );
+      console.log("CPU:", stats.cpu, "Memory:", stats.memoryMb);
+    }
+  );
+
+  return null;
+}
+```
+
+### `SubscriptionOptions`
+
+```ts
+type SubscriptionOptions = {
+  bufferSize?: number; // Ring buffer size (default: 8). Increase for bursty topics.
+  enabled?: boolean;   // Set false to pause the subscription without unmounting.
+};
+```
+
+### `useSubscriptionMap<T>(pattern, decode, options?)`
+
+Subscribes to a wildcard pattern and returns a `Map<string, T>` from full key expression to the latest decoded value. Useful for tracking state of multiple robots or sensors simultaneously.
+
+```tsx
+import { useSubscriptionMap, json } from "@adamo/react";
+
+function AllRobotHeartbeats({ org }: { org: string }) {
+  // Map<keyexpr, heartbeat> — one entry per robot
+  const heartbeats = useSubscriptionMap(
+    `adamo/${org}/*/heartbeat`,
+    (bytes) => json.decode<{ activeTracks: string[] }>(bytes)
+  );
+
+  return (
+    <ul>
+      {Array.from(heartbeats.entries()).map(([topic, hb]) => (
+        <li key={topic}>
+          {topic}: tracks [{hb.activeTracks.join(", ")}]
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+### `usePublisher(keyexpr, options?)`
+
+Creates a Zenoh publisher and returns a handle. Also tracks whether any subscribers are currently matching — useful to avoid encoding or sending data when nobody is listening.
+
+```tsx
+import { usePublisher, json } from "@adamo/react";
+
+function JointStatePublisher({ robotId, org }: { robotId: string; org: string }) {
+  const publisher = usePublisher(`adamo/${org}/${robotId}/control/joint_cmd`);
+
+  const sendCommand = async () => {
+    if (!publisher) return;
+    await publisher.put(
+      json.encode({ positions: [0.1, 0.2, 0.3], velocities: [0, 0, 0] })
+    );
+  };
+
+  return (
+    <button onClick={sendCommand} disabled={!publisher?.hasSubscribers}>
+      {publisher?.hasSubscribers ? "Send Command" : "No robot listening"}
+    </button>
+  );
+}
+```
+
+### `PublisherHandle` type
+
+```ts
+type PublisherHandle = {
+  put: (data: Uint8Array) => Promise<void>;
+  hasSubscribers: boolean; // true when at least one matching subscriber exists
+};
+```
+
+### `PublisherOptions`
+
+```ts
+type PublisherOptions = {
+  priority?: Priority;                   // Default: Priority.REAL_TIME
+  congestionControl?: CongestionControl; // Default: CongestionControl.DROP
+  reliability?: Reliability;             // Default: Reliability.BEST_EFFORT
+  express?: boolean;                     // Default: true (disable batching for lower latency)
+};
+```
+
+For reliable control messages use `CongestionControl.BLOCK` and `Reliability.RELIABLE`. For telemetry or video-related topics use the defaults (drop + best-effort).
+
+## 6. Gamepad Input
+
+### `<GamepadController>`
+
+Reads from a browser gamepad and publishes `sensor_msgs/Joy` messages encoded in ROS CDR format over Zenoh. Polls every 20ms by default. The component renders nothing — it is purely a side-effect component.
+
+```tsx
+import { GamepadController } from "@adamo/react";
+import type { JoyMessage } from "@adamo/react";
+
+function TeleoperationPage({ robotId, org }: { robotId: string; org: string }) {
+  return (
+    <div>
+      <Stream robot={robotId} track="main" style={{ width: "100%", aspectRatio: "16/9" }} />
+
+      <GamepadController
+        topic={`adamo/${org}/${robotId}/control/joy`}
+        config={{
+          deviceId: 0,       // Which gamepad index to use (default: 0)
+          deadzone: 0.05,    // Axis deadzone threshold (default: 0.05)
+          pollIntervalMs: 20 // Poll rate in ms; 0 = requestAnimationFrame
+        }}
+        onInput={(msg) => {
+          // msg is a JoyMessage — axes[0]/axes[1] = left stick, axes[2]/axes[3] = right stick
+          console.log("left stick x:", msg.axes[0], "y:", msg.axes[1]);
+        }}
+        onButtonDown={(idx) => console.log("button pressed:", idx)}
+        onButtonUp={(idx) => console.log("button released:", idx)}
+        onConnectionChange={(connected) => {
+          console.log("gamepad", connected ? "connected" : "disconnected");
+        }}
+      />
+    </div>
+  );
+}
+```
+
+### Props
+
+| Prop | Type | Description |
+|---|---|---|
+| `topic` | `string` | Zenoh key expression to publish Joy messages on. |
+| `config` | `JoypadConfig` | Gamepad configuration (see below). |
+| `onInput` | `(msg: JoyMessage) => void` | Called every poll cycle when the gamepad has input. |
+| `onButtonDown` | `(buttonIndex: number) => void` | Called when a button transitions from 0 to 1. |
+| `onButtonUp` | `(buttonIndex: number) => void` | Called when a button transitions from 1 to 0. |
+| `onConnectionChange` | `(connected: boolean) => void` | Called when a gamepad connects or disconnects. |
+
+### `JoypadConfig` type
+
+```ts
+type JoypadConfig = {
+  deviceId?: number;          // Gamepad index from navigator.getGamepads() (default: 0)
+  deviceName?: string;        // Match by partial name instead of index
+  deadzone?: number;          // Axis deadzone [0, 1] (default: 0.05)
+  pollIntervalMs?: number;    // Poll interval in ms; 0 = requestAnimationFrame (default: 20)
+  stickyButtons?: boolean;    // Toggle buttons instead of momentary (default: false)
+  coalesceIntervalMs?: number; // Coalesce rapid inputs (default: 0 = disabled)
+  autorepeatRate?: number;    // Button autorepeat rate in Hz (default: 0 = disabled)
+  topic?: string;             // Internal topic alias (usually set via the top-level prop)
+};
+```
+
+### `JoyMessage` type
+
+This is a standard ROS `sensor_msgs/Joy` message:
+
+```ts
+type JoyMessage = {
+  header: {
+    stamp: {
+      sec: number;
+      nanosec: number;
+    };
+    frame_id: string; // Always "joy"
+  };
+  axes: number[];    // 6 elements: [left_x, left_y, right_x, right_y, lt, rt]
+  buttons: number[]; // 17 elements, W3C Standard Gamepad mapping
+};
+```
+
+### Standard Gamepad Button Mapping (W3C / Xbox)
+
+```
+Index | Button      Index | Button
+  0   | A             8   | Back / Select
+  1   | B             9   | Start
+  2   | X            10   | L3 (left stick click)
+  3   | Y            11   | R3 (right stick click)
+  4   | LB           12   | D-Pad Up
+  5   | RB           13   | D-Pad Down
+  6   | LT           14   | D-Pad Left
+  7   | RT           15   | D-Pad Right
+                    16   | Guide / Xbox button
+```
+
+### Axis Mapping
+
+```
+Index | Axis
+  0   | Left stick X  (-1 = left,  +1 = right)
+  1   | Left stick Y  (-1 = up,    +1 = down)
+  2   | Right stick X (-1 = left,  +1 = right)
+  3   | Right stick Y (-1 = up,    +1 = down)
+  4   | Left trigger  (0 = released, 1 = fully pressed)
+  5   | Right trigger (0 = released, 1 = fully pressed)
+```
+
+## 7. Track Management
+
+### `useTrackRequest(robotId)`
+
+Returns a function to send track start/stop requests to a robot. The request is published to `adamo/{org}/{robotId}/tracks/request` using a reliable publisher.
+
+```tsx
+import { useTrackRequest } from "@adamo/react";
+
+function TrackControls({ robotId }: { robotId: string }) {
+  const trackRequest = useTrackRequest(robotId);
+
+  const startKinect = () =>
+    trackRequest({
+      action: "start",
+      name: "kinect_rgb",
+      source_type: "v4l2",
+      bitrate: 2000,  // kbps
+      fps: 30,
+    });
+
+  const startRosTopic = () =>
+    trackRequest({
+      action: "start",
+      name: "arm_camera",
+      source_type: "ros",
+      ros_topic: "/camera/image_raw/compressed",
+      bitrate: 4000,
+      fps: 60,
+    });
+
+  const stopKinect = () =>
+    trackRequest({ action: "stop", name: "kinect_rgb" });
+
+  return (
+    <div>
+      <button onClick={startKinect}>Start Kinect</button>
+      <button onClick={startRosTopic}>Start Arm Camera</button>
+      <button onClick={stopKinect}>Stop Kinect</button>
+    </div>
+  );
+}
+```
+
+### `TrackRequestParams` type
+
+```ts
+type TrackRequestParams = {
+  action: "start" | "stop";
+  name: string;                        // Track name (used as the key expression segment)
+
+  // Source configuration (for "start")
+  source_type?: string;                // "v4l2", "ros", "gstreamer"
+  gstreamer_pipeline?: string;         // Custom GStreamer pipeline string
+  ros_topic?: string;                  // ROS topic to subscribe to
+  v4l2_device?: string;                // V4L2 device path (e.g., "/dev/video0")
+  v4l2_capture_resolution?: [number, number]; // [width, height] for V4L2 capture
+
+  // Encoding
+  encoder?: string;                    // Encoder name (e.g., "nvenc", "x264")
+  bitrate?: number;                    // Target bitrate in kbps
+  fps?: number;                        // Target frame rate
+  passthrough?: boolean;               // Pass compressed data through without re-encoding
+  source_format?: string;              // Input pixel format hint
+  keyframe_distance?: number;          // Keyframe interval in frames
+
+  // Stereo
+  stereo?: boolean;                    // Top/bottom stereo encoding
+
+  // FEC
+  fec?: boolean;                       // Enable Reed-Solomon FEC
+  fec_data_shards?: number;            // Data shards (default: 4)
+  fec_parity_shards?: number;          // Parity shards (default: 2)
+};
+```
+
+### `useTrackMeta(robotId)`
+
+Subscribes to `adamo/{org}/{robotId}/video/*/meta` and returns a `Map<string, TrackMeta>` from track name to metadata. Also performs an initial `get()` to retrieve metadata for already-active tracks.
+
+```tsx
+import { useTrackMeta } from "@adamo/react";
+
+function TrackInfo({ robotId }: { robotId: string }) {
+  const meta = useTrackMeta(robotId); // Map<string, TrackMeta>
+
+  return (
+    <ul>
+      {Array.from(meta.entries()).map(([trackName, m]) => (
+        <li key={trackName}>
+          {trackName}: {m.stereo ? "stereo" : "mono"}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+### `TrackMeta` type
+
+```ts
+type TrackMeta = {
+  stereo: boolean; // true if the track is top/bottom stereo encoded
+};
+```
+
+### `useTrackStatus(robotId)`
+
+Subscribes to `adamo/{org}/{robotId}/tracks/status` and returns a `Map<string, TrackStatusEvent>` with the latest lifecycle event for each track.
+
+```tsx
+import { useTrackStatus } from "@adamo/react";
+
+function TrackStatusPanel({ robotId }: { robotId: string }) {
+  const statuses = useTrackStatus(robotId); // Map<string, TrackStatusEvent>
+
+  return (
+    <ul>
+      {Array.from(statuses.entries()).map(([trackName, event]) => (
+        <li key={trackName} style={{ color: event.status === "error" ? "red" : "inherit" }}>
+          {trackName}: {event.status}
+          {event.error && ` — ${event.error}`}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+### `TrackStatusEvent` type
+
+```ts
+type TrackStatusEvent = {
+  track: string;
+  status: "starting" | "running" | "error" | "stopped";
+  error?: string;    // Error message when status is "error"
+  timestamp: number; // Unix timestamp in milliseconds
+};
+```
+
+## 8. Topic Utilities
+
+### `useTopics(pattern, ttlMs?)`
+
+Watches for active topics matching a key expression pattern. A topic is considered active as long as it has published within the TTL window. Returns a sorted string array of currently active topic key expressions.
+
+```tsx
+import { useTopics } from "@adamo/react";
+
+function ActiveVideoStreams({ org }: { org: string }) {
+  // Discover all active video topics across all robots
+  const topics = useTopics(`adamo/${org}/*/video/*`, 5000);
+
+  return (
+    <ul>
+      {topics.map((t) => <li key={t}>{t}</li>)}
+    </ul>
+  );
+}
+```
+
+### `<TopicPresenceProvider>` and `useTopicPresence()`
+
+Provides shared topic presence detection across many child components using a single subscription, avoiding redundant subscriptions when many `<Stream>` or indicator components watch the same pattern.
+
+```tsx
+import { TopicPresenceProvider, useTopicPresence } from "@adamo/react";
+
+function StreamIndicator({ topic }: { topic: string }) {
+  const { isActive } = useTopicPresence();
+  return (
+    <span style={{ color: isActive(topic) ? "green" : "gray" }}>
+      {isActive(topic) ? "Live" : "Offline"}
+    </span>
+  );
+}
+
+function StreamGrid({ org }: { org: string }) {
+  return (
+    <TopicPresenceProvider pattern={`adamo/${org}/*/video/*`} ttlMs={5000}>
+      <StreamIndicator topic={`adamo/${org}/arm-01/video/main`} />
+      <StreamIndicator topic={`adamo/${org}/arm-02/video/main`} />
+    </TopicPresenceProvider>
+  );
+}
+```
+
+### `TopicPresenceProvider` props
+
+| Prop | Type | Default | Description |
+|---|---|---|---|
+| `pattern` | `string` | required | Key expression pattern to watch. |
+| `ttlMs` | `number` | `5000` | Milliseconds before a topic is considered stale. |
+| `children` | `React.ReactNode` | required | |
+
+### `useTopicPresence()` return value
+
+```ts
+type TopicPresenceContextValue = {
+  activeTopics: Set<string>; // All currently active topic key expressions
+  isActive: (topic: string) => boolean; // Check a specific topic
+};
+```
+
+### Key Expression Utilities
+
+```tsx
+import { keyExprIncludes, keyExprIntersects } from "@adamo/react";
+
+// Does pattern "adamo/*/video/**" include the concrete topic?
+keyExprIncludes("adamo/*/video/**", "adamo/arm-01/video/main");
+// => true
+
+// Do two patterns overlap?
+keyExprIntersects("adamo/arm-01/**", "adamo/*/video/*");
+// => true
+```
+
+### JSON Helpers
+
+```tsx
+import { json } from "@adamo/react";
+
+// Encode an object to Uint8Array (UTF-8 JSON)
+const bytes = json.encode({ position: [1.0, 2.0, 3.0] });
+
+// Decode Uint8Array back to a typed object
+const msg = json.decode<{ position: number[] }>(bytes);
+```
+
+### Re-exported Zenoh Types
+
+`@adamo/react` re-exports the following types and values from `@eclipse-zenoh/zenoh-ts` for convenience:
+
+```ts
+import {
+  // Types
+  type Session,
+  type Sample,
+  type Subscriber,
+  type Publisher,
+  type KeyExpr,
+
+  // Enums
+  Priority,
+  CongestionControl,
+  Reliability,
+  SampleKind,
+} from "@adamo/react";
+```
+
+**`Priority`** values (lower = higher priority):
+- `Priority.REAL_TIME` — Use for control and video
+- `Priority.INTERACTIVE_HIGH`
+- `Priority.INTERACTIVE_LOW`
+- `Priority.DATA_HIGH`
+- `Priority.DATA` — Default for most application data
+- `Priority.DATA_LOW`
+- `Priority.BACKGROUND`
+
+**`CongestionControl`** values:
+- `CongestionControl.DROP` — Drop messages when the network is congested (use for video/telemetry)
+- `CongestionControl.BLOCK` — Block until the message can be sent (use for reliable commands)
+
+**`Reliability`** values:
+- `Reliability.BEST_EFFORT` — No retransmission (use for real-time streams)
+- `Reliability.RELIABLE` — Guarantee delivery (use for commands and configuration)
+
+**`SampleKind`** values:
+- `SampleKind.PUT` — A normal publication
+- `SampleKind.DELETE` — A deletion (used by liveliness to signal disconnection)
+
+## 9. Complete Example
+
+A full, copy-pasteable teleoperation component that discovers robots, shows tracks, streams video, and accepts gamepad input:
+
+```tsx
+import { useState } from "react";
+import {
+  AdamoProvider,
+  useRobots,
+  useTracks,
+  useTrackStatus,
+  Stream,
+  GamepadController,
+} from "@adamo/react";
+import type { StreamStats } from "@adamo/react";
+
+const ROUTER_URL = "wss://router.adamohq.com:443";
+const ORG = "my-org";
+
+// Top-level: wrap your app in AdamoProvider
+export default function TeleoperationApp() {
+  return (
+    <AdamoProvider url={ROUTER_URL} org={ORG}>
+      <TeleoperationUI />
+    </AdamoProvider>
+  );
+}
+
+function TeleoperationUI() {
+  const robots = useRobots();
+  const [selectedRobot, setSelectedRobot] = useState<string | null>(null);
+  const [selectedTrack, setSelectedTrack] = useState("main");
+  const [stats, setStats] = useState<StreamStats | null>(null);
+
+  return (
+    <div style={{ display: "flex", height: "100vh", fontFamily: "sans-serif" }}>
+      {/* Sidebar: robot and track selection */}
+      <aside style={{ width: 200, padding: 16, borderRight: "1px solid #ccc", overflowY: "auto" }}>
+        <h3>Robots</h3>
+        {robots.length === 0 && <p style={{ color: "#888" }}>Scanning...</p>}
+        {robots.map((robot) => (
+          <button
+            key={robot.id}
+            onClick={() => {
+              setSelectedRobot(robot.id);
+              setSelectedTrack("main");
+            }}
+            style={{
+              display: "block",
+              width: "100%",
+              marginBottom: 4,
+              padding: "6px 8px",
+              background: selectedRobot === robot.id ? "#0066cc" : "#eee",
+              color: selectedRobot === robot.id ? "white" : "black",
+              border: "none",
+              borderRadius: 4,
+              cursor: "pointer",
+              textAlign: "left",
+            }}
+          >
+            {robot.id}
+            <span style={{ float: "right", fontSize: 10 }}>
+              {robot.isStreaming ? "online" : "offline"}
+            </span>
+          </button>
+        ))}
+
+        {selectedRobot && (
+          <>
+            <h3>Tracks</h3>
+            <TrackList
+              robotId={selectedRobot}
+              selectedTrack={selectedTrack}
+              onSelect={setSelectedTrack}
+            />
+          </>
+        )}
+      </aside>
+
+      {/* Main: video + stats */}
+      <main style={{ flex: 1, display: "flex", flexDirection: "column", background: "#111" }}>
+        {selectedRobot ? (
+          <>
+            <div style={{ flex: 1, position: "relative" }}>
+              <Stream
+                robot={selectedRobot}
+                track={selectedTrack}
+                onStats={setStats}
+                style={{ width: "100%", height: "100%" }}
+              />
+              {stats && (
+                <div style={{
+                  position: "absolute", bottom: 8, left: 8,
+                  background: "rgba(0,0,0,0.6)", color: "white",
+                  padding: "4px 8px", borderRadius: 4, fontSize: 12,
+                }}>
+                  {stats.fps.toFixed(1)} fps | {stats.kbps.toFixed(0)} kbps |
+                  RTT {stats.rttMs.toFixed(0)} ms | jitter {stats.jitterMs.toFixed(1)} ms
+                </div>
+              )}
+            </div>
+
+            {/* Gamepad input — renders nothing, just publishes */}
+            <GamepadController
+              topic={`adamo/${ORG}/${selectedRobot}/control/joy`}
+              config={{ deadzone: 0.05 }}
+            />
+          </>
+        ) : (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#666" }}>
+            Select a robot to begin
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function TrackList({
+  robotId,
+  selectedTrack,
+  onSelect,
+}: {
+  robotId: string;
+  selectedTrack: string;
+  onSelect: (name: string) => void;
+}) {
+  const tracks = useTracks(robotId);
+  const statuses = useTrackStatus(robotId);
+
+  return (
+    <div>
+      {tracks.map((track) => {
+        const status = statuses.get(track.name);
+        return (
+          <button
+            key={track.name}
+            onClick={() => onSelect(track.name)}
+            style={{
+              display: "block",
+              width: "100%",
+              marginBottom: 4,
+              padding: "6px 8px",
+              background: selectedTrack === track.name ? "#004499" : "#ddd",
+              color: selectedTrack === track.name ? "white" : "black",
+              border: "none",
+              borderRadius: 4,
+              cursor: "pointer",
+              textAlign: "left",
+            }}
+          >
+            {track.name}
+            {status && (
+              <span style={{ float: "right", fontSize: 10, color: status.status === "error" ? "red" : "inherit" }}>
+                {status.status}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+```
+
+## 10. Zenoh Topic Conventions
+
+All topics follow the pattern `adamo/{org}/{robot}/...`. The `{org}` segment is the organization slug and `{robot}` is the robot identifier.
+
+### Core Topics
+
+| Topic | Direction | Description |
+|---|---|---|
+| `adamo/{org}/{robot}/alive` | Robot → Cloud | Liveliness token. Present when robot is connected. Disappears on disconnect. |
+| `adamo/{org}/{robot}/heartbeat` | Robot → Cloud | Published at 1 Hz. JSON payload listing currently active track names. |
+| `adamo/{org}/{robot}/stats/system` | Robot → Cloud | System health: CPU usage, memory, temperature, etc. |
+
+### Video Topics
+
+| Topic | Direction | Description |
+|---|---|---|
+| `adamo/{org}/{robot}/video/{track}` | Robot → Cloud | Video stream data. Binary, multiplexed: byte 0 = `0x00` (video packet) or `0x01` (FEC parity packet). |
+| `adamo/{org}/{robot}/video/{track}/alive` | Robot → Cloud | Liveliness token for this track. Present while the track is actively streaming. |
+| `adamo/{org}/{robot}/video/{track}/meta` | Robot → Cloud | Track metadata JSON: `{ "stereo": bool }`. Queryable (persisted by zenohd). |
+| `adamo/{org}/{robot}/video/{track}/encoder` | UI → Robot | Encoder control commands (keyframe requests, resize hints). Binary protocol. |
+| `adamo/{org}/{robot}/stats/cc` | UI → Robot | TWCC (Transport-wide Congestion Control) feedback. Used for adaptive bitrate. |
+| `adamo/{org}/{robot}/stats/ping` | UI → Robot | Latency ping. 4-byte request ID. |
+| `adamo/{org}/{robot}/stats/pong` | Robot → UI | Latency pong. Echoes request ID. |
+| `adamo/{org}/{robot}/video/{track}/nack` | UI → Robot | NACK retransmission requests. Binary: `[count: u16 BE][seq_0: u64 BE]...` |
+| `adamo/{org}/{robot}/video/{track}/keepalive` | UI → Robot | Sent on component mount to defer pipeline teardown during navigation. |
+
+### Control Topics
+
+| Topic | Direction | Description |
+|---|---|---|
+| `adamo/{org}/{robot}/control` | UI → Robot | Default control topic (e.g., `sensor_msgs/Joy` for a simple robot). |
+| `adamo/{org}/{robot}/control/{name}` | UI → Robot | Named control channel. `{name}` is typically `"joy"`, `"joint_cmd"`, etc. |
+
+### Track Management Topics
+
+| Topic | Direction | Description |
+|---|---|---|
+| `adamo/{org}/{robot}/tracks/request` | UI → Robot | Start/stop track requests. JSON-encoded `TrackRequestParams`. |
+| `adamo/{org}/{robot}/tracks/status` | Robot → UI | Track lifecycle events. JSON-encoded `TrackStatusEvent`. |
+
+### Wildcard Syntax
+
+Zenoh key expressions support two wildcards:
+
+| Wildcard | Meaning |
+|---|---|
+| `*` | Matches exactly one path segment (no `/` characters) |
+| `**` | Matches any number of path segments (including zero, and including `/`) |
+
+Examples:
+
+```
+adamo/my-org/*/alive          — All robot liveliness tokens in an org
+adamo/my-org/arm-01/video/*   — All tracks on arm-01
+adamo/my-org/*/video/*/alive  — All track liveliness across all robots
+adamo/my-org/**               — Everything under an org (use with care)
+```
+
+### Video Packet Wire Format
+
+Each video packet on `adamo/{org}/{robot}/video/{track}` has the following layout:
+
+```
+Byte 0:     Packet type
+              0x00 = video data
+              0x01 = FEC parity
+
+Bytes 1+:   Packet body (for type 0x00):
+  [0..8)    seq:         u64 big-endian — monotonically increasing sequence number
+  [8..16)   timestampUs: u64 big-endian — sender clock in microseconds
+  [16..)    data:        H.264 Annex B bitstream
+```
+
+You do not need to parse this manually when using `<Stream>` — the `@adamo/media` package handles it internally.
+
+### Heartbeat Payload
+
+```json
+{
+  "activeTracks": ["main", "kinect_rgb"]
+}
+```
+
+### Track Status Payload
+
+```json
+{
+  "track": "kinect_rgb",
+  "status": "running",
+  "timestamp": 1709123456789
+}
+```
+
+Status transitions: `starting` → `running`, or `starting` / `running` → `error` → `stopped`.
+
+## 11. `@adamo/fleet` — Imperative Topic Utilities
+
+Use these when you need topic discovery outside of React (e.g., in a vanilla JS context or a Tauri command handler).
+
+### `watchTopics(session, pattern, options?)`
+
+Creates a subscription that tracks which topics under a pattern are currently active. Calls your callback whenever the list changes.
+
+```ts
+import { watchTopics } from "@adamo/fleet";
+
+const handle = await watchTopics(session, "adamo/my-org/*/video/*", { ttlMs: 5000 });
+
+handle.onUpdate((topics) => {
+  console.log("Active video topics:", topics);
+});
+
+// Later:
+handle.close();
+```
+
+### `watchData(session, pattern, options?)`
+
+Subscribes to a pattern and calls your callback for every received message.
+
+```ts
+import { watchData } from "@adamo/fleet";
+
+const handle = await watchData(session, "adamo/my-org/arm-01/stats/system");
+
+handle.onMessage((value) => {
+  const stats = JSON.parse(new TextDecoder().decode(value.payload));
+  console.log("CPU:", stats.cpu, "received at:", value.receivedAt);
+});
+
+handle.close();
+```
+
+### `watchLatest(session, pattern, options?)`
+
+Like `watchData`, but also maintains a map of the latest value for every matching topic. Supports both streaming callbacks and synchronous snapshots.
+
+```ts
+import { watchLatest } from "@adamo/fleet";
+
+const handle = await watchLatest(session, "adamo/my-org/*/heartbeat");
+
+// Streaming
+handle.onMessage((value) => {
+  console.log("heartbeat from:", value.topic);
+});
+
+// Snapshot of all latest values
+const latest = handle.get(); // FleetAggregate[]
+for (const { topic, value } of latest) {
+  console.log(topic, JSON.parse(new TextDecoder().decode(value.payload)));
+}
+
+handle.close();
+```
+
+### Fleet Types
+
+```ts
+type FleetValue = {
+  topic: string;        // Full key expression that published
+  payload: Uint8Array;  // Raw message bytes
+  receivedAt: number;   // performance.now() timestamp
+};
+
+type FleetAggregate = {
+  topic: string;
+  value: FleetValue;
+};
+
+type FleetOptions = {
+  ttlMs?: number;       // Topic staleness TTL in milliseconds (default: 5000)
+  channelSize?: number; // Zenoh ring buffer size (default: 16)
+};
+```
+
+## 12. `@adamo/media` — Low-Level Video API
+
+Most applications should use `<Stream>` from `@adamo/react` instead. These low-level APIs are for advanced use cases such as custom rendering pipelines, XR/VR, or non-React environments.
+
+### `createStreamPlayer(options)`
+
+The main entry point. Manages the full pipeline: Zenoh subscription, FEC recovery, TWCC feedback, NACK retransmission, H.264 decoding via WebCodecs, and rendering to a canvas.
+
+```ts
+import { createStreamPlayer } from "@adamo/media";
+
+const player = await createStreamPlayer({
+  session,
+  org: "my-org",
+  robot: "arm-01",
+  track: "main",
+  canvas: document.getElementById("video-canvas") as HTMLCanvasElement,
+  fec: { type: "reed-solomon" },
+  onStats: (stats) => console.log(stats),
+});
+
+// Later:
+player.requestKeyframe();
+player.close();
+```
+
+### `StreamPlayerOptions`
+
+```ts
+type StreamPlayerOptions = {
+  session: Session;
+  robot?: string;       // Robot ID (default: "robot")
+  track?: string;       // Track name (default: "zed_video")
+  org?: string;         // Organization slug
+  videoTopic?: string;  // Override the full video topic (skips org/robot/track)
+  canvas: HTMLCanvasElement;
+  viewerId?: number;    // Viewer ID for encoder resize hints (default: 0)
+  fec?: {
+    type: "reed-solomon";
+    dataShards?: number;   // Default: 4
+    parityShards?: number; // Default: 2
+  };
+  onStats?: (stats: StreamStats) => void;
+  statsIntervalMs?: number;    // Stats callback interval (default: 1000ms)
+  nack?: boolean;              // Enable NACK retransmission (default: false)
+  decoderCodec?: string;       // H.264 codec string (default: "avc1.42E01E")
+  resize?: {
+    auto?: boolean;    // Auto-send resize on canvas resize (default: true)
+    debounceMs?: number; // Resize debounce (default: 250ms)
+  };
+};
+```
+
+### `StreamPlayerHandle`
+
+```ts
+type StreamPlayerHandle = {
+  requestKeyframe: () => Promise<void>; // Ask the robot to send a keyframe
+  sendResize: (width: number, height: number) => Promise<void>; // Tell the encoder your display size
+  close: () => void; // Tear down all subscriptions and the decoder
+};
+```
+
+### `createXRStereoPlayer(options)`
+
+Extends `createStreamPlayer` with WebXR immersive-vr rendering. Decodes top/bottom stereo H.264 and renders left/right eye halves through a GLSL shader. Provides a 2D canvas preview when not in VR.
+
+```ts
+import { createXRStereoPlayer } from "@adamo/media";
+
+const player = await createXRStereoPlayer({
+  session,
+  org: "my-org",
+  robot: "arm-01",
+  track: "stereo",
+  canvas: previewCanvas,
+  convergence: 0.1,
+  onEnterVR: () => console.log("entered VR"),
+  onExitVR: () => console.log("exited VR"),
+});
+
+await player.enterVR();
+player.setConvergence(0.08); // Adjust stereo depth
+player.close();
+```

@@ -1,0 +1,182 @@
+---
+title: "Cameras"
+description: "Configure V4L2, GStreamer, and ROS camera sources"
+---
+
+Adamo supports USB cameras (V4L2), custom GStreamer pipelines, and ROS camera topics. Each camera is a `video_track` in your config file. You can run multiple tracks simultaneously.
+
+## USB Cameras (V4L2)
+
+For USB webcams, Intel RealSense cameras, and any V4L2-compatible device. RealSense cameras generally work best with V4L2.
+
+```yaml
+video_tracks:
+  - name: "main"
+    source_type: "v4l2"
+    v4l2_device: "/dev/video0"
+    source_format: "yuy2"
+    encoder: "auto"
+    bitrate: 4000
+    fps: 30
+```
+
+Most USB webcams and RealSense cameras output YUY2. See [Source Format](#source-format) below for why this matters.
+
+To find available devices:
+
+```bash
+ls /dev/video*
+# or for more detail:
+v4l2-ctl --list-devices
+```
+
+Change `v4l2_device` to match the device path for your camera (e.g. `/dev/video2`).
+
+To add a second camera, append another entry to the list:
+
+```yaml
+video_tracks:
+  - name: "front"
+    source_type: "v4l2"
+    v4l2_device: "/dev/video0"
+    source_format: "yuy2"
+    encoder: "auto"
+    bitrate: 4000
+    fps: 30
+
+  - name: "rear"
+    source_type: "v4l2"
+    v4l2_device: "/dev/video2"
+    source_format: "yuy2"
+    encoder: "auto"
+    bitrate: 2000
+    fps: 30
+```
+
+## GStreamer Pipelines
+
+For cameras with their own GStreamer plugins or when you need custom capture pipelines. Set `source_type: "gstreamer"` and provide a `gstreamer_pipeline` string. The pipeline should produce raw video frames — Adamo handles the H.264 encoding.
+
+**Important:** Use the full `capsfilter caps=...` syntax, not GStreamer's shorthand `!` caps syntax. The shorthand does not work.
+
+```yaml
+# Correct — use capsfilter explicitly
+video_tracks:
+  - name: "main"
+    source_type: "gstreamer"
+    gstreamer_pipeline: "videotestsrc ! capsfilter caps=video/x-raw,framerate=30/1"
+    encoder: "auto"
+    bitrate: 4000
+    fps: 30
+```
+
+### ZED Cameras
+
+ZED cameras work best with the ZED GStreamer plugin (`zedsrc`). Install the [ZED GStreamer plugin](https://github.com/stereolabs/zed-gstreamer) first.
+
+```yaml
+video_tracks:
+  - name: "main"
+    source_type: "gstreamer"
+    gstreamer_pipeline: "zedsrc stream-type=2 camera-resolution=3 camera-fps=60"
+    encoder: "nvv4l2h264enc"
+    bitrate: 8000
+    fps: 60
+    source_format: "BGRA"
+    keyframe_distance: -1.0
+    stereo: true
+```
+
+Set `stereo: true` for top/bottom stereo output. `source_format: "BGRA"` tells the encoder the pixel format coming out of zedsrc. `keyframe_distance: -1.0` disables periodic keyframes — the viewer requests them on demand, which is better for latency.
+
+## ROS Camera Topics
+
+For cameras that publish to ROS2 topics. Enable the ROS bridge and point the track at a topic.
+
+```yaml
+ros:
+  enabled: true
+  auto_start_bridge: true
+
+video_tracks:
+  - name: "ros-cam"
+    source_type: "ros_auto"
+    ros_topic: "/camera/image_raw"
+    encoder: "auto"
+    bitrate: 3000
+    fps: 30
+```
+
+`source_type: "ros_auto"` auto-detects the message type from the topic name — it handles `sensor_msgs/Image`, `sensor_msgs/CompressedImage`, and `FFMPEGPacket`/H.264 topics. `ros.enabled: true` is required.
+
+You can also specify the source type explicitly if auto-detection doesn't pick the right one:
+
+| Source type | Message type | Description |
+|-------------|-------------|-------------|
+| `ros_auto` | auto-detect | Infers from topic name |
+| `ros_image` | `sensor_msgs/Image` | Raw pixels, re-encoded to H.264 |
+| `ros_compressed_image` | `sensor_msgs/CompressedImage` | JPEG/PNG, decoded then re-encoded |
+| `ros_h264` | H.264 stream | Passthrough, no re-encoding |
+| `ros_h264_transcode` | H.264 stream | Decode and re-encode (to change bitrate/keyframes) |
+| `ros_ffmpeg_packet` | `FFMPEGPacket` | Passthrough, no re-encoding |
+| `ros_ffmpeg_packet_transcode` | `FFMPEGPacket` | Decode and re-encode |
+
+### OAK Cameras (Luxonis)
+
+OAK cameras work best over ROS using the `depthai-ros` driver, which publishes H.264-compressed video. Use `ros_h264_transcode` to re-encode the stream at your preferred bitrate:
+
+```yaml
+ros:
+  enabled: true
+  auto_start_bridge: true
+
+video_tracks:
+  - name: "oak"
+    source_type: "ros_h264_transcode"
+    ros_topic: "/oak/rgb/h264"
+    encoder: "auto"
+    bitrate: 4000
+    fps: 30
+```
+
+## Source Format
+
+`source_format` tells Adamo what pixel format your camera outputs. When set, the encoder can skip CPU-based colorspace conversion and use the GPU directly — saving ~15ms of latency per frame. Without it, Adamo falls back to a slow CPU conversion path.
+
+Currently this cannot be auto-detected — you need to specify it in your config.
+
+| Format | Cameras | Notes |
+|--------|---------|-------|
+| `yuy2` | Most USB webcams, Intel RealSense | The most common V4L2 format |
+| `bgra` | ZED cameras | ZED GStreamer plugin outputs BGRA |
+| `gray8` | Mono/IR cameras, RealSense IR stream | Grayscale, requires CPU conversion |
+| `rgba` | Some ROS image sources | Direct GPU path |
+| `i420` | Some GStreamer pipelines | Direct GPU path |
+| `nv12` | Hardware decoders | Direct GPU path, most efficient |
+| `uyvy` | Some industrial cameras | Direct GPU path |
+
+To check what format your V4L2 camera supports:
+
+```bash
+v4l2-ctl -d /dev/video0 --list-formats
+```
+
+## Encoder Options
+
+| Encoder | Hardware | Notes |
+|---------|----------|-------|
+| `auto` | Auto-detect | Picks the best available encoder at startup |
+| `nvv4l2h264enc` | Jetson (HW) | Best on Jetson, uses the dedicated NVENC block |
+| `nvh264enc` | NVIDIA desktop GPU | For x86 machines with NVIDIA GPUs (uses nvcodec) |
+| `x264enc` | CPU | Software fallback, works on any Linux system |
+
+Use `auto` unless you have a reason to pin a specific encoder.
+
+## Adjusting Quality
+
+Two knobs: `bitrate` and `fps`.
+
+- **`bitrate`** — in kbps. Higher means better image quality and more bandwidth. Start at 2000-4000 kbps.
+- **`fps`** — frames per second. Use 60 if your camera supports it, otherwise 30. Drop to 15 on constrained links.
+
+If video looks blocky or laggy, raise the bitrate before anything else. If bandwidth is the bottleneck, lower fps first.

@@ -1,0 +1,280 @@
+---
+title: "Config Reference"
+description: "Every config.yaml option documented"
+---
+
+Full reference for every field in `config.yaml`. This page is the authoritative source — check here when you need a specific knob.
+
+## Top-Level
+
+```yaml
+api_key: "ak_xxxxx"
+robot_name: "lab-robot"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `api_key` | string | — | API key for connecting to Adamo cloud. Fetches the router endpoint and org slug from the API at startup. Required unless `zenoh.router` is set directly. |
+| `robot_name` | string | auto-generated | Robot identifier shown in the web interface. Used in Zenoh topic paths: `adamo/{org}/{robot_name}/video/{track}`. If omitted, a random name is generated at startup (e.g., `robot-a7k9m`). |
+
+## `zenoh`
+
+Controls how the robot connects to the Zenoh network.
+
+```yaml
+zenoh:
+  mode: "client"
+  protocol: "quic"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `router` | string | — | Direct Zenoh router endpoint (e.g., `quic/zenoh.adamohq.com:443`). Bypasses the API lookup if set. Useful for self-hosted routers or testing. |
+| `mode` | string | `"peer"` | `"client"` routes all traffic through the cloud router. `"peer"` enables direct P2P connections between robots on the same LAN or VPN; the cloud router is still used for discovery and as a fallback when direct paths are unavailable. |
+| `listen` | string[] | `[]` | Local endpoints this robot listens on in peer mode, allowing other peers to connect to it directly. Example: `["udp/0.0.0.0:7447", "tcp/0.0.0.0:7447"]`. Has no effect in `"client"` mode. |
+| `protocol` | string | `"quic"` | Transport protocol for the cloud router connection: `"quic"`, `"tcp"`, or `"udp"`. QUIC is recommended — it multiplexes streams over a single UDP socket and handles NAT traversal well. |
+
+## `ros`
+
+Controls the ROS-Zenoh bridge integration.
+
+```yaml
+ros:
+  enabled: true
+  backend: "ros2dds"
+  domain_id: 0
+  auto_start_bridge: true
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable ROS-Zenoh bridging. When enabled, ROS topics are bridged into the Zenoh key space and `ros_*` video source types are available. |
+| `backend` | string | `"ros2dds"` | Backend for key expression mapping. `"ros2dds"` uses the embedded `zenoh-bridge-ros2dds` process. `"rmw-zenoh"` uses the `rmw_zenoh_cpp` middleware layer instead. |
+| `domain_id` | int | `0` | ROS domain ID. Set this to match your ROS nodes if using a non-default domain. |
+| `auto_start_bridge` | bool | `true` | Automatically start the embedded `zenoh-bridge-ros2dds` process when `backend` is `"ros2dds"`. Set to `false` if you are managing the bridge process yourself. |
+
+## `control`
+
+Controls the Zenoh-to-ROS control relay. When enabled, control messages published to the Zenoh prefix are forwarded to ROS.
+
+```yaml
+control:
+  enabled: true
+  zenoh_prefix: "adamo/my-robot/control"
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `true` | Enable the Zenoh-to-ROS control relay. |
+| `zenoh_prefix` | string | `"adamo/{robot}/control"` | Zenoh key prefix to subscribe to for incoming control messages. Defaults to `adamo/{robot_name}/control` using the resolved robot name. Override this if you need a custom topic path. |
+
+## `video_tracks`
+
+An array of video track configurations. Each entry defines one video stream published over Zenoh.
+
+```yaml
+video_tracks:
+  - name: "front"
+    source_type: "v4l2"
+    v4l2_device: "/dev/video0"
+    encoder: "auto"
+    bitrate: 4000
+    fps: 30
+```
+
+### Core Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | `"video"` | Track name. Appears in the Zenoh topic path: `adamo/{org}/{robot}/video/{name}`. Use short, descriptive names like `"front"`, `"rear"`, `"depth"`. |
+| `source_type` | string | `"v4l2"` | Video source. See [Source Types](#source-types) below. |
+| `encoder` | string | `"x264enc"` | H.264 encoder. See [Encoder Options](#encoder-options) below. Use `"auto"` to let Adamo pick the best available encoder. |
+| `bitrate` | int | `2000` | Target bitrate in kbps. Starting bitrate for adaptive bitrate tracks. |
+| `fps` | int | `30` | Target framerate. |
+
+### Source Types
+
+| Value | Description |
+|-------|-------------|
+| `jetson_argus` | Jetson CSI camera via the Argus API. High-quality capture path, supports ISP tuning. Requires `--features jetson`. |
+| `jetson_nvv4l2` | Jetson CSI camera via NVIDIA V4L2. Alternative capture path for Jetson. Requires `--features jetson`. |
+| `v4l2` | Standard V4L2 camera. Works with USB webcams and most Linux-connected cameras. |
+| `gstreamer` | Custom GStreamer pipeline. Provide the full pipeline string via `gstreamer_pipeline`. |
+| `ros_auto` / `ros` | Auto-detect ROS message type from the topic name. Infers compressed, H.264, FFMPEGPacket, or raw image based on the topic string. Requires `ros_topic`. |
+| `ros_image` | ROS `sensor_msgs/Image` (raw pixel data). Re-encodes to H.264 before publishing. Requires `ros_topic`. |
+| `ros_compressed_image` | ROS `sensor_msgs/CompressedImage`. Decodes JPEG/PNG then re-encodes. Requires `ros_topic`. |
+| `ros_h264` | ROS H.264 passthrough. Forwards the compressed H.264 stream directly without re-encoding. Requires `ros_topic`. |
+| `ros_h264_transcode` | ROS H.264 decode and re-encode. Use when you need to change bitrate or keyframe behavior. Requires `ros_topic`. |
+| `ros_ffmpeg_packet` | ROS `FFMPEGPacket` passthrough. No re-encoding. Requires `ros_topic`. |
+| `ros_ffmpeg_packet_transcode` | ROS `FFMPEGPacket` decode and re-encode. Requires `ros_topic`. |
+| `lidar_pcd` | Lidar point cloud files converted to a range image video stream. Requires `lidar_pcd_dir`. |
+
+### Source-Specific Fields
+
+| Field | Applies to | Type | Description |
+|-------|-----------|------|-------------|
+| `v4l2_device` | `v4l2` | string | Device path (e.g., `"/dev/video0"`). |
+| `v4l2_capture_resolution` | `v4l2` | [int, int] | Capture resolution as `[width, height]`. Must match a resolution the camera supports. |
+| `ros_topic` | `ros_*` | string | ROS topic name to subscribe to (e.g., `"/camera/image_raw"`). |
+| `gstreamer_pipeline` | `gstreamer` | string | GStreamer launch string. The pipeline should produce raw video frames. Note: shorthand capsfilter syntax does not work — use `capsfilter caps=<caps>` explicitly. |
+| `source_format` | `v4l2`, `gstreamer` | string | Pixel format hint passed to the encoder pipeline (e.g., `"bgra"` for ZED cameras, `"BGRA"`). |
+| `lidar_pcd_dir` | `lidar_pcd` | string | Directory containing `.pcd` files for playback. |
+| `lidar_width` | `lidar_pcd` | int | Range image width in pixels. Default: `2048`. |
+| `lidar_height` | `lidar_pcd` | int | Range image height in pixels. Default: `64`. |
+| `lidar_fps` | `lidar_pcd` | int | Playback framerate. Default: `10`. |
+| `lidar_range_scale` | `lidar_pcd` | float | Meters per unit in the 24-bit range image encoding. Default: `0.001`. |
+| `lidar_range_bias` | `lidar_pcd` | float | Range bias offset in meters. Default: `0.0`. |
+| `lidar_azimuth_min` | `lidar_pcd` | float | Minimum azimuth angle in radians. Default: `-π`. |
+| `lidar_azimuth_max` | `lidar_pcd` | float | Maximum azimuth angle in radians. Default: `π`. |
+| `lidar_elevation_min` | `lidar_pcd` | float | Minimum elevation angle in radians. Default: `-0.2618` (~-15°). |
+| `lidar_elevation_max` | `lidar_pcd` | float | Maximum elevation angle in radians. Default: `0.2618` (~15°). |
+| `lidar_loop` | `lidar_pcd` | bool | Loop the PCD files indefinitely. Default: `true`. |
+
+### Encoder Options
+
+| Encoder | Hardware | Notes |
+|---------|----------|-------|
+| `auto` | Auto-detect | Probes the GStreamer plugin registry at startup and selects the best available encoder in priority order. Recommended for most deployments. |
+| `nvv4l2h264enc` | Jetson dedicated NVENC | Best choice on Jetson platforms. Uses the on-chip video encoder, leaving the GPU free. Requires `--features jetson` build flag. |
+| `nvh264enc` | NVIDIA desktop GPU | NVENC via the `nvcodec` GStreamer plugin. For workstations and servers with NVIDIA discrete GPUs. |
+| `vah264enc` | Intel / AMD VA-API | Hardware-accelerated encoding on Intel and AMD integrated and discrete graphics. |
+| `vtenc_h264` | macOS VideoToolbox | Hardware encoder on Apple Silicon and Intel Macs. Selected automatically on macOS when using `auto`. |
+| `x264enc` | CPU (software) | Software fallback. Works everywhere with no hardware requirements. Higher CPU usage at equivalent quality. |
+
+### Advanced Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `keyframe_distance` | float | `-1.0` | Seconds between periodic keyframes. `-1.0` disables periodic keyframes entirely — keyframes are only sent on-demand in response to PLI or FIR requests from the receiver. Set to a positive value (e.g., `2.0`) if the stream must be joinable mid-stream without a request. |
+| `passthrough` | bool | `false` | Skip H.264 encoding and forward the compressed stream directly. Use when the GStreamer pipeline already produces H.264 output (e.g., `filesrc ! h264parse`). |
+| `stereo` | bool | `false` | Mark this track as a top/bottom stereo stream for VR viewing. Use with ZED cameras or other stereo sources that pack both eyes into a single frame. |
+| `fec` | bool | `false` | Enable Forward Error Correction. Adds parity packets so receivers can reconstruct lost packets without retransmission. Increases bandwidth by `fec_parity_shards / fec_data_shards` (50% with defaults). |
+| `fec_data_shards` | int | `4` | Number of data packets per FEC group. |
+| `fec_parity_shards` | int | `2` | Number of parity packets per FEC group. With 4 data + 2 parity, the stream survives any 2 lost packets per group. |
+| `nack` | bool | `false` | Enable NACK-based retransmission. The receiver requests re-send of lost packets. Adds latency proportional to RTT. Useful on reliable but occasionally lossy links. |
+
+### `adaptive_bitrate`
+
+Nested under a video track. When enabled, the encoder bitrate adjusts dynamically based on measured network capacity using Google Congestion Control.
+
+```yaml
+video_tracks:
+  - name: "front"
+    source_type: "jetson_argus"
+    encoder: "nvv4l2h264enc"
+    bitrate: 4000
+    adaptive_bitrate:
+      enabled: true
+      min_bitrate: 500
+      max_bitrate: 8000
+      priority: 1.5
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable adaptive bitrate control for this track. |
+| `min_bitrate` | int | — | Minimum bitrate in kbps. The encoder will not go below this value even under severe congestion. |
+| `max_bitrate` | int | — | Maximum bitrate in kbps. The encoder will not exceed this value even when bandwidth is available. |
+| `priority` | float | `1.0` | Bandwidth allocation weight relative to other tracks. A track with `priority: 2.0` gets roughly twice the bandwidth of a `priority: 1.0` track when both are contending for capacity. Higher-priority tracks are also protected first when the network degrades. |
+
+## Full Example
+
+A realistic multi-track configuration with ROS bridging, control relay, adaptive bitrate, and FEC:
+
+```yaml
+api_key: "ak_xxxxx"
+robot_name: "lab-robot"
+
+zenoh:
+  protocol: "quic"
+
+ros:
+  enabled: true
+  auto_start_bridge: true
+
+control:
+  enabled: true
+
+video_tracks:
+  - name: "front"
+    source_type: "jetson_argus"
+    encoder: "nvv4l2h264enc"
+    bitrate: 4000
+    fps: 30
+    fec: true
+    keyframe_distance: -1.0
+    adaptive_bitrate:
+      enabled: true
+      min_bitrate: 500
+      max_bitrate: 8000
+      priority: 1.5
+
+  - name: "rear"
+    source_type: "v4l2"
+    v4l2_device: "/dev/video2"
+    encoder: "nvv4l2h264enc"
+    bitrate: 2000
+    fps: 15
+    adaptive_bitrate:
+      enabled: true
+      min_bitrate: 300
+      max_bitrate: 4000
+      priority: 1.0
+
+  - name: "depth"
+    source_type: "ros_auto"
+    ros_topic: "/camera/depth/image_rect_raw"
+    encoder: "nvv4l2h264enc"
+    bitrate: 3000
+    fps: 30
+```
+
+### Peer-to-Peer Mode
+
+Robots on the same LAN communicate directly. The cloud router handles discovery and browser connections, but robot-to-robot traffic never leaves the local network:
+
+```yaml
+api_key: "ak_xxxxx"
+robot_name: "field-robot"
+
+zenoh:
+  mode: "peer"
+  listen:
+    - "udp/0.0.0.0:7447"
+    - "tcp/0.0.0.0:7447"
+```
+
+### ZED Stereo Camera with Custom GStreamer Pipeline
+
+```yaml
+api_key: "ak_xxxxx"
+robot_name: "orin"
+
+zenoh:
+  mode: "client"
+
+ros:
+  enabled: true
+  backend: "ros2dds"
+  domain_id: 0
+  auto_start_bridge: true
+
+control:
+  enabled: true
+
+video_tracks:
+  - name: "main"
+    source_type: "gstreamer"
+    gstreamer_pipeline: "zedsrc stream-type=2 camera-resolution=3 camera-fps=60"
+    encoder: "nvv4l2h264enc"
+    bitrate: 8000
+    fps: 60
+    source_format: "BGRA"
+    keyframe_distance: -1.0
+    stereo: true
+    adaptive_bitrate:
+      enabled: true
+      min_bitrate: 1000
+      max_bitrate: 12000
+      priority: 1.0
+```
