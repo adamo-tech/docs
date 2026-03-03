@@ -17,7 +17,7 @@ robot_name: "lab-robot"
 | `api_key` | string | — | API key for connecting to Adamo cloud. Fetches the router endpoint and org slug from the API at startup. Required unless `zenoh.router` is set directly. |
 | `robot_name` | string | auto-generated | Robot identifier shown in the web interface. Used in Zenoh topic paths: `adamo/{org}/{robot_name}/video/{track}`. If omitted, a random name is generated at startup (e.g., `robot-a7k9m`). |
 
-## `zenoh`
+## zenoh
 
 Controls how the robot connects to the Zenoh network.
 
@@ -34,7 +34,7 @@ zenoh:
 | `listen` | string[] | `[]` | Local endpoints this robot listens on in peer mode, allowing other peers to connect to it directly. Example: `["udp/0.0.0.0:7447", "tcp/0.0.0.0:7447"]`. Has no effect in `"client"` mode. |
 | `protocol` | string | `"quic"` | Transport protocol for the cloud router connection: `"quic"`, `"tcp"`, or `"udp"`. QUIC is recommended — it multiplexes streams over a single UDP socket and handles NAT traversal well. |
 
-## `ros`
+## ros
 
 Controls the ROS-Zenoh bridge integration.
 
@@ -53,7 +53,7 @@ ros:
 | `domain_id` | int | `0` | ROS domain ID. Set this to match your ROS nodes if using a non-default domain. |
 | `auto_start_bridge` | bool | `true` | Automatically start the embedded `zenoh-bridge-ros2dds` process when `backend` is `"ros2dds"`. Set to `false` if you are managing the bridge process yourself. |
 
-## `control`
+## control
 
 Controls the Zenoh-to-ROS control relay. When enabled, control messages published to the Zenoh prefix are forwarded to ROS.
 
@@ -68,7 +68,7 @@ control:
 | `enabled` | bool | `true` | Enable the Zenoh-to-ROS control relay. |
 | `zenoh_prefix` | string | `"adamo/{robot}/control"` | Zenoh key prefix to subscribe to for incoming control messages. Defaults to `adamo/{robot_name}/control` using the resolved robot name. Override this if you need a custom topic path. |
 
-## `video_tracks`
+## video_tracks
 
 An array of video track configurations. Each entry defines one video stream published over Zenoh.
 

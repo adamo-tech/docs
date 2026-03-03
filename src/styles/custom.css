@@ -1,0 +1,167 @@
+@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,500&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* ===== Dark mode — cool blue-tinted dark ===== */
+:root {
+  --sl-font: 'Inter', system-ui, -apple-system, sans-serif;
+  --sl-font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --sl-color-white: #e8ebf0;
+  --sl-color-gray-1: #cdd2da;
+  --sl-color-gray-2: #b0b8c4;
+  --sl-color-gray-3: #6e7888;
+  --sl-color-gray-4: #323a48;
+  --sl-color-gray-5: #1e2430;
+  --sl-color-gray-6: #151a24;
+  --sl-color-black: #0d1117;
+
+  --sl-color-accent-low: #1c2536;
+  --sl-color-accent: #8eacc8;
+  --sl-color-accent-high: #d4e0ec;
+
+  --sl-color-text-accent: var(--sl-color-accent-high);
+  --sl-color-bg-inline-code: #1a2030;
+  --sl-content-width: 55rem;
+}
+
+/* ===== Light mode — warm cream paper ===== */
+[data-theme='light'] {
+  --sl-color-white: #2c2420;
+  --sl-color-gray-1: #3d342c;
+  --sl-color-gray-2: #6b5e52;
+  --sl-color-gray-3: #8a7d72;
+  --sl-color-gray-4: #d0c8bc;
+  --sl-color-gray-5: #e8e0d6;
+  --sl-color-gray-6: #f2ece4;
+  --sl-color-gray-7: #f5f0ea;
+  --sl-color-black: #faf8f4;
+
+  --sl-color-accent-low: #f0e8de;
+  --sl-color-accent: #7a6550;
+  --sl-color-accent-high: #3d2e20;
+
+  --sl-color-text-accent: var(--sl-color-accent);
+  --sl-color-bg-inline-code: #efe8de;
+}
+
+/* ===== Typography ===== */
+/* Content headings use Garamond */
+.main-pane :is(h1, h2, h3, h4, h5, h6) {
+  font-family: 'EB Garamond', Georgia, serif;
+  font-weight: 500;
+}
+
+.main-pane :is(h1, h2, h3, h4, h5, h6) code {
+  font-family: 'EB Garamond', Georgia, serif;
+  font-size: inherit;
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+/* ===== Sidebar redesign ===== */
+
+/* More breathing room between groups */
+.sidebar-content .top-level > li + li {
+  margin-top: 1.5rem;
+}
+
+/* Group labels — tiny, quiet, uppercase */
+.sidebar-content .large {
+  font-size: 0.65rem !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sl-color-gray-3) !important;
+}
+
+/* Hide the chevron — cleaner without it */
+.sidebar-content .caret {
+  display: none;
+}
+
+/* Links — light weight, no border-radius block */
+.sidebar-content a {
+  font-weight: 400;
+  font-size: 0.82rem;
+  color: var(--sl-color-gray-2);
+  background: none !important;
+  border-radius: 0;
+  padding: 0.3em 0.75rem;
+  transition: color 0.15s ease;
+}
+
+.sidebar-content a:hover,
+.sidebar-content a:focus {
+  color: var(--sl-color-white);
+  background: none !important;
+}
+
+/* Active page — subtle left accent, no filled background */
+.sidebar-content [aria-current='page'],
+.sidebar-content [aria-current='page']:hover,
+.sidebar-content [aria-current='page']:focus {
+  font-weight: 500;
+  color: var(--sl-color-white) !important;
+  background: none !important;
+  border-left: 2px solid var(--sl-color-accent);
+  padding-left: calc(0.75rem - 2px);
+}
+
+/* Remove default nested item left border */
+.sidebar-content ul ul li {
+  border-inline-start: none;
+  padding-inline-start: 0.25rem;
+}
+
+/* Site title */
+.site-title {
+  font-family: 'EB Garamond', Georgia, serif !important;
+  font-weight: 400;
+  font-size: 1.3em;
+  letter-spacing: 0.02em;
+}
+
+/* ===== Scrollbar ===== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+[data-theme='light'] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+[data-theme='light'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+/* Selection */
+::selection {
+  background: rgba(122, 101, 80, 0.3);
+  color: inherit;
+}
+
+/* Focus */
+:focus-visible {
+  outline: 2px solid rgba(122, 101, 80, 0.5);
+  outline-offset: 2px;
+}
+
+/* Smoother font rendering */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

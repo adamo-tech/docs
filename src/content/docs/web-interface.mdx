@@ -9,13 +9,17 @@ The Adamo web app at [operate.adamohq.com](https://operate.adamohq.com) is where
 
 Go to [operate.adamohq.com](https://operate.adamohq.com) and sign in with Google. If you belong to multiple organizations, you'll be prompted to select one.
 
-<Info>Screenshot placeholder: login</Info>
+:::note
+Screenshot placeholder: login
+:::
 
 ## Robot Grid
 
 After logging in, you'll see a grid of your robots. Each card shows a live video thumbnail, the robot name, and a status badge (LIVE or IDLE). A search bar filters robots by name.
 
-<Info>Screenshot placeholder: robot grid</Info>
+:::note
+Screenshot placeholder: robot grid
+:::
 
 Click a robot to enter the teleoperation view.
 
@@ -23,7 +27,9 @@ Click a robot to enter the teleoperation view.
 
 This is where you operate a robot. The main area is a camera grid showing all active video streams.
 
-<Info>Screenshot placeholder: teleoperation view</Info>
+:::note
+Screenshot placeholder: teleoperation view
+:::
 
 ### Video Streams
 
@@ -31,27 +37,35 @@ Video streams display in a configurable grid layout. If the robot has multiple t
 
 ### Stereo / VR
 
-Stereo video tracks have a "View Stereo" button that launches an immersive WebXR VR view. Head pose and VR controller positions are tracked and forwarded to the robot as ROS topics (see [Control](/control)).
+Stereo video tracks have a "View Stereo" button that launches an immersive WebXR VR view. Head pose and VR controller positions are tracked and forwarded to the robot as ROS topics (see [Control](/control/)).
 
-<Info>Screenshot placeholder: stereo/VR button</Info>
+:::note
+Screenshot placeholder: stereo/VR button
+:::
 
 ### Control Panel
 
 A collapsible panel at the bottom shows stream stats (latency, FPS, RTT, bitrate) and input method status. Expand it for detailed metrics and to switch between input methods (Gamepad or GELLO).
 
-<Info>Screenshot placeholder: control panel</Info>
+:::note
+Screenshot placeholder: control panel
+:::
 
 ### Adding Tracks
 
 Click "Add Track" to dynamically start a new video track on the robot without editing the config file. You can configure the source type, encoder, bitrate, and FPS from the dialog.
 
-<Info>Screenshot placeholder: add track dialog</Info>
+:::note
+Screenshot placeholder: add track dialog
+:::
 
 ## Layouts
 
 Layouts control how camera panels are arranged in the grid. You can create multiple layouts and switch between them.
 
-<Info>Screenshot placeholder: layout toolbar</Info>
+:::note
+Screenshot placeholder: layout toolbar
+:::
 
 ### Editing Layouts
 
@@ -78,7 +92,9 @@ Start a recording from the teleoperation view using the record button in the hea
 
 Recorded sessions appear on the Replay page (`/replay`) where you can play back video with transport controls (play, pause, seek) and a timeline scrubber.
 
-<Info>Screenshot placeholder: replay page</Info>
+:::note
+Screenshot placeholder: replay page
+:::
 
 ## Data
 
@@ -89,7 +105,9 @@ The Data page (`/data`) lets you explore recorded sessions in detail:
 - **Data tiles** — composable grid of visualizations (video playback, sparklines, message rate, raw message inspector)
 - **Export** — download data as CSV or access it programmatically via curl
 
-<Info>Screenshot placeholder: data page</Info>
+:::note
+Screenshot placeholder: data page
+:::
 
 ## Map
 

@@ -1,0 +1,28 @@
+---
+title: "Adamo"
+description: "Low-latency robot teleoperation over the internet"
+---
+
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+## Get started
+
+Get your robot streaming video and accepting control input in minutes.
+
+<LinkCard title="Quickstart" description="Get your Jetson streaming video in under 5 minutes." href="/quickstart/" />
+
+## Guides
+
+<CardGrid>
+  <LinkCard title="Cameras" description="V4L2, GStreamer, ROS topics, and camera-specific guides." href="/cameras/" />
+  <LinkCard title="Web Interface" description="View streams, control robots, manage layouts, and monitor your fleet." href="/web-interface/" />
+  <LinkCard title="Control" description="Gamepad, VR controllers, and programmatic control via Python." href="/control/" />
+  <LinkCard title="Python SDK" description="Publish, subscribe, and send control commands from Python." href="/python-sdk/" />
+</CardGrid>
+
+## Reference
+
+<CardGrid>
+  <LinkCard title="TypeScript SDK" description="Full API reference for building custom teleoperation UIs." href="/typescript-sdk/" />
+  <LinkCard title="Config Reference" description="Every config.yaml option documented." href="/config-reference/" />
+</CardGrid>
