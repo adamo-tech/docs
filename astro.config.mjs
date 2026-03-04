@@ -6,6 +6,9 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "Adamo",
+      logo: {
+        src: "./src/assets/logo.svg",
+      },
       expressiveCode: {
         styleOverrides: {
           frames: {
