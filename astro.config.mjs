@@ -6,6 +6,14 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "Adamo",
+      expressiveCode: {
+        styleOverrides: {
+          frames: {
+            terminalTitlebarDotsOpacity: "0",
+            editorTitlebarDotsOpacity: "0",
+          },
+        },
+      },
       customCss: ["./src/styles/custom.css"],
       components: {
         ThemeProvider: "./src/components/ThemeProvider.astro",
