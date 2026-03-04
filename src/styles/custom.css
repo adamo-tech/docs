@@ -120,6 +120,18 @@
   --ec-brdCol: var(--sl-color-gray-4) !important;
 }
 
+/* Hide the terminal title bar (traffic-light dots) */
+.expressive-code .frame.is-terminal .header {
+  display: none;
+}
+
+/* Restore full rounded corners when header is hidden */
+.expressive-code .frame.is-terminal pre {
+  border-top: 1px solid var(--sl-color-gray-4);
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+
 .expressive-code pre {
   background: #0a0a0a !important;
   border: 1px solid var(--sl-color-gray-4);
