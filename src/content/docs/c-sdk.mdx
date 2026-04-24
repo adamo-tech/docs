@@ -161,6 +161,28 @@ void adamo_publisher_free(adamo_publisher_t *pub);
 
 `adamo_publisher_free` undeclares before freeing. NULL-safe.
 
+### Log
+
+```c
+int32_t adamo_log(
+    const adamo_session_t *sess,
+    const char *name,     // robot name
+    const char *message,
+    const char *level     // e.g. "info", "warn", "error", "debug" (may be NULL)
+);
+```
+
+Publish a log line from the given robot. The web operator console subscribes to this stream and renders entries in real time.
+
+`level` is a free-form string; the standard values `"info"`, `"warn"`, `"error"`, `"debug"` are rendered with colour. Passing `NULL` for `level` defaults to `"info"`. Messages are truncated at 10,000 characters. Each entry is stamped with the fabric clock so lines from multiple robots stay ordered in the operator view.
+
+Returns `0` on success, `-1` on failure.
+
+```c
+adamo_log(sess, "my-robot", "booted and attached camera", "info");
+adamo_log(sess, "my-robot", "encoder dropped a frame", "warn");
+```
+
 ---
 
 ## Subscribe — pull

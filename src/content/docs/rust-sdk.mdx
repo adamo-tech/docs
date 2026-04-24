@@ -69,6 +69,24 @@ pub fn publisher(&self, key: &str, opts: PublisherOptions) -> Result<Publisher<'
 
 Declare a persistent publisher tied to the session's lifetime. Dropped → undeclared.
 
+### `Session::log`
+
+```rust
+pub fn log(&self, name: &str, message: &str, level: &str) -> Result<()>;
+```
+
+Publish a log line from a robot. The web operator console subscribes to this stream and renders entries in real time.
+
+`level` is a free-form string; the standard values `"info"`, `"warn"`, `"error"`, `"debug"` are rendered with colour. Messages are truncated at 10,000 characters. Each entry is stamped with the fabric clock so lines from multiple robots stay ordered in the operator view.
+
+```rust
+use adamo::{Protocol, Session};
+
+let session = Session::open("ak_...", Protocol::Quic)?;
+session.log("my-robot", "booted and attached camera", "info")?;
+session.log("my-robot", "encoder dropped a frame", "warn")?;
+```
+
 ### `Session::subscribe`
 
 ```rust

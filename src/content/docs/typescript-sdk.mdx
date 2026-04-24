@@ -405,6 +405,50 @@ type PublisherOptions = {
 
 For reliable control messages use `CongestionControl.BLOCK` and `Reliability.RELIABLE`. For telemetry or video-related topics use the defaults (drop + best-effort).
 
+### `useRobotLogs(robotId, options?)`
+
+Subscribe to log lines published by a robot via `robot.log(...)` in the Python, Rust, or C SDKs.
+
+```tsx
+import { useRobotLogs } from "@adamo/react";
+
+function RobotLogView({ robotId }: { robotId: string }) {
+  const logs = useRobotLogs(robotId);
+
+  return (
+    <ul>
+      {logs.map((l, i) => (
+        <li key={i}>
+          [{l.level}] {new Date(l.ts_us / 1000).toISOString()} — {l.message}
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+Pass `robotId = "*"` to aggregate log lines across every robot in the org.
+
+### `RobotLog` type
+
+```ts
+type RobotLog = {
+  ts_us: number;    // fabric-clock microseconds
+  level: string;    // "info" | "warn" | "error" | "debug" | ...
+  message: string;
+  keyexpr: string;  // the key the sample arrived on
+};
+```
+
+### `UseRobotLogsOptions`
+
+```ts
+type UseRobotLogsOptions = {
+  max?: number;      // Default: 500. Older entries drop once buffer exceeds this.
+  enabled?: boolean; // Default: true. Set false to pause the subscription.
+};
+```
+
 ## 6. Gamepad Input
 
 ### `<GamepadController>`

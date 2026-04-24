@@ -395,6 +395,30 @@ robot.on_message(callback: Callable[[str, bytes], None]) -> Callable
 
 Register a callback for incoming messages. Can be used as a decorator. Multiple callbacks can be registered.
 
+### Logging
+
+```python
+robot.log(message: str, *, level: str = "info") -> None
+```
+
+Publish a log line from this robot. The web operator console subscribes to this stream and renders the log lines in real time.
+
+`level` is a free-form string; the standard values `"info"`, `"warn"`, `"error"`, `"debug"` are rendered with colour by the built-in UI. Messages are truncated at 10,000 characters.
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-robot")
+robot.log("booted and attached camera")
+robot.log("encoder dropped a frame", level="warn")
+try:
+    do_stuff()
+except Exception as e:
+    robot.log(f"pipeline failed: {e}", level="error")
+```
+
+Each log entry is stamped with the fabric clock so lines from multiple robots stay ordered in the operator view.
+
 ### Lifecycle
 
 ```python
