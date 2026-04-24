@@ -35,15 +35,19 @@ export default defineConfig({
           items: ["index", "quickstart", "cameras"],
         },
         {
-          label: "Using Adamo",
-          items: ["web-interface", "control"],
+          label: "Building Robots",
+          items: ["control", "data", "discovery"],
         },
         {
-          label: "SDKs",
-          items: ["python-sdk", "typescript-sdk"],
+          label: "Operating Robots",
+          items: ["web-interface", "operator"],
         },
         {
-          label: "Reference",
+          label: "SDK References",
+          items: ["python-sdk", "rust-sdk", "c-sdk", "typescript-sdk"],
+        },
+        {
+          label: "Advanced",
           items: ["config-reference"],
         },
       ],

@@ -1,0 +1,154 @@
+---
+title: "Building Your Own Operator"
+description: "When operate.adamohq.com isn't enough — write a custom teleop program that publishes to your robot"
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+Most robots never need a custom operator — [operate.adamohq.com](https://operate.adamohq.com) provides gamepad teleop, VR, recording, replay, and fleet management. Skip this page until you've already shipped a robot using the platform.
+
+You build your own operator when you outgrow the hosted UI:
+
+- A custom XR app that wants direct hand and head tracking on your own hardware.
+- A mobile app that drives a delivery robot.
+- A leader/follower rig (GELLO, Aloha) where one robot's joint state drives another.
+- A browser app for an end customer that should never see operate.adamohq.com.
+
+The pattern is symmetric: an operator is just another `adamo.Robot` (Python) or `Session` (Rust/C) participant. It publishes; the robot subscribes. Same SDK, same wire format, same priority knobs.
+
+## The Operator / Robot Pattern
+
+A control loop has two sides:
+
+```
+┌──────────────┐                                        ┌──────────────┐
+│   Operator   │  publish: control/xr/hand/{side}       │     Robot    │
+│ (xr-operator)│ ──────────────────────────────────────▶│   (my-arm)   │
+│              │  publish: control/xr/head              │              │
+└──────────────┘                                        └──────────────┘
+                                                              │
+                ◀───────────────── stream: video/* ───────────┘
+```
+
+Both sides connect to the same Adamo network. Each side picks a `name`, opens an SDK session, and the topic key expressions follow the convention `{name}/{track}` — the SDK adds the org scope for you.
+
+Use **REAL_TIME priority** (`250`) for control commands so they drain ahead of video under congestion. Use **drop-on-congestion** + **best-effort reliability** so a stuck operator never blocks the robot.
+
+## A Bimanual XR Operator
+
+Pair this operator with the matching robot program on the [Receiving Control](/control/#custom-control-topics) page.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import json
+import adamo
+
+op = adamo.Robot(api_key="ak_...", name="xr-operator")
+
+left  = op.publish("control/xr/hand/left",  priority=250)
+right = op.publish("control/xr/hand/right", priority=250)
+head  = op.publish("control/xr/head",       priority=250)
+
+# your OpenXR / WebXR / Quest loop
+for frame in xr_stream():
+    left.put(json.dumps(frame.left).encode())
+    right.put(json.dumps(frame.right).encode())
+    head.put(json.dumps(frame.head).encode())
+```
+
+What's happening:
+
+- `op = adamo.Robot(name="xr-operator")` — open a participant called `xr-operator`. No video tracks; this side just publishes.
+- `op.publish(track, priority=250)` — declare a publisher under `{xr-operator}/{track}` with REAL_TIME priority, drop-on-congestion, best-effort reliability, express. The robot subscribes to `xr-operator/control/xr/hand/{side}` to receive these.
+- The XR loop runs at the headset's frame rate (72 / 90 / 120 Hz). Each frame becomes one `put` per channel — small JSON payloads, no batching.
+
+You can substitute any input source — Quest controllers, Leap Motion, Apple Vision Pro, an Aloha leader rig — as long as it produces frames you can serialise.
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::{Protocol, PublisherOptions, Session};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct HandFrame { pos: [f32; 3], quat: [f32; 4], trigger: f32 }
+
+fn main() -> adamo::Result<()> {
+    let session = Session::open("ak_...", Protocol::default())?;
+    let opts = PublisherOptions {
+        priority: 250,        // REAL_TIME
+        express: true,
+        reliable: false,
+    };
+    let left  = session.publisher("xr-operator/control/xr/hand/left",  opts)?;
+    let right = session.publisher("xr-operator/control/xr/hand/right", opts)?;
+    let head  = session.publisher("xr-operator/control/xr/head",       opts)?;
+
+    for frame in xr_stream() {
+        left.put(serde_json::to_vec(&frame.left)?.as_slice())?;
+        right.put(serde_json::to_vec(&frame.right)?.as_slice())?;
+        head.put(serde_json::to_vec(&frame.head)?.as_slice())?;
+    }
+    Ok(())
+}
+```
+
+The Rust SDK has no high-level `Robot` participant for the publish-only case — `Session::open` is what you want.
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_session_t *sess = adamo_open(
+    "ak_...", adamo_protocol_t_ADAMO_PROTOCOL_QUIC);
+
+adamo_publisher_t *left = adamo_publisher(
+    sess, "xr-operator/control/xr/hand/left",
+    /* priority */ 250, /* express */ 1, /* reliable */ 0);
+
+for (;;) {
+    HandFrame f = next_xr_frame_left();
+    char buf[256];
+    int n = snprintf(buf, sizeof(buf),
+        "{\"pos\":[%f,%f,%f],\"trigger\":%f}",
+        f.pos[0], f.pos[1], f.pos[2], f.trigger);
+    adamo_publisher_put(left, (const uint8_t*)buf, (size_t)n);
+}
+
+adamo_publisher_free(left);
+adamo_session_free(sess);
+```
+
+For non-trivial JSON you'll want a library — [cJSON](https://github.com/DaveGamble/cJSON), [yyjson](https://github.com/ibireme/yyjson), or your own buffer code.
+
+</TabItem>
+</Tabs>
+
+## Browser Operators
+
+For operators that run in a browser — your own teleop UI, a customer-facing dashboard — use the [TypeScript SDK](/typescript-sdk/). Same primitives plus React components for video, gamepad, and presence:
+
+```tsx
+import { AdamoProvider, Stream, GamepadController } from "@adamo/react";
+
+<AdamoProvider url="wss://router.adamohq.com:443" org="my-org">
+  <Stream robot="my-arm" track="main" />
+  <GamepadController topic="adamo/my-org/my-arm/control/joy" />
+</AdamoProvider>
+```
+
+The full surface — `useRobots`, `useTracks`, `useSubscription`, `usePublisher`, XR stereo player — is in the [TypeScript SDK reference](/typescript-sdk/).
+
+## Discovery
+
+If your operator should attach to whichever robot is online, use [Robot Discovery](/discovery/) to enumerate or watch the live set:
+
+```python
+robots = [k.removesuffix("/alive") for k in op.session.live_tokens()]
+print("online:", robots)
+```
+
+Then pick one and start publishing to its control topics.

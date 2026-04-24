@@ -1,0 +1,384 @@
+---
+title: "Rust SDK"
+description: "Complete reference for the adamo crate — Session, pub/sub, queries, liveliness, video, and fabric time"
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The `adamo` crate is a safe, idiomatic Rust wrapper over the Adamo SDK shared library. Same primitives as the Python and C SDKs.
+
+## Install
+
+```sh
+cargo add adamo
+cargo add adamo --features video    # video capture + caller-fed tracks
+```
+
+Pre-built `libadamo.so` ships for `aarch64-unknown-linux-gnu`. For local dev on other targets, build `adamo-c` from source and point the build at it via `ADAMO_LIB_DIR=/path/to/dir/with/libadamo.{so,dylib}`.
+
+The crate is published as two:
+
+| Crate | Purpose |
+|-------|---------|
+| `adamo-sys` | Raw `unsafe extern "C"` FFI bindings + bundled `libadamo.{so,dylib}`. |
+| `adamo` | Safe wrapper. This is what you depend on. |
+
+---
+
+## `Session`
+
+```rust
+pub struct Session
+```
+
+The pub/sub / query / liveliness session. Constructed by `Session::open`; cheap to clone (the inner handle is reference-counted).
+
+`Send + Sync` — safe to share across threads.
+
+### `Session::open`
+
+```rust
+impl Session {
+    pub fn open(api_key: &str, protocol: Protocol) -> Result<Self>;
+}
+```
+
+Open an authenticated session. Pass `Protocol::default()` (which is `Protocol::Quic`) unless you need a specific transport.
+
+### `Session::org`
+
+```rust
+pub fn org(&self) -> Result<&str>;
+```
+
+The organisation slug resolved from the API key.
+
+### `Session::put`
+
+```rust
+pub fn put(&self, key: &str, payload: &[u8], opts: PublishOptions) -> Result<()>;
+```
+
+One-shot publish. The key is auto-scoped to your organisation; you write `{robot}/{topic}`.
+
+### `Session::publisher`
+
+```rust
+pub fn publisher(&self, key: &str, opts: PublisherOptions) -> Result<Publisher<'_>>;
+```
+
+Declare a persistent publisher tied to the session's lifetime. Dropped → undeclared.
+
+### `Session::subscribe`
+
+```rust
+pub fn subscribe(&self, key: &str) -> Result<Subscriber<'_>>;
+```
+
+Pull-style subscriber. Use `recv` / `try_recv` to receive samples. Wildcards in `key`:
+
+| Pattern | Matches |
+|---------|---------|
+| `my-arm/sensors/**` | Everything under `sensors/`. |
+| `my-arm/sensors/*`  | One level under `sensors/`. |
+| `*/sensors/imu`     | IMU from any robot. |
+
+### `Session::subscribe_with`
+
+```rust
+pub fn subscribe_with<F>(&self, key: &str, callback: F) -> Result<CallbackSubscriber<'_>>
+where
+    F: Fn(Sample) + Send + Sync + 'static;
+```
+
+Callback subscriber. The callback runs on a background receive thread — keep it short. The returned `CallbackSubscriber` owns the boxed callback; drop it to undeclare.
+
+### `Session::get`
+
+```rust
+pub fn get(&self, key: &str, timeout: Duration) -> Result<Vec<Sample>>;
+```
+
+One-shot query. Collects every reply that arrives within `timeout`. Returns an empty `Vec` if nothing replies.
+
+### `Session::alive`
+
+```rust
+pub fn alive(&self, token_key: &str) -> Result<LivelinessToken<'_>>;
+```
+
+Declare this client as alive at `{token_key}/alive`. The returned token is RAII — drop it to undeclare.
+
+### `Session::live_tokens`
+
+```rust
+pub fn live_tokens(&self, pattern: &str) -> Result<Vec<String>>;
+```
+
+Query currently-live tokens matching `pattern`. Pass `"**/alive"` for every live token in the org.
+
+### `Session::on_liveliness`
+
+```rust
+pub fn on_liveliness<F>(
+    &self,
+    pattern: &str,
+    history: bool,
+    callback: F,
+) -> Result<LivelinessSubscriber<'_>>
+where
+    F: Fn(String, bool) + Send + Sync + 'static;
+```
+
+Watch for liveliness changes. The callback fires with `(prefix-stripped key, is_alive)` whenever a token appears or disappears. `history=true` delivers the current set up front.
+
+---
+
+## `Protocol`
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Protocol {
+    #[default]
+    Quic,
+    Udp,
+    Tcp,
+}
+```
+
+Transport selection. **QUIC** is the default — reliable streams over a single multiplexed UDP socket. `Udp` is the lowest-latency unreliable transport. `Tcp` is a fallback for environments that block UDP/QUIC.
+
+---
+
+## `PublishOptions`
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub struct PublishOptions {
+    pub priority: u8,    // 0–255 mapped to 8 priority classes; ≥240 = REAL_TIME
+    pub express: bool,   // bypass batching for lower latency
+}
+
+impl Default for PublishOptions {
+    fn default() -> Self {
+        Self { priority: 128, express: false }
+    }
+}
+```
+
+---
+
+## `PublisherOptions`
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub struct PublisherOptions {
+    pub priority: u8,
+    pub express: bool,
+    pub reliable: bool,  // BEST_EFFORT (false, default) vs RELIABLE (true)
+}
+
+impl Default for PublisherOptions {
+    fn default() -> Self {
+        Self { priority: 128, express: false, reliable: true }
+    }
+}
+```
+
+---
+
+## `Publisher<'a>`
+
+```rust
+pub struct Publisher<'a> {
+    // tied to the session by lifetime
+}
+
+impl Publisher<'_> {
+    pub fn put(&self, payload: &[u8]) -> Result<()>;
+}
+```
+
+`Send + Sync`. Drop calls the underlying free.
+
+---
+
+## `Subscriber<'a>`
+
+```rust
+pub struct Subscriber<'a> {
+    // tied to the session by lifetime
+}
+
+impl Subscriber<'_> {
+    pub fn recv(&self, timeout: Option<Duration>) -> Result<Sample>;
+    pub fn try_recv(&self) -> Result<Option<Sample>>;
+}
+```
+
+`recv(None)` blocks indefinitely. `recv(Some(d))` returns `Err(Error::Timeout)` if `d` elapses. `try_recv` returns `Ok(None)` when the queue is empty.
+
+`Send`. Drop calls the underlying free.
+
+---
+
+## `CallbackSubscriber<'a>`
+
+```rust
+pub struct CallbackSubscriber<'a> {
+    // owns the boxed callback for as long as the subscriber lives
+}
+```
+
+Returned by `Session::subscribe_with`. `Send + Sync`. The callback runs on a background receive thread and stays registered until this handle is dropped.
+
+---
+
+## `LivelinessToken<'a>`
+
+```rust
+pub struct LivelinessToken<'a>;
+```
+
+A declared liveliness token. `Send + Sync`. Drop → undeclared.
+
+---
+
+## `LivelinessSubscriber<'a>`
+
+```rust
+pub struct LivelinessSubscriber<'a>;
+```
+
+Watching subscriber returned by `Session::on_liveliness`. `Send + Sync`. Drop unsubscribes.
+
+---
+
+## `Sample`
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Sample {
+    pub key: String,        // prefix-stripped key
+    pub payload: Vec<u8>,
+    pub is_delete: bool,    // true for DELETE samples (liveliness-gone)
+}
+```
+
+---
+
+## Fabric time
+
+```rust
+pub fn adamo::fabric_now_us() -> u64;
+pub fn adamo::fabric_synced() -> bool;
+```
+
+Microseconds since the Unix epoch on the **adamo fabric clock** — the shared time axis every node on the network sees. Use these instead of `SystemTime::now()` whenever a timestamp will be subtracted from a stamp produced on a different node (capture timestamps, latency measurements).
+
+`fabric_synced()` returns `true` once the first sync completes (typically under 100 ms after `Session::open`). Until then `fabric_now_us()` falls back to the local wall clock.
+
+These are free functions on `adamo` — they don't take a session, so any code on the host can stamp timestamps consistently.
+
+---
+
+## Video — `feature = "video"`
+
+```rust
+#[cfg(feature = "video")]
+pub use robot::{Robot, VideoTrack, detect_encoder};
+```
+
+### `Robot`
+
+```rust
+pub struct Robot;
+
+impl Robot {
+    pub fn new(api_key: &str, name: Option<&str>, protocol: Protocol) -> Result<Self>;
+
+    /// Caller-fed track. Returns a VideoTrack you push raw frames to.
+    pub fn video(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        pixel_format: &str,    // "BGRA", "RGB", "I420", "NV12", ...
+        fps: u32,
+        bitrate_kbps: u32,
+    ) -> Result<VideoTrack<'_>>;
+
+    /// V4L2 capture. The SDK owns capture and encoding.
+    pub fn attach_v4l2(
+        &mut self,
+        name: &str,
+        device: &str,           // "/dev/video0"
+        width: u32,
+        height: u32,
+        fps: u32,
+        bitrate_kbps: u32,
+    ) -> Result<()>;
+
+    /// Block driving the pipeline forever. Consumes self.
+    pub fn run(self) -> Result<()>;
+}
+```
+
+`Send`. `Drop` releases the handle (unless `run()` consumed it).
+
+<Aside>The `attach_gst(...)` GStreamer pipeline path is still present in the crate but deprecated for new code; use V4L2 or shared memory instead.</Aside>
+
+### `VideoTrack<'a>`
+
+```rust
+pub struct VideoTrack<'a>;
+
+impl VideoTrack<'_> {
+    pub fn send(&mut self, frame: &[u8]) -> Result<()>;
+}
+```
+
+Push one frame. `frame.len()` must equal `width × height × bytes-per-pixel` for the format declared on `Robot::video`. Tied to the parent `Robot` by lifetime; `Send`; drop releases the track.
+
+### `detect_encoder`
+
+```rust
+pub fn detect_encoder() -> Result<&'static str>;
+```
+
+Returns the best available H.264 encoder for the host (NVENC, VA-API, VideoToolbox, x264) or `"none"` if no encoder is available.
+
+---
+
+## Errors
+
+```rust
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug)]
+pub enum Error {
+    /// An error reported by the underlying SDK shared library.
+    Ffi(String),
+    /// A Rust string contained an interior NUL byte and could not cross FFI.
+    InteriorNul,
+    /// FFI returned non-UTF-8 data.
+    InvalidUtf8,
+    /// A blocking receive timed out.
+    Timeout,
+}
+
+impl std::fmt::Display for Error;
+impl std::error::Error for Error;
+impl From<std::ffi::NulError> for Error;
+```
+
+Errors are printable via `Display`. Underlying SDK error messages come through `Error::Ffi(String)`.
+
+---
+
+## Concurrency model
+
+- **`Session` is `Send + Sync`** and cheap to clone — share it across threads or hand a clone to a worker.
+- **All `Session` methods are blocking** at the Rust level. They use the SDK's internal runtime under the hood.
+- **`subscribe_with` callbacks run on a background receive thread.** Keep them short or hand off via a channel.
+- **`Robot::run()` blocks** driving the encoder. Spawn it on its own thread if you need to do other work concurrently.

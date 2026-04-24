@@ -1,182 +1,218 @@
 ---
-title: "Cameras"
-description: "Configure V4L2, GStreamer, and ROS camera sources"
+title: "Adding Cameras"
+description: "V4L2 devices and shared-memory frames — the two camera input methods, per language"
 ---
 
-Adamo supports USB cameras (V4L2), custom GStreamer pipelines, and ROS camera topics. Each camera is a `video_track` in your config file. You can run multiple tracks simultaneously.
+import { Tabs, TabItem } from "@astrojs/starlight/components";
 
-## USB Cameras (V4L2)
+Adamo encodes camera frames with a hardware H.264 encoder and publishes them as named tracks. You attach as many tracks as you want — one per camera — and they run in parallel.
 
-For USB webcams, Intel RealSense cameras, and any V4L2-compatible device. RealSense cameras generally work best with V4L2.
+There are two input methods:
 
-```yaml
-video_tracks:
-  - name: "main"
-    source_type: "v4l2"
-    v4l2_device: "/dev/video0"
-    source_format: "yuy2"
-    encoder: "auto"
-    bitrate: 4000
-    fps: 30
+1. **V4L2** — direct device capture from `/dev/videoN`. Use this for USB webcams, RealSense, and any V4L2-compatible camera.
+2. **Shared memory (iceoryx2)** — frames produced by another process on the same host (a custom driver, a perception pipeline, an external bridge), or pushed in from your own SDK code via the caller-fed `video()` track.
+
+## USB / V4L2 Cameras
+
+For USB webcams, Intel RealSense, and any V4L2-compatible device.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+robot.attach_video(
+    "main",
+    device="/dev/video0",
+    width=1280,
+    height=720,
+    fps=30,
+    bitrate_kbps=4000,
+)
+robot.run()
 ```
 
-Most USB webcams and RealSense cameras output YUY2. See [Source Format](#source-format) below for why this matters.
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
 
-To find available devices:
+```rust
+use adamo::{Protocol, Robot};
 
-```bash
+fn main() -> adamo::Result<()> {
+    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::default())?;
+    robot.attach_v4l2("main", "/dev/video0", 1280, 720, 30, 4000)?;
+    robot.run()
+}
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_robot_attach_video_v4l2(
+    robot, "main", "/dev/video0",
+    /* width  */ 1280, /* height */ 720,
+    /* fps    */ 30,   /* bitrate_kbps */ 4000);
+```
+
+</TabItem>
+</Tabs>
+
+### Finding the device
+
+```sh
 ls /dev/video*
-# or for more detail:
 v4l2-ctl --list-devices
+v4l2-ctl -d /dev/video0 --list-formats     # what pixel formats it supports
 ```
 
-Change `v4l2_device` to match the device path for your camera (e.g. `/dev/video2`).
+On Jetson the SDK auto-detects the V4L2 pixel format (YUY2, NV12, …) so the encoder uses the optimal GPU colourspace path.
 
-To add a second camera, append another entry to the list:
+## Multiple Cameras
 
-```yaml
-video_tracks:
-  - name: "front"
-    source_type: "v4l2"
-    v4l2_device: "/dev/video0"
-    source_format: "yuy2"
-    encoder: "auto"
-    bitrate: 4000
-    fps: 30
+Attach one track per camera. They run independently — different fps and bitrates per track is fine.
 
-  - name: "rear"
-    source_type: "v4l2"
-    v4l2_device: "/dev/video2"
-    source_format: "yuy2"
-    encoder: "auto"
-    bitrate: 2000
-    fps: 30
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+robot.attach_video("front", device="/dev/video0", width=1920, height=1080, fps=60, bitrate_kbps=8000)
+robot.attach_video("rear",  device="/dev/video2", width=1280, height=720,  fps=15, bitrate_kbps=2000)
 ```
 
-## GStreamer Pipelines
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
 
-For cameras with their own GStreamer plugins or when you need custom capture pipelines. Set `source_type: "gstreamer"` and provide a `gstreamer_pipeline` string. The pipeline should produce raw video frames — Adamo handles the H.264 encoding.
-
-**Important:** Use the full `capsfilter caps=...` syntax, not GStreamer's shorthand `!` caps syntax. The shorthand does not work.
-
-```yaml
-# Correct — use capsfilter explicitly
-video_tracks:
-  - name: "main"
-    source_type: "gstreamer"
-    gstreamer_pipeline: "videotestsrc ! capsfilter caps=video/x-raw,framerate=30/1"
-    encoder: "auto"
-    bitrate: 4000
-    fps: 30
+```rust
+robot.attach_v4l2("front", "/dev/video0", 1920, 1080, 60, 8000)?;
+robot.attach_v4l2("rear",  "/dev/video2", 1280, 720,  15, 2000)?;
 ```
 
-### ZED Cameras
+</TabItem>
+<TabItem label="C" icon="seti:c">
 
-ZED cameras work best with the ZED GStreamer plugin (`zedsrc`). Install the [ZED GStreamer plugin](https://github.com/stereolabs/zed-gstreamer) first.
-
-```yaml
-video_tracks:
-  - name: "main"
-    source_type: "gstreamer"
-    gstreamer_pipeline: "zedsrc stream-type=2 camera-resolution=3 camera-fps=60"
-    encoder: "nvv4l2h264enc"
-    bitrate: 8000
-    fps: 60
-    source_format: "BGRA"
-    keyframe_distance: -1.0
-    stereo: true
+```c
+adamo_robot_attach_video_v4l2(robot, "front", "/dev/video0", 1920, 1080, 60, 8000);
+adamo_robot_attach_video_v4l2(robot, "rear",  "/dev/video2", 1280, 720,  15, 2000);
 ```
 
-Set `stereo: true` for top/bottom stereo output. `source_format: "BGRA"` tells the encoder the pixel format coming out of zedsrc. `keyframe_distance: -1.0` disables periodic keyframes — the viewer requests them on demand, which is better for latency.
+</TabItem>
+</Tabs>
 
-## ROS Camera Topics
+## Shared Memory (iceoryx2)
 
-For cameras that publish to ROS2 topics. Enable the ROS bridge and point the track at a topic.
+Use shared memory when frames come from somewhere V4L2 can't see — a custom driver, a Python perception loop, an external bridge, or your own SDK code rendering frames in process.
 
-```yaml
-ros:
-  enabled: true
-  auto_start_bridge: true
+Two patterns: **consume** an existing iceoryx2 service produced by another process, or **publish** frames yourself from a tight loop.
 
-video_tracks:
-  - name: "ros-cam"
-    source_type: "ros_auto"
-    ros_topic: "/camera/image_raw"
-    encoder: "auto"
-    bitrate: 3000
-    fps: 30
+### Consume an existing SHM service
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+robot.attach_video("head", shm="head_cam", width=1280, height=720)
 ```
 
-`source_type: "ros_auto"` auto-detects the message type from the topic name — it handles `sensor_msgs/Image`, `sensor_msgs/CompressedImage`, and `FFMPEGPacket`/H.264 topics. `ros.enabled: true` is required.
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
 
-You can also specify the source type explicitly if auto-detection doesn't pick the right one:
+The Rust SDK does not yet expose a consume-side `attach_shm` helper. Use the publish-frames-yourself pattern below, or wrap the producer in Python.
 
-| Source type | Message type | Description |
-|-------------|-------------|-------------|
-| `ros_auto` | auto-detect | Infers from topic name |
-| `ros_image` | `sensor_msgs/Image` | Raw pixels, re-encoded to H.264 |
-| `ros_compressed_image` | `sensor_msgs/CompressedImage` | JPEG/PNG, decoded then re-encoded |
-| `ros_h264` | H.264 stream | Passthrough, no re-encoding |
-| `ros_h264_transcode` | H.264 stream | Decode and re-encode (to change bitrate/keyframes) |
-| `ros_ffmpeg_packet` | `FFMPEGPacket` | Passthrough, no re-encoding |
-| `ros_ffmpeg_packet_transcode` | `FFMPEGPacket` | Decode and re-encode |
+</TabItem>
+<TabItem label="C" icon="seti:c">
 
-### OAK Cameras (Luxonis)
+The C SDK does not yet expose a consume-side helper. Use the publish-frames-yourself pattern below, or wrap the producer in Python.
 
-OAK cameras work best over ROS using the `depthai-ros` driver, which publishes H.264-compressed video. Use `ros_h264_transcode` to re-encode the stream at your preferred bitrate:
+</TabItem>
+</Tabs>
 
-```yaml
-ros:
-  enabled: true
-  auto_start_bridge: true
+### Publish frames yourself
 
-video_tracks:
-  - name: "oak"
-    source_type: "ros_h264_transcode"
-    ros_topic: "/oak/rgb/h264"
-    encoder: "auto"
-    bitrate: 4000
-    fps: 30
+The SDK gives you a track handle; you push raw pixel buffers into it. Adamo allocates a private iceoryx2 service for the track and routes the frames into the encoder.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import cv2
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+track = robot.video("overlay", width=1280, height=720, pixel_format="BGRA",
+                    fps=30, bitrate_kbps=4000)
+
+cap = cv2.VideoCapture(0)
+while True:
+    ok, frame = cap.read()
+    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
+    track.send(frame)
 ```
 
-## Source Format
+The encoder pipeline auto-starts on the first `track.send()`.
 
-`source_format` tells Adamo what pixel format your camera outputs. When set, the encoder can skip CPU-based colorspace conversion and use the GPU directly — saving ~15ms of latency per frame. Without it, Adamo falls back to a slow CPU conversion path.
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
 
-Currently this cannot be auto-detected — you need to specify it in your config.
+```rust
+use adamo::{Protocol, Robot};
 
-| Format | Cameras | Notes |
-|--------|---------|-------|
-| `yuy2` | Most USB webcams, Intel RealSense | The most common V4L2 format |
-| `bgra` | ZED cameras | ZED GStreamer plugin outputs BGRA |
-| `gray8` | Mono/IR cameras, RealSense IR stream | Grayscale, requires CPU conversion |
-| `rgba` | Some ROS image sources | Direct GPU path |
-| `i420` | Some GStreamer pipelines | Direct GPU path |
-| `nv12` | Hardware decoders | Direct GPU path, most efficient |
-| `uyvy` | Some industrial cameras | Direct GPU path |
-
-To check what format your V4L2 camera supports:
-
-```bash
-v4l2-ctl -d /dev/video0 --list-formats
+fn main() -> adamo::Result<()> {
+    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::default())?;
+    let mut track = robot.video("overlay", 1280, 720, "BGRA", 30, 4000)?;
+    std::thread::spawn(move || {
+        loop {
+            let frame: Vec<u8> = render_next_frame();  // your code
+            track.send(&frame).unwrap();
+        }
+    });
+    robot.run()
+}
 ```
 
-## Encoder Options
+</TabItem>
+<TabItem label="C" icon="seti:c">
 
-| Encoder | Hardware | Notes |
-|---------|----------|-------|
-| `auto` | Auto-detect | Picks the best available encoder at startup |
-| `nvv4l2h264enc` | Jetson (HW) | Best on Jetson, uses the dedicated NVENC block |
-| `nvh264enc` | NVIDIA desktop GPU | For x86 machines with NVIDIA GPUs (uses nvcodec) |
-| `x264enc` | CPU | Software fallback, works on any Linux system |
+```c
+adamo_video_track_t *t = adamo_robot_video(
+    robot, "overlay", 1280, 720, "BGRA", 30, 4000);
+// push frames in a loop:
+adamo_video_track_send(t, frame_bytes, frame_len);
+```
 
-Use `auto` unless you have a reason to pin a specific encoder.
+</TabItem>
+</Tabs>
 
-## Adjusting Quality
+### Supported pixel formats
 
-Two knobs: `bitrate` and `fps`.
+| Format | Bytes per pixel | Notes |
+|--------|------------------|-------|
+| `BGRA`, `RGBA`, `BGRX`, `RGBX` | 4 | Most convenient for OpenCV / numpy. |
+| `RGB`, `BGR`                   | 3 | |
+| `YUY2`, `UYVY`                 | 2 | |
+| `I420`, `NV12`                 | 1.5 | Most efficient on the encoder. |
 
-- **`bitrate`** — in kbps. Higher means better image quality and more bandwidth. Start at 2000-4000 kbps.
-- **`fps`** — frames per second. Use 60 if your camera supports it, otherwise 30. Drop to 15 on constrained links.
+## Tuning Quality
 
-If video looks blocky or laggy, raise the bitrate before anything else. If bandwidth is the bottleneck, lower fps first.
+Two knobs cover almost everything:
+
+- **`bitrate_kbps`** — higher means better picture and more bandwidth. Start at 2000–4000 kbps for 720p, 6000–8000 for 1080p.
+- **`fps`** — 60 if your camera supports it, 30 otherwise. On constrained links drop to 15.
+
+If video looks blocky, raise the bitrate before anything else. If bandwidth is the bottleneck, lower fps first.
+
+### Encoder selection
+
+Adamo picks the best available hardware H.264 encoder for the host at startup:
+
+| Host                           | Encoder used |
+|--------------------------------|--------------|
+| Jetson (Orin, Thor, …)         | On-chip NVENC |
+| x86 with NVIDIA discrete GPU   | NVENC |
+| Intel / AMD integrated graphics | VA-API |
+| macOS                          | VideoToolbox |
+| Anything else                  | CPU (x264) |
+
+To see what the SDK picked, check the log line printed at connect.

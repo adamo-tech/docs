@@ -1,0 +1,144 @@
+---
+title: "Robot Discovery"
+description: "Liveliness tokens — list which robots are online and watch for joins/leaves"
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+Adamo uses **liveliness tokens** to track which participants are online. A robot declares a token; the token disappears when the connection drops; everyone else watches the token namespace and reacts.
+
+This is what powers the robot list on operate.adamohq.com. You can also use it directly from your own programs to build dashboards, fleet-management tools, or operators that automatically connect to the first available robot.
+
+## Declaring Yourself Alive
+
+Hold a liveliness token for as long as you want to be visible. Drop it (or let it fall out of scope) to disappear.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+session = adamo.connect(api_key="ak_...")
+token = session.alive("my-arm")
+# now visible at my-arm/alive
+# ... do work ...
+token.undeclare()
+```
+
+If you use `adamo.Robot(...)`, a liveliness token at `{name}/alive` is declared automatically when the first track or publisher comes up — no manual call needed.
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::{Protocol, Session};
+let session = Session::open("ak_...", Protocol::default())?;
+let _token = session.alive("my-arm")?;     // dropped → undeclared
+// ... do work ...
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_session_t *sess = adamo_open("ak_...", adamo_protocol_t_ADAMO_PROTOCOL_QUIC);
+adamo_liveliness_token_t *tok = adamo_liveliness_declare(sess, "my-arm");
+/* ... do work ... */
+adamo_liveliness_token_free(tok);
+```
+
+</TabItem>
+</Tabs>
+
+## Listing Online Robots
+
+A one-shot query that returns every live token matching a pattern. The default `**/alive` covers every robot in your org.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+for key in session.live_tokens():
+    print(key)
+# my-arm/alive
+# trainer-01/alive
+# xr-operator/alive
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+for key in session.live_tokens("**/alive")? {
+    println!("{key}");
+}
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+size_t count = 0;
+char **tokens = adamo_liveliness_get(sess, "**/alive", &count);
+for (size_t i = 0; i < count; i++) {
+    printf("%s\n", tokens[i]);
+}
+adamo_liveliness_tokens_free(tokens, count);
+```
+
+</TabItem>
+</Tabs>
+
+You can narrow the pattern — `arm-*/alive` for a specific class of robot, `**/video/*/alive` to enumerate active video tracks (each track also declares its own liveliness).
+
+## Watching for Changes
+
+The interesting case is reacting in real time as robots come and go. Subscribe with `history=true` to also receive the current set of live tokens up front, so your handler sees them as they appear.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+def on_change(key, alive):
+    print(f"{'UP' if alive else 'DOWN'}: {key}")
+
+session.on_liveliness("**/alive", callback=on_change, history=True)
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+let _sub = session.on_liveliness("**/alive", true, |key, alive| {
+    println!("{}: {key}", if alive { "UP" } else { "DOWN" });
+})?;
+std::thread::park();
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+void on_change(const char *key, int alive, void *user) {
+    printf("%s: %s\n", alive ? "UP" : "DOWN", key);
+}
+
+adamo_liveliness_sub_t *sub = adamo_liveliness_subscribe(
+    sess, "**/alive", /* history */ 1, on_change, NULL);
+/* ... */
+adamo_liveliness_sub_free(sub);
+```
+
+</TabItem>
+</Tabs>
+
+## Patterns Worth Knowing
+
+| Pattern                | What it lists                                          |
+|------------------------|--------------------------------------------------------|
+| `**/alive`             | Every live participant in the org.                     |
+| `arm-*/alive`          | All robots whose name starts with `arm-`.              |
+| `**/video/*/alive`     | Every currently-active video track (across all robots). |
+| `xr-*/alive`           | All operator-style participants named `xr-…`.          |
+
+The token namespace is just a key expression — model it however suits your fleet.

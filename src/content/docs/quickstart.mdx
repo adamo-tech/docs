@@ -1,57 +1,207 @@
 ---
 title: "Quickstart"
-description: "Get your Jetson streaming video in under 5 minutes"
+description: "Write a robot program in Python, Rust, or C and operate it from operate.adamohq.com in five minutes"
 ---
 
-Get your Jetson streaming video in under 5 minutes. This guide assumes you're SSH'd into a Jetson (Orin Nano, Orin NX, AGX Orin, Thor, etc.) with a USB camera connected. If you have a CSI camera, ROS camera topic, or another source, see the [Cameras](/cameras/) guide.
+import { Tabs, TabItem, Steps, LinkCard, CardGrid } from "@astrojs/starlight/components";
 
-## Install
+Get a robot streaming video to [operate.adamohq.com](https://operate.adamohq.com) in under five minutes. Pick the language you want to write your robot in — Python, Rust, or C — install the SDK, write a short program that opens a camera, run it.
+
+You don't need to write an operator — operate.adamohq.com provides a gamepad, VR teleop, recording, and replay against any robot you've started. The [Building Your Own Operator](/operator/) page covers the case when you want a custom one.
+
+## Install the SDK
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
 
 ```sh
-curl -sL https://install.adamohq.com | sh
+pip install adamo
 ```
 
-This downloads the `adamo` binary for your platform and adds it to your PATH.
+Requires Python 3.10+. On the robot host you'll also want the video extras:
+
+```sh
+pip install 'adamo[video]'
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```sh
+cargo add adamo
+```
+
+For video capture (requires iceoryx2 on the host):
+
+```sh
+cargo add adamo --features video
+```
+
+Currently published for `aarch64-unknown-linux-gnu` (Jetson / Ubuntu 22.04 arm64). For local dev on other hosts, build `adamo-c` from source and point at it via `ADAMO_LIB_DIR=/path/to/dir/with/libadamo.{so,dylib}`.
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+Build and install with CMake:
+
+```sh
+git clone https://github.com/adamohq/adamo-network.git
+cd adamo-network/adamo-c
+cmake -S . -B build -DADAMO_BUILD_VIDEO=ON
+cmake --build build --target install
+```
+
+Then in your project's `CMakeLists.txt`:
+
+```cmake
+find_package(Adamo REQUIRED)
+target_link_libraries(my_robot PRIVATE Adamo::adamo)
+# C++17 RAII wrapper is also available:
+# target_link_libraries(my_robot PRIVATE Adamo::adamo_cpp)
+```
+
+</TabItem>
+</Tabs>
 
 ## Get an API Key
 
-Sign up at [operate.adamohq.com](https://operate.adamohq.com) and go to **Settings > API Keys** to create a key. Copy it — you'll need it in the next step.
+Sign up at [operate.adamohq.com](https://operate.adamohq.com) and go to **Settings → API Keys**. Create a key (it starts with `ak_`) and copy it. The SDK uses this key to find the right router for your organisation.
 
-## Create a Config
+You can pass the key inline or read it from the `ADAMO_API_KEY` environment variable.
 
-Create `~/adamo/config.yaml`:
+## Write Your Robot Program
 
-```yaml
-api_key: "ak_your_key_here"
-robot_name: "my-robot"
+A robot program does two things: declares the cameras it streams, then blocks driving the pipeline. That's it.
 
-video_tracks:
-  - name: "main"
-    source_type: "v4l2"
-    v4l2_device: "/dev/video0"
-    encoder: "auto"
-    bitrate: 4000
-    fps: 30
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+robot.attach_video("main", device="/dev/video0")
+robot.run()
 ```
 
-`robot_name` is how the robot appears in the web interface.
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
 
-## Run
+```rust
+use adamo::{Protocol, Robot};
 
-```sh
-adamo --config ~/adamo/config.yaml
+fn main() -> adamo::Result<()> {
+    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::default())?;
+    robot.attach_v4l2("main", "/dev/video0", 1280, 720, 30, 4000)?;
+    robot.run()
+}
 ```
 
-A successful startup looks like:
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+#include "adamo/adamo.h"
+#include <stdio.h>
+
+int main(void) {
+    adamo_robot_t *robot = adamo_robot_new(
+        "ak_...", "my-arm", adamo_protocol_t_ADAMO_PROTOCOL_QUIC);
+    if (!robot) {
+        fprintf(stderr, "adamo_robot_new: %s\n", adamo_last_error());
+        return 1;
+    }
+    if (adamo_robot_attach_video_v4l2(
+            robot, "main", "/dev/video0", 1280, 720, 30, 4000) != 0) {
+        fprintf(stderr, "attach: %s\n", adamo_last_error());
+        return 1;
+    }
+    return adamo_robot_run(robot);
+}
+```
+
+</TabItem>
+</Tabs>
+
+The default transport is **QUIC** — reliable streams over a single multiplexed UDP socket. For LAN / unreliable-tolerant traffic pass `protocol="udp"` (Python), `Protocol::Udp` (Rust), or `ADAMO_PROTOCOL_UDP` (C). For environments that block UDP/QUIC, use `tcp` / `Tcp` / `ADAMO_PROTOCOL_TCP`.
+
+## Run It
+
+Run your program. On startup the SDK fetches your router endpoint and opens a session.
 
 ```
-Adamo Network                    v0.1.0
-
-Robot:        my-robot
-Org:          my-org
-View Robot:   https://operate.adamohq.com/#/operate/my-robot
+[adamo] connecting to router as my-arm…
+[adamo] connected (org: my-org)
+[adamo] streaming main: 1280x720 @ 30 fps, 4000 kbps (nvh264enc)
 ```
 
 ## See Your Robot
 
-Open [operate.adamohq.com](https://operate.adamohq.com) and log in. Your robot will appear in the grid with its video stream already playing. Click it to start operating.
+Open [operate.adamohq.com](https://operate.adamohq.com) and log in. Your robot appears in the grid with its live camera feed already playing. Click it to open the teleoperation view.
+
+From there you have:
+
+- **Gamepad control** — plug in a USB or Bluetooth controller; the web app publishes Joy messages that your robot can subscribe to. See [Receiving Control](/control/).
+- **VR teleop** — for stereo camera tracks, "View Stereo" launches a WebXR view with head + controller pose forwarded to the robot.
+- **Recording & replay** — every session can be recorded and replayed later.
+- **Layouts** — multi-camera grids you can configure once and reuse.
+
+See [The operate.adamohq.com Platform](/web-interface/) for the full tour.
+
+To make the robot *respond* to gamepad or VR input, see [Receiving Control](/control/).
+
+## Add More Cameras
+
+Most robots have more than one camera. Just call the attach method again — once per track.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+robot.attach_video("wrist_left",  device="/dev/video0")
+robot.attach_video("wrist_right", device="/dev/video1")
+robot.attach_video("head",        shm="head_cam")     # iceoryx2 SHM
+robot.run()
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::{Protocol, Robot};
+
+fn main() -> adamo::Result<()> {
+    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::default())?;
+    robot.attach_v4l2("wrist_left",  "/dev/video0", 1280, 720, 30, 4000)?;
+    robot.attach_v4l2("wrist_right", "/dev/video1", 1280, 720, 30, 4000)?;
+    robot.run()
+}
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_robot_t *robot = adamo_robot_new(
+    "ak_...", "my-arm", adamo_protocol_t_ADAMO_PROTOCOL_QUIC);
+adamo_robot_attach_video_v4l2(robot, "wrist_left",  "/dev/video0", 1280, 720, 30, 4000);
+adamo_robot_attach_video_v4l2(robot, "wrist_right", "/dev/video1", 1280, 720, 30, 4000);
+adamo_robot_run(robot);
+```
+
+</TabItem>
+</Tabs>
+
+For the full set of input methods (V4L2 and shared memory), see [Adding Cameras](/cameras/).
+
+## What's Next
+
+<CardGrid>
+  <LinkCard title="Adding Cameras" description="Every supported camera source, per language." href="/cameras/" />
+  <LinkCard title="Receiving Control" description="Make the robot respond to the platform's gamepad / VR." href="/control/" />
+  <LinkCard title="Sending and Receiving Data" description="Publish telemetry and subscribe to other robots." href="/data/" />
+  <LinkCard title="The operate.adamohq.com Platform" description="What the hosted operator can do." href="/web-interface/" />
+</CardGrid>

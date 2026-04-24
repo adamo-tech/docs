@@ -1,28 +1,37 @@
 ---
 title: "Adamo"
-description: "Low-latency robot teleoperation over the internet"
+description: "Low-latency robotics SDK — write a robot in Python, Rust, or C and operate it from anywhere."
 ---
 
 import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
-## Get started
+A robot is a program you write in Python, Rust, or C using the Adamo SDK. Run it on your hardware and it appears on [operate.adamohq.com](https://operate.adamohq.com) with a gamepad, VR teleop, recording, and replay — no operator code required.
 
-Get your robot streaming video and accepting control input in minutes.
+## Get Started
 
-<LinkCard title="Quickstart" description="Get your Jetson streaming video in under 5 minutes." href="/quickstart/" />
+<LinkCard title="Quickstart" description="Install the SDK, write a minimal robot program, see it on operate.adamohq.com — five minutes." href="/quickstart/" />
 
-## Guides
+## Building Robots
 
 <CardGrid>
-  <LinkCard title="Cameras" description="V4L2, GStreamer, ROS topics, and camera-specific guides." href="/cameras/" />
-  <LinkCard title="Web Interface" description="View streams, control robots, manage layouts, and monitor your fleet." href="/web-interface/" />
-  <LinkCard title="Control" description="Gamepad, VR controllers, and programmatic control via Python." href="/control/" />
-  <LinkCard title="Python SDK" description="Publish, subscribe, and send control commands from Python." href="/python-sdk/" />
+  <LinkCard title="Cameras" description="V4L2 devices and shared-memory frames." href="/cameras/" />
+  <LinkCard title="Receiving Control" description="Subscribe to gamepad and VR input from operate.adamohq.com, plus your own custom operators." href="/control/" />
+  <LinkCard title="Sending and Receiving Data" description="Publish telemetry, subscribe to other robots, run one-shot queries." href="/data/" />
+  <LinkCard title="Robot Discovery" description="List which robots are online and watch for joins/leaves." href="/discovery/" />
 </CardGrid>
 
-## Reference
+## Operating Robots
 
 <CardGrid>
-  <LinkCard title="TypeScript SDK" description="Full API reference for building custom teleoperation UIs." href="/typescript-sdk/" />
-  <LinkCard title="Config Reference" description="Every config.yaml option documented." href="/config-reference/" />
+  <LinkCard title="The operate.adamohq.com Platform" description="Tour of the hosted operator — gamepad, VR, layouts, recording, replay, fleet stats." href="/web-interface/" />
+  <LinkCard title="Building Your Own Operator" description="When the hosted UI isn't enough — write a custom teleop program (XR, mobile, browser)." href="/operator/" />
+</CardGrid>
+
+## SDK References
+
+<CardGrid>
+  <LinkCard title="Python SDK" description="adamo — pip install adamo." href="/python-sdk/" />
+  <LinkCard title="Rust SDK" description="adamo — cargo add adamo." href="/rust-sdk/" />
+  <LinkCard title="C SDK" description="libadamo — CMake + C++17 RAII wrapper." href="/c-sdk/" />
+  <LinkCard title="TypeScript SDK" description="@adamo/react — for browser operators and dashboards." href="/typescript-sdk/" />
 </CardGrid>

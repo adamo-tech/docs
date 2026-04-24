@@ -13,10 +13,10 @@ The SDK is split across four packages:
 |---|---|
 | `@adamo/react` | React hooks and components. This is the primary package for building UIs. |
 | `@adamo/media` | Low-level H.264 video decoding, FEC recovery, TWCC congestion control, XR stereo rendering. Used internally by `@adamo/react`. |
-| `@adamo/teleop` | Gamepad (joystick) input management and ROS Joy message encoding. |
+| `@adamo/teleop` | Gamepad (joystick) input management and Joy message encoding. |
 | `@adamo/fleet` | Imperative (non-React) topic discovery and subscription utilities. |
 
-All transport is over Zenoh via WebSocket (`wss://`) or QUIC. The Zenoh router URL is typically `wss://router.adamohq.com:443`.
+Transport is over WebSocket (`wss://`) or QUIC. The Adamo router URL is typically `wss://router.adamohq.com:443`.
 
 ### Installation
 
@@ -28,7 +28,7 @@ npm install @adamo/react @adamo/media @adamo/teleop
 
 ### `<AdamoProvider>`
 
-Wrap your entire app in `<AdamoProvider>`. It creates a Zenoh session and provides it via React context to all child components. It also manages an internal `StreamManager` that ref-counts active video streams so they survive page navigation without reconnecting.
+Wrap your entire app in `<AdamoProvider>`. It creates a session and provides it via React context to all child components. It also manages an internal `StreamManager` that ref-counts active video streams so they survive page navigation without reconnecting.
 
 ```tsx
 import { AdamoProvider } from "@adamo/react";
@@ -62,8 +62,8 @@ function App({ session }: { session: Session }) {
 
 | Prop | Type | Description |
 |---|---|---|
-| `url` | `string` (optional) | WebSocket URL of the Zenoh router. Used when `session` is not provided. |
-| `session` | `Session` (optional) | Pre-existing Zenoh session. Takes precedence over `url`. |
+| `url` | `string` (optional) | WebSocket URL of the Adamo router. Used when `session` is not provided. |
+| `session` | `Session` (optional) | Pre-existing session. Takes precedence over `url`. |
 | `org` | `string` (optional) | Organization slug used for topic namespacing. All built-in hooks and components prepend `adamo/{org}/` to topics. |
 | `children` | `React.ReactNode` | Child components. |
 
@@ -91,7 +91,7 @@ function MyComponent() {
 
 ### `useRobots()`
 
-Discovers online robots by subscribing to Zenoh liveliness tokens at `adamo/{org}/*/alive`. Returns the list sorted alphabetically.
+Discovers online robots by subscribing to liveliness tokens at `adamo/{org}/*/alive`. Returns the list sorted alphabetically.
 
 ```tsx
 import { useRobots } from "@adamo/react";
@@ -212,7 +212,7 @@ function RobotBrowser() {
 
 ### `<Stream>`
 
-The primary video component. Subscribes to an H.264 stream over Zenoh, decodes using the WebCodecs API, and renders frames to a canvas. Streams are ref-counted internally so navigating away and back does not cause a reconnect.
+The primary video component. Subscribes to an H.264 stream, decodes using the WebCodecs API, and renders frames to a canvas. Streams are ref-counted internally so navigating away and back does not cause a reconnect.
 
 The stream automatically sends resize hints to the robot encoder so it only encodes at the resolution the viewer needs.
 
@@ -239,7 +239,7 @@ import { Stream } from "@adamo/react";
 |---|---|---|---|
 | `robot` | `string` | — | Robot ID. Used with `track` to build the topic `adamo/{org}/{robot}/video/{track}`. |
 | `track` | `string` | `"main"` | Track name. Used with `robot`. |
-| `topic` | `string` | — | Full Zenoh key expression for the video topic. Overrides `robot`/`track`. |
+| `topic` | `string` | — | Full key expression for the video topic. Overrides `robot`/`track`. |
 | `crop` | `{ top, right, bottom, left }` | — | Fractional crop insets (0–1) applied via CSS transform. Lets you show a sub-region of the video without re-encoding. |
 | `onStats` | `(stats: StreamStats) => void` | — | Called every second with stream health metrics. |
 | `className` | `string` | — | CSS class applied to the outer `<div>`. |
@@ -303,7 +303,7 @@ function StreamWithStats({ robotId }: { robotId: string }) {
 
 ### `useSubscription(keyexpr, onSample, options?)`
 
-Subscribes to a Zenoh key expression and calls a callback for each received `Sample`. Uses a `RingChannel` internally — old messages are dropped when the buffer fills, which is the correct behaviour for real-time streams.
+Subscribes to a key expression and calls a callback for each received `Sample`. Uses a `RingChannel` internally — old messages are dropped when the buffer fills, which is the correct behaviour for real-time streams.
 
 ```tsx
 import { useSubscription, json } from "@adamo/react";
@@ -360,7 +360,7 @@ function AllRobotHeartbeats({ org }: { org: string }) {
 
 ### `usePublisher(keyexpr, options?)`
 
-Creates a Zenoh publisher and returns a handle. Also tracks whether any subscribers are currently matching — useful to avoid encoding or sending data when nobody is listening.
+Creates a publisher and returns a handle. Also tracks whether any subscribers are currently matching — useful to avoid encoding or sending data when nobody is listening.
 
 ```tsx
 import { usePublisher, json } from "@adamo/react";
@@ -409,7 +409,7 @@ For reliable control messages use `CongestionControl.BLOCK` and `Reliability.REL
 
 ### `<GamepadController>`
 
-Reads from a browser gamepad and publishes `sensor_msgs/Joy` messages encoded in ROS CDR format over Zenoh. Polls every 20ms by default. The component renders nothing — it is purely a side-effect component.
+Reads from a browser gamepad and publishes Joy messages on the configured topic. Polls every 20ms by default. The component renders nothing — it is purely a side-effect component.
 
 ```tsx
 import { GamepadController } from "@adamo/react";
@@ -446,7 +446,7 @@ function TeleoperationPage({ robotId, org }: { robotId: string; org: string }) {
 
 | Prop | Type | Description |
 |---|---|---|
-| `topic` | `string` | Zenoh key expression to publish Joy messages on. |
+| `topic` | `string` | key expression to publish Joy messages on. |
 | `config` | `JoypadConfig` | Gamepad configuration (see below). |
 | `onInput` | `(msg: JoyMessage) => void` | Called every poll cycle when the gamepad has input. |
 | `onButtonDown` | `(buttonIndex: number) => void` | Called when a button transitions from 0 to 1. |
@@ -470,7 +470,7 @@ type JoypadConfig = {
 
 ### `JoyMessage` type
 
-This is a standard ROS `sensor_msgs/Joy` message:
+The Joy message shape published by the gamepad component:
 
 ```ts
 type JoyMessage = {
@@ -534,12 +534,12 @@ function TrackControls({ robotId }: { robotId: string }) {
       fps: 30,
     });
 
-  const startRosTopic = () =>
+  const startArmCamera = () =>
     trackRequest({
       action: "start",
       name: "arm_camera",
-      source_type: "ros",
-      ros_topic: "/camera/image_raw/compressed",
+      source_type: "v4l2",
+      v4l2_device: "/dev/video2",
       bitrate: 4000,
       fps: 60,
     });
@@ -550,7 +550,7 @@ function TrackControls({ robotId }: { robotId: string }) {
   return (
     <div>
       <button onClick={startKinect}>Start Kinect</button>
-      <button onClick={startRosTopic}>Start Arm Camera</button>
+      <button onClick={startArmCamera}>Start Arm Camera</button>
       <button onClick={stopKinect}>Stop Kinect</button>
     </div>
   );
@@ -565,9 +565,8 @@ type TrackRequestParams = {
   name: string;                        // Track name (used as the key expression segment)
 
   // Source configuration (for "start")
-  source_type?: string;                // "v4l2", "ros", "gstreamer"
-  gstreamer_pipeline?: string;         // Custom GStreamer pipeline string
-  ros_topic?: string;                  // ROS topic to subscribe to
+  source_type?: string;                // "v4l2" or "shm"
+  shm_service?: string;                // iceoryx2 service name (when source_type is "shm")
   v4l2_device?: string;                // V4L2 device path (e.g., "/dev/video0")
   v4l2_capture_resolution?: [number, number]; // [width, height] for V4L2 capture
 
@@ -743,9 +742,9 @@ const bytes = json.encode({ position: [1.0, 2.0, 3.0] });
 const msg = json.decode<{ position: number[] }>(bytes);
 ```
 
-### Re-exported Zenoh Types
+### Re-exported Transport Types
 
-`@adamo/react` re-exports the following types and values from `@eclipse-zenoh/zenoh-ts` for convenience:
+`@adamo/react` re-exports the following types and values from the underlying transport library for convenience:
 
 ```ts
 import {
@@ -950,7 +949,7 @@ function TrackList({
 }
 ```
 
-## 10. Zenoh Topic Conventions
+## 10. Topic Conventions
 
 All topics follow the pattern `adamo/{org}/{robot}/...`. The `{org}` segment is the organization slug and `{robot}` is the robot identifier.
 
@@ -968,7 +967,7 @@ All topics follow the pattern `adamo/{org}/{robot}/...`. The `{org}` segment is 
 |---|---|---|
 | `adamo/{org}/{robot}/video/{track}` | Robot → Cloud | Video stream data. Binary, multiplexed: byte 0 = `0x00` (video packet) or `0x01` (FEC parity packet). |
 | `adamo/{org}/{robot}/video/{track}/alive` | Robot → Cloud | Liveliness token for this track. Present while the track is actively streaming. |
-| `adamo/{org}/{robot}/video/{track}/meta` | Robot → Cloud | Track metadata JSON: `{ "stereo": bool }`. Queryable (persisted by zenohd). |
+| `adamo/{org}/{robot}/video/{track}/meta` | Robot → Cloud | Track metadata JSON: `{ "stereo": bool }`. Queryable (persisted by the router). |
 | `adamo/{org}/{robot}/video/{track}/encoder` | UI → Robot | Encoder control commands (keyframe requests, resize hints). Binary protocol. |
 | `adamo/{org}/{robot}/stats/cc` | UI → Robot | TWCC (Transport-wide Congestion Control) feedback. Used for adaptive bitrate. |
 | `adamo/{org}/{robot}/stats/ping` | UI → Robot | Latency ping. 4-byte request ID. |
@@ -980,7 +979,7 @@ All topics follow the pattern `adamo/{org}/{robot}/...`. The `{org}` segment is 
 
 | Topic | Direction | Description |
 |---|---|---|
-| `adamo/{org}/{robot}/control` | UI → Robot | Default control topic (e.g., `sensor_msgs/Joy` for a simple robot). |
+| `adamo/{org}/{robot}/control` | UI → Robot | Default control topic (e.g., a Joy message for a simple robot). |
 | `adamo/{org}/{robot}/control/{name}` | UI → Robot | Named control channel. `{name}` is typically `"joy"`, `"joint_cmd"`, etc. |
 
 ### Track Management Topics
@@ -992,7 +991,7 @@ All topics follow the pattern `adamo/{org}/{robot}/...`. The `{org}` segment is 
 
 ### Wildcard Syntax
 
-Zenoh key expressions support two wildcards:
+key expressions support two wildcards:
 
 | Wildcard | Meaning |
 |---|---|
@@ -1122,7 +1121,7 @@ type FleetAggregate = {
 
 type FleetOptions = {
   ttlMs?: number;       // Topic staleness TTL in milliseconds (default: 5000)
-  channelSize?: number; // Zenoh ring buffer size (default: 16)
+  channelSize?: number; // ring buffer size (default: 16)
 };
 ```
 
@@ -1132,7 +1131,7 @@ Most applications should use `<Stream>` from `@adamo/react` instead. These low-l
 
 ### `createStreamPlayer(options)`
 
-The main entry point. Manages the full pipeline: Zenoh subscription, FEC recovery, TWCC feedback, NACK retransmission, H.264 decoding via WebCodecs, and rendering to a canvas.
+The main entry point. Manages the full pipeline: subscription, FEC recovery, TWCC feedback, NACK retransmission, H.264 decoding via WebCodecs, and rendering to a canvas.
 
 ```ts
 import { createStreamPlayer } from "@adamo/media";

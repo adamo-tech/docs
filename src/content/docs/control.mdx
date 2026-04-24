@@ -1,53 +1,248 @@
 ---
-title: "Control"
-description: "Send control commands from gamepads, VR controllers, and code"
+title: "Receiving Control"
+description: "Subscribe to gamepad and VR input from operate.adamohq.com, plus your own custom operators"
 ---
 
-## Enabling Control Relay
+import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
 
-Add the following to your `config.yaml`:
+A robot becomes useful when it does something with the input it receives. There are two sources of control:
 
-```yaml
-control:
-  enabled: true
+1. **operate.adamohq.com** — gamepad and VR input from the hosted operator, published as CDR-encoded payloads on `control/joy`, `head_pose`, and the controller poses.
+2. **Your own custom operator** — a teleop program you wrote yourself, publishing whatever topics and payload format you like (typically JSON). See [Building Your Own Operator](/operator/).
+
+For both, the SDK primitive is the same: subscribe to a key expression and react to incoming samples.
+
+## Gamepad from operate.adamohq.com
+
+The web app publishes a Joy message to `{robot}/control/joy` whenever the gamepad changes. The wire format is CDR.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+from pycdr2 import CdrReader  # pip install pycdr2
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+
+@robot.on("my-arm", "control/joy", decode=None)
+def on_joy(payload: bytes):
+    rdr = CdrReader(payload)
+    rdr.read_header()                        # Joy message header
+    axes    = list(rdr.read_float32_array())
+    buttons = list(rdr.read_int32_array())
+    # axes[0..1] = left stick X/Y, axes[2..3] = right stick X/Y, etc.
+    drive(axes[0], axes[1])
+
+robot.run()
 ```
 
-That's it. The adamo binary receives control messages over the Adamo network and relays them to ROS topics on the robot.
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
 
-## Input Methods
+```rust
+use adamo::{Protocol, Session};
 
-The web interface supports gamepad input out of the box. Inputs are serialized, sent over the Adamo network, and relayed to ROS topics on the robot.
+fn main() -> adamo::Result<()> {
+    let session = Session::open("ak_...", Protocol::default())?;
+    let _sub = session.subscribe_with("my-arm/control/joy", |sample| {
+        // sample.payload is a CDR-encoded Joy message.
+        // Decode with the `cdr-encoding` crate (or your own decoder).
+        if let Ok(joy) = cdr_encoding::deserialize::<JoyMsg>(&sample.payload) {
+            drive(joy.axes[0], joy.axes[1]);
+        }
+    })?;
+    std::thread::park();
+    Ok(())
+}
+```
 
-**Gamepad** — Plug in a USB or Bluetooth gamepad (Xbox, PlayStation, or similar). The web app detects it automatically. Published to `/joy` as `sensor_msgs/msg/Joy`.
+</TabItem>
+<TabItem label="C" icon="seti:c">
 
-### VR Controllers
+```c
+adamo_session_t *sess = adamo_open(
+    "ak_...", adamo_protocol_t_ADAMO_PROTOCOL_QUIC);
 
-When viewing a stereo video stream in immersive VR mode, head pose and VR controller tracking data are captured and forwarded to the robot. This is only active while in the VR view. The following ROS topics are published:
+void on_joy(const adamo_sample_t *s, void *user) {
+    /* decode CDR Joy message from s->payload, s->payload_len */
+}
 
-| Topic | Type | Description |
-|-------|------|-------------|
-| `/head_pose` | `geometry_msgs/msg/PoseStamped` | VR headset position and orientation |
-| `/controller/left` | `geometry_msgs/msg/PoseStamped` | Left controller pose |
-| `/controller/right` | `geometry_msgs/msg/PoseStamped` | Right controller pose |
+adamo_cb_sub_t *sub = adamo_subscribe_cb(
+    sess, "my-arm/control/joy", on_joy, /* user */ NULL);
+```
+
+For C/C++ robots, [eProsima Fast CDR](https://github.com/eProsima/Fast-CDR) is a small library that handles the wire format.
+
+</TabItem>
+</Tabs>
+
+The standard W3C / Xbox button and axis mapping is documented in the [TypeScript SDK reference](/typescript-sdk/#axis-mapping).
+
+## VR Headset from operate.adamohq.com
+
+When a viewer enters immersive VR mode on a stereo track, the headset publishes pose data continuously:
+
+| Topic                       | Payload                  | Description |
+|-----------------------------|--------------------------|-------------|
+| `{robot}/head_pose`         | CDR-encoded `PoseStamped`| Headset pose |
+| `{robot}/controller/left`   | CDR-encoded `PoseStamped`| Left controller |
+| `{robot}/controller/right`  | CDR-encoded `PoseStamped`| Right controller |
+
+Subscribe the same way as gamepad.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+@robot.on("my-arm", "head_pose", decode=None)
+def on_head(payload: bytes):
+    pose = decode_pose_stamped(payload)
+    update_head_tracking(pose)
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+let _head = session.subscribe_with("my-arm/head_pose", |sample| {
+    let pose: PoseStamped = cdr_encoding::deserialize(&sample.payload).unwrap();
+    update_head_tracking(pose);
+})?;
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+void on_head(const adamo_sample_t *s, void *user) {
+    /* decode CDR PoseStamped */
+}
+adamo_subscribe_cb(sess, "my-arm/head_pose", on_head, NULL);
+```
+
+</TabItem>
+</Tabs>
 
 ## Custom Control Topics
 
-For programmatic control beyond the web interface, use the Python SDK:
+When you write your own operator (XR app, mobile, GELLO leader, …), you choose the topic name and the payload format. JSON is the default in the Python SDK and works across all three languages.
+
+The example below is the robot side that pairs with the bimanual XR operator on the [Building Your Own Operator](/operator/) page.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+The `@robot.on(...)` decorator subscribes and decodes JSON in one step. Brace-wrapped path segments capture the matched value as a keyword argument.
 
 ```python
 import adamo
 
-session = adamo.connect(api_key="ak_your_key")
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
 
-# Send a JointState command
-from adamo import JointState
-js = JointState(
-    names=["joint1", "joint2", "joint3"],
-    positions=[0.1, 0.5, -0.3],
-)
+# Two cameras
+robot.attach_video("wrist_left",  device="/dev/video0")
+robot.attach_video("wrist_right", device="/dev/video1")
 
-pub = session.control_publisher("my-robot", "joint_states")
-pub.put(js.to_json())
+# Bimanual hand controllers — {side} captures "left" or "right"
+@robot.on("xr-operator", "control/xr/hand/{side}", priority=250)
+def hand(msg, side):
+    move_arm(side, msg["pos"], msg["quat"])
+    set_gripper(side, msg["trigger"])
+
+# Head pose — separate handler
+@robot.on("xr-operator", "control/xr/head", priority=250)
+def head(msg):
+    update_head_tracking(msg["pos"], msg["quat"])
+
+robot.run()
 ```
 
-`control_publisher()` uses real-time priority and drop-on-congestion. This is the correct behavior for control loops — you want the latest command delivered fast, not old commands queued up.
+The first argument to `@robot.on(...)` is the *broadcaster* name — the operator publishing those topics. The decorator subscribes to `{broadcaster}/{track}` under the hood.
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::{Protocol, Session};
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct HandMsg { pos: [f32; 3], quat: [f32; 4], trigger: f32 }
+
+fn main() -> adamo::Result<()> {
+    let session = Session::open("ak_...", Protocol::default())?;
+
+    let _left = session.subscribe_with("xr-operator/control/xr/hand/left", |s| {
+        let msg: HandMsg = serde_json::from_slice(&s.payload).unwrap();
+        move_arm("left", msg.pos, msg.quat);
+        set_gripper("left", msg.trigger);
+    })?;
+
+    let _right = session.subscribe_with("xr-operator/control/xr/hand/right", |s| {
+        let msg: HandMsg = serde_json::from_slice(&s.payload).unwrap();
+        move_arm("right", msg.pos, msg.quat);
+        set_gripper("right", msg.trigger);
+    })?;
+
+    std::thread::park();
+    Ok(())
+}
+```
+
+The Rust SDK doesn't have brace-capture pattern matching like Python — declare a subscriber per side, or subscribe to `xr-operator/control/xr/hand/*` and pull the side off the key string yourself.
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+Use one callback subscriber per topic, or subscribe to a wildcard and switch on the key:
+
+```c
+void on_hand(const adamo_sample_t *s, void *user) {
+    const char *side = strrchr(s->key, '/');
+    if (side) side++;  /* "left" or "right" */
+    /* decode JSON from s->payload, s->payload_len */
+    /* move_arm(side, ...); */
+}
+
+adamo_subscribe_cb(sess, "xr-operator/control/xr/hand/*", on_hand, NULL);
+```
+
+</TabItem>
+</Tabs>
+
+## Real-Time Priority
+
+Control topics should be published with **REAL_TIME** priority and dropped on congestion — a command that arrives 200 ms late is worse than no command at all. The robot side doesn't choose priority on subscribe (the router uses the publisher's choice), but it's worth knowing the convention so your own operator programs follow it.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+robot.publish("control/joy", priority=250)
+# 0–255 mapped to 8 priority classes; ≥240 is REAL_TIME.
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+session.publisher("control/joy", PublisherOptions {
+    priority: 250,
+    express: true,
+    reliable: false,
+})?;
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_publisher(sess, "control/joy",
+    /* priority */ 250, /* express */ 1, /* reliable */ 0);
+```
+
+</TabItem>
+</Tabs>
+
+See [Building Your Own Operator](/operator/) for the publisher side end-to-end.
