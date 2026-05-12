@@ -29,7 +29,7 @@ session.put("my-arm/sensors/temperature", b"22.5")
 
 ```rust
 use adamo::{Protocol, PublishOptions, Session};
-let session = Session::open("ak_...", Protocol::default())?;
+let session = Session::open("ak_...", Protocol::Quic)?;
 session.put("my-arm/sensors/temperature", b"22.5", PublishOptions::default())?;
 ```
 
@@ -65,7 +65,7 @@ with session.publisher("my-arm/sensors/imu", express=True) as pub:
 
 ```rust
 use adamo::{Protocol, PublisherOptions, Session};
-let session = Session::open("ak_...", Protocol::default())?;
+let session = Session::open("ak_...", Protocol::Quic)?;
 let pub_ = session.publisher(
     "my-arm/sensors/imu",
     PublisherOptions { priority: 128, express: true, reliable: false },

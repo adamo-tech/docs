@@ -54,10 +54,12 @@ adamo.connect(
     org_id: str | None = None,
     api_url: str = "https://q14iirks46.execute-api.eu-west-2.amazonaws.com",
     protocol: str = "quic",
+    mtls: bool = False,
 ) -> Session
 ```
 
-Open an authenticated session. Provide exactly one of `api_key` or `token`.
+Open an authenticated session. Provide an `api_key` for live SDK sessions.
+Token auth is still used by browser/user flows, but token-based Python live sessions are not wired in the native transport yet.
 
 | Arg | Description |
 |-----|-------------|
@@ -66,11 +68,12 @@ Open an authenticated session. Provide exactly one of `api_key` or `token`.
 | `org_id` | Required only with `token` if the user belongs to multiple orgs. |
 | `api_url` | Override the Adamo API base URL. |
 | `protocol` | Transport — `"quic"` (default), `"udp"`, or `"tcp"`. |
+| `mtls` | Use the mTLS QUIC path when routers require client certificates. |
 
-Raises `ValueError` if both `api_key` and `token` are passed, or if neither is.
+Raises `ValueError` if both `api_key` and `token` are passed, or if neither is. Raises `NotImplementedError` for token-based native sessions.
 
 ```python
-adamo.connect_async(*, api_key=..., token=..., org_id=..., api_url=..., protocol="quic") -> Session
+adamo.connect_async(*, api_key=..., token=..., org_id=..., api_url=..., protocol="quic", mtls=False) -> Session
 ```
 
 Async variant — does the API config fetch asynchronously, then opens a synchronous session. Returns a `Session`, not a coroutine of one (the underlying transport is sync).
@@ -94,15 +97,6 @@ session.org -> str
 
 The organisation slug resolved from the API key.
 
-### `Session.zenoh`
-
-```python
-@property
-session.zenoh -> ZSession
-```
-
-Direct access to the underlying transport handle for escape hatches. Use sparingly.
-
 ### `Session.put`
 
 ```python
@@ -112,8 +106,8 @@ session.put(
     *,
     raw: bool = False,
     priority: Priority = Priority.DATA,
-    congestion_control: CongestionControl = CongestionControl.DROP,
     express: bool = False,
+    reliable: bool = False,
 ) -> None
 ```
 
@@ -127,9 +121,8 @@ session.publisher(
     *,
     raw: bool = False,
     priority: Priority = Priority.DATA,
-    congestion_control: CongestionControl = CongestionControl.DROP,
-    reliability: Reliability = Reliability.BEST_EFFORT,
     express: bool = False,
+    reliable: bool = False,
 ) -> Publisher
 ```
 
@@ -146,7 +139,7 @@ session.subscribe(
 ) -> Subscriber
 ```
 
-Declare a subscriber. Without `callback`, the returned `Subscriber` is iterable and supports `try_recv()` / `recv()`. With `callback`, samples are delivered to it on the receive thread; the returned `Subscriber` is used only for lifecycle (close).
+Declare a subscriber. Without `callback`, the returned `Subscriber` is iterable and supports non-blocking `try_recv()`. With `callback`, samples are delivered to it on the receive thread; the returned handle is used for lifecycle (`close()`).
 
 Wildcards in `key_expr`:
 
@@ -175,7 +168,7 @@ One-shot query. Collects every reply that arrives within `timeout_ms`. Returns a
 session.alive(token_key: str) -> LivelinessToken
 ```
 
-Declare this client as alive at `{token_key}/alive`. The token stays active until you call `.undeclare()` on it (or the process exits).
+Declare this client as alive at `{token_key}/alive`. The token stays active until you call `.close()` on it (or the process exits).
 
 ### `Session.live_tokens`
 
@@ -308,6 +301,7 @@ robot.attach_video(
     height: int = 720,
     pixel_format: str | None = None,
     keyframe_distance: float = 2.0,
+    stereo: bool = False,
 ) -> None
 ```
 
@@ -325,6 +319,10 @@ robot.video(
     bitrate_kbps: int = 2000,
     fps: int = 30,
     keyframe_distance: float = 2.0,
+    stereo: bool = False,
+    intrinsics: list[float] | None = None,
+    extrinsics: list[float] | None = None,
+    depth_for: str | None = None,
 ) -> VideoTrack
 ```
 

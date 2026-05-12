@@ -79,8 +79,8 @@ Returns the most recent error message for the current thread, or `NULL` if there
 
 ```c
 typedef enum adamo_protocol_t {
-    adamo_protocol_t_ADAMO_PROTOCOL_QUIC = 0,
-    adamo_protocol_t_ADAMO_PROTOCOL_UDP  = 1,
+    adamo_protocol_t_ADAMO_PROTOCOL_UDP  = 0,
+    adamo_protocol_t_ADAMO_PROTOCOL_QUIC = 1,
     adamo_protocol_t_ADAMO_PROTOCOL_TCP  = 2,
 } adamo_protocol_t;
 ```
@@ -328,7 +328,8 @@ int32_t adamo_robot_attach_video_v4l2(
     uint32_t width,
     uint32_t height,
     uint32_t fps,
-    uint32_t bitrate_kbps
+    uint32_t bitrate_kbps,
+    bool stereo
 );
 ```
 
@@ -344,7 +345,8 @@ adamo_video_track_t *adamo_robot_video(
     uint32_t height,
     const char *pixel_format,          // "BGRA", "RGB", "I420", "NV12", ...
     uint32_t fps,
-    uint32_t bitrate_kbps
+    uint32_t bitrate_kbps,
+    bool stereo
 );
 
 int32_t adamo_video_track_send(
@@ -549,11 +551,13 @@ public:
     VideoTrack video(const std::string &name,
                      std::uint32_t width, std::uint32_t height,
                      const std::string &pixel_format,
-                     std::uint32_t fps, std::uint32_t bitrate_kbps);
+                     std::uint32_t fps, std::uint32_t bitrate_kbps,
+                     bool stereo = false);
 
     void attach_v4l2(const std::string &name, const std::string &device,
                      std::uint32_t width, std::uint32_t height,
-                     std::uint32_t fps, std::uint32_t bitrate_kbps);
+                     std::uint32_t fps, std::uint32_t bitrate_kbps,
+                     bool stereo = false);
 
     int run() &&;        // consumes the Robot; returns adamo_robot_run's int
 };

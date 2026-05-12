@@ -31,7 +31,7 @@ The crate is published as two:
 pub struct Session
 ```
 
-The pub/sub / query / liveliness session. Constructed by `Session::open`; cheap to clone (the inner handle is reference-counted).
+The pub/sub / query / liveliness session. Constructed by `Session::open`.
 
 `Send + Sync` — safe to share across threads.
 
@@ -43,7 +43,7 @@ impl Session {
 }
 ```
 
-Open an authenticated session. Pass `Protocol::default()` (which is `Protocol::Quic`) unless you need a specific transport.
+Open an authenticated session. Pass `Protocol::Quic` unless you need a specific transport.
 
 ### `Session::org`
 
@@ -155,16 +155,15 @@ Watch for liveliness changes. The callback fires with `(prefix-stripped key, is_
 ## `Protocol`
 
 ```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Protocol {
-    #[default]
-    Quic,
     Udp,
+    Quic,
     Tcp,
 }
 ```
 
-Transport selection. **QUIC** is the default — reliable streams over a single multiplexed UDP socket. `Udp` is the lowest-latency unreliable transport. `Tcp` is a fallback for environments that block UDP/QUIC.
+Transport selection. Use **QUIC** for the normal path — reliable streams over a single multiplexed UDP socket. `Udp` is the lowest-latency unreliable transport. `Tcp` is a fallback for environments that block UDP/QUIC.
 
 ---
 
@@ -324,6 +323,7 @@ impl Robot {
         pixel_format: &str,    // "BGRA", "RGB", "I420", "NV12", ...
         fps: u32,
         bitrate_kbps: u32,
+        stereo: bool,
     ) -> Result<VideoTrack<'_>>;
 
     /// V4L2 capture. The SDK owns capture and encoding.
@@ -335,6 +335,7 @@ impl Robot {
         height: u32,
         fps: u32,
         bitrate_kbps: u32,
+        stereo: bool,
     ) -> Result<()>;
 
     /// Block driving the pipeline forever. Consumes self.
@@ -396,7 +397,7 @@ Errors are printable via `Display`. Underlying SDK error messages come through `
 
 ## Concurrency model
 
-- **`Session` is `Send + Sync`** and cheap to clone — share it across threads or hand a clone to a worker.
+- **`Session` is `Send + Sync`** — share a reference across threads when the lifetime works, or open a separate session for independent workers.
 - **All `Session` methods are blocking** at the Rust level. They use the SDK's internal runtime under the hood.
 - **`subscribe_with` callbacks run on a background receive thread.** Keep them short or hand off via a channel.
 - **`Robot::run()` blocks** driving the encoder. Spawn it on its own thread if you need to do other work concurrently.

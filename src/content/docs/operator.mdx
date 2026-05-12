@@ -36,7 +36,7 @@ Use **REAL_TIME priority** (`250`) for control commands so they drain ahead of v
 
 ## A Bimanual XR Operator
 
-Pair this operator with the matching robot program on the [Receiving Control](/control/#custom-control-topics) page.
+This is the sender side. Pair it with the robot-side receiver on the [Receiving Control](/control/#custom-control-topics) page.
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
@@ -47,21 +47,21 @@ import adamo
 
 op = adamo.Robot(api_key="ak_...", name="xr-operator")
 
-left  = op.publish("control/xr/hand/left",  priority=250)
-right = op.publish("control/xr/hand/right", priority=250)
-head  = op.publish("control/xr/head",       priority=250)
+left  = op.publish("control/xr/hand/left",  priority=250, express=True)
+right = op.publish("control/xr/hand/right", priority=250, express=True)
+head  = op.publish("control/xr/head",       priority=250, express=True)
 
 # your OpenXR / WebXR / Quest loop
 for frame in xr_stream():
-    left.put(json.dumps(frame.left).encode())
-    right.put(json.dumps(frame.right).encode())
-    head.put(json.dumps(frame.head).encode())
+    left.put(json.dumps(frame.left))
+    right.put(json.dumps(frame.right))
+    head.put(json.dumps(frame.head))
 ```
 
 What's happening:
 
 - `op = adamo.Robot(name="xr-operator")` — open a participant called `xr-operator`. No video tracks; this side just publishes.
-- `op.publish(track, priority=250)` — declare a publisher under `{xr-operator}/{track}` with REAL_TIME priority, drop-on-congestion, best-effort reliability, express. The robot subscribes to `xr-operator/control/xr/hand/{side}` to receive these.
+- `op.publish(track, priority=250, express=True)` — declare a publisher under `{xr-operator}/{track}` with REAL_TIME priority, drop-on-congestion, best-effort reliability, and express sends. The robot subscribes to `xr-operator/control/xr/hand/{side}` to receive these.
 - The XR loop runs at the headset's frame rate (72 / 90 / 120 Hz). Each frame becomes one `put` per channel — small JSON payloads, no batching.
 
 You can substitute any input source — Quest controllers, Leap Motion, Apple Vision Pro, an Aloha leader rig — as long as it produces frames you can serialise.
@@ -77,7 +77,7 @@ use serde::Serialize;
 struct HandFrame { pos: [f32; 3], quat: [f32; 4], trigger: f32 }
 
 fn main() -> adamo::Result<()> {
-    let session = Session::open("ak_...", Protocol::default())?;
+    let session = Session::open("ak_...", Protocol::Quic)?;
     let opts = PublisherOptions {
         priority: 250,        // REAL_TIME
         express: true,

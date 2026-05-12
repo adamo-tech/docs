@@ -44,7 +44,7 @@ robot.run()
 use adamo::{Protocol, Session};
 
 fn main() -> adamo::Result<()> {
-    let session = Session::open("ak_...", Protocol::default())?;
+    let session = Session::open("ak_...", Protocol::Quic)?;
     let _sub = session.subscribe_with("my-arm/control/joy", |sample| {
         // sample.payload is a CDR-encoded Joy message.
         // Decode with the `cdr-encoding` crate (or your own decoder).
@@ -128,7 +128,7 @@ adamo_subscribe_cb(sess, "my-arm/head_pose", on_head, NULL);
 
 When you write your own operator (XR app, mobile, GELLO leader, …), you choose the topic name and the payload format. JSON is the default in the Python SDK and works across all three languages.
 
-The example below is the robot side that pairs with the bimanual XR operator on the [Building Your Own Operator](/operator/) page.
+The example below is the robot-side receiver that pairs with the bimanual XR operator on the [Building Your Own Operator](/operator/) page.
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
@@ -140,9 +140,10 @@ import adamo
 
 robot = adamo.Robot(api_key="ak_...", name="my-arm")
 
-# Two cameras
+# Cameras streamed back to the operator
 robot.attach_video("wrist_left",  device="/dev/video0")
 robot.attach_video("wrist_right", device="/dev/video1")
+robot.attach_video("head",        shm="head_cam")
 
 # Bimanual hand controllers — {side} captures "left" or "right"
 @robot.on("xr-operator", "control/xr/hand/{side}", priority=250)
@@ -152,7 +153,7 @@ def hand(msg, side):
 
 # Head pose — separate handler
 @robot.on("xr-operator", "control/xr/head", priority=250)
-def head(msg):
+def on_head(msg):
     update_head_tracking(msg["pos"], msg["quat"])
 
 robot.run()
@@ -171,7 +172,7 @@ use serde::Deserialize;
 struct HandMsg { pos: [f32; 3], quat: [f32; 4], trigger: f32 }
 
 fn main() -> adamo::Result<()> {
-    let session = Session::open("ak_...", Protocol::default())?;
+    let session = Session::open("ak_...", Protocol::Quic)?;
 
     let _left = session.subscribe_with("xr-operator/control/xr/hand/left", |s| {
         let msg: HandMsg = serde_json::from_slice(&s.payload).unwrap();
@@ -219,7 +220,7 @@ Control topics should be published with **REAL_TIME** priority and dropped on co
 <TabItem label="Python" icon="seti:python">
 
 ```python
-robot.publish("control/joy", priority=250)
+robot.publish("control/joy", priority=250, express=True)
 # 0–255 mapped to 8 priority classes; ≥240 is REAL_TIME.
 ```
 
@@ -244,5 +245,27 @@ adamo_publisher(sess, "control/joy",
 
 </TabItem>
 </Tabs>
+
+## Frame Safety Stats
+
+Robots publish video latency and frame-age stats on `{robot}/stats/latency`. Use them as a safety gate before applying teleop commands.
+
+```python
+def on_safety(stats):
+    if stats.is_stale:
+        stop_robot()
+
+session.watch_frame_safety("my-arm", on_safety, stale_after_ms=250)
+```
+
+```ts
+import { watchFrameSafety } from "@adamo/fleet";
+
+await watchFrameSafety(session, org, "my-arm", ({ isStale }) => {
+  if (isStale) stopRobot();
+}, { staleAfterMs: 250 });
+```
+
+For lower-level dashboards, subscribe to video latency stats directly and read `frameAgeMs`, `maxFrameAgeMs`, `droppedFrames`, and `channelLag`.
 
 See [Building Your Own Operator](/operator/) for the publisher side end-to-end.

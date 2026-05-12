@@ -403,7 +403,7 @@ type PublisherOptions = {
 };
 ```
 
-For reliable control messages use `CongestionControl.BLOCK` and `Reliability.RELIABLE`. For telemetry or video-related topics use the defaults (drop + best-effort).
+For real-time teleop control, keep the defaults: drop + best-effort + express. Use `CongestionControl.BLOCK` and `Reliability.RELIABLE` only for configuration changes or commands that must arrive exactly once.
 
 ### `useRobotLogs(robotId, options?)`
 
@@ -817,12 +817,12 @@ import {
 - `Priority.BACKGROUND`
 
 **`CongestionControl`** values:
-- `CongestionControl.DROP` — Drop messages when the network is congested (use for video/telemetry)
-- `CongestionControl.BLOCK` — Block until the message can be sent (use for reliable commands)
+- `CongestionControl.DROP` — Drop messages when the network is congested (use for teleop, video, and telemetry)
+- `CongestionControl.BLOCK` — Block until the message can be sent (use for configuration and must-arrive commands)
 
 **`Reliability`** values:
 - `Reliability.BEST_EFFORT` — No retransmission (use for real-time streams)
-- `Reliability.RELIABLE` — Guarantee delivery (use for commands and configuration)
+- `Reliability.RELIABLE` — Guarantee delivery (use for configuration and must-arrive commands)
 
 **`SampleKind`** values:
 - `SampleKind.PUT` — A normal publication

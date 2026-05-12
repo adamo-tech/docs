@@ -22,7 +22,7 @@ session = adamo.connect(api_key="ak_...")
 token = session.alive("my-arm")
 # now visible at my-arm/alive
 # ... do work ...
-token.undeclare()
+token.close()
 ```
 
 If you use `adamo.Robot(...)`, a liveliness token at `{name}/alive` is declared automatically when the first track or publisher comes up — no manual call needed.
@@ -32,7 +32,7 @@ If you use `adamo.Robot(...)`, a liveliness token at `{name}/alive` is declared 
 
 ```rust
 use adamo::{Protocol, Session};
-let session = Session::open("ak_...", Protocol::default())?;
+let session = Session::open("ak_...", Protocol::Quic)?;
 let _token = session.alive("my-arm")?;     // dropped → undeclared
 // ... do work ...
 ```

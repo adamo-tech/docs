@@ -41,8 +41,8 @@ robot.run()
 use adamo::{Protocol, Robot};
 
 fn main() -> adamo::Result<()> {
-    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::default())?;
-    robot.attach_v4l2("main", "/dev/video0", 1280, 720, 30, 4000)?;
+    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::Quic)?;
+    robot.attach_v4l2("main", "/dev/video0", 1280, 720, 30, 4000, false)?;
     robot.run()
 }
 ```
@@ -54,7 +54,8 @@ fn main() -> adamo::Result<()> {
 adamo_robot_attach_video_v4l2(
     robot, "main", "/dev/video0",
     /* width  */ 1280, /* height */ 720,
-    /* fps    */ 30,   /* bitrate_kbps */ 4000);
+    /* fps    */ 30,   /* bitrate_kbps */ 4000,
+    /* stereo */ false);
 ```
 
 </TabItem>
@@ -86,16 +87,16 @@ robot.attach_video("rear",  device="/dev/video2", width=1280, height=720,  fps=1
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
-robot.attach_v4l2("front", "/dev/video0", 1920, 1080, 60, 8000)?;
-robot.attach_v4l2("rear",  "/dev/video2", 1280, 720,  15, 2000)?;
+robot.attach_v4l2("front", "/dev/video0", 1920, 1080, 60, 8000, false)?;
+robot.attach_v4l2("rear",  "/dev/video2", 1280, 720,  15, 2000, false)?;
 ```
 
 </TabItem>
 <TabItem label="C" icon="seti:c">
 
 ```c
-adamo_robot_attach_video_v4l2(robot, "front", "/dev/video0", 1920, 1080, 60, 8000);
-adamo_robot_attach_video_v4l2(robot, "rear",  "/dev/video2", 1280, 720,  15, 2000);
+adamo_robot_attach_video_v4l2(robot, "front", "/dev/video0", 1920, 1080, 60, 8000, false);
+adamo_robot_attach_video_v4l2(robot, "rear",  "/dev/video2", 1280, 720,  15, 2000, false);
 ```
 
 </TabItem>
@@ -160,8 +161,8 @@ The encoder pipeline auto-starts on the first `track.send()`.
 use adamo::{Protocol, Robot};
 
 fn main() -> adamo::Result<()> {
-    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::default())?;
-    let mut track = robot.video("overlay", 1280, 720, "BGRA", 30, 4000)?;
+    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::Quic)?;
+    let mut track = robot.video("overlay", 1280, 720, "BGRA", 30, 4000, false)?;
     std::thread::spawn(move || {
         loop {
             let frame: Vec<u8> = render_next_frame();  // your code
@@ -177,7 +178,7 @@ fn main() -> adamo::Result<()> {
 
 ```c
 adamo_video_track_t *t = adamo_robot_video(
-    robot, "overlay", 1280, 720, "BGRA", 30, 4000);
+    robot, "overlay", 1280, 720, "BGRA", 30, 4000, false);
 // push frames in a loop:
 adamo_video_track_send(t, frame_bytes, frame_len);
 ```
