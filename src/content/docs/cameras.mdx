@@ -234,6 +234,152 @@ The C SDK does not yet expose a consume-side helper. Use the publish-frames-your
 </TabItem>
 </Tabs>
 
+### Republish SHM frames to ROS 2
+
+You can also bridge the same iceoryx2 service into ROS 2. This is useful when
+Adamo is the low-latency video transport, but another local ROS node still
+needs the raw camera stream.
+
+The flow is:
+
+1. A camera-specific producer publishes raw frames to iceoryx2.
+2. A ROS republisher subscribes to that SHM service.
+3. The republisher copies each raw frame into a `sensor_msgs/Image` message.
+
+The example below assumes `1280x720 BGRA` frames from `camera/zed/left`, but the
+same pattern works for other camera types. Change the service name, dimensions,
+ROS topic, `encoding`, and `bytes_per_pixel` to match your producer.
+
+```sh
+source /opt/ros/humble/setup.bash
+python shm_to_ros.py \
+  --service camera/zed/left \
+  --topic /zed/left/image_raw \
+  --width 1280 \
+  --height 720 \
+  --encoding bgra8 \
+  --bytes-per-pixel 4 \
+  --frame-id zed_left_camera
+```
+
+```python title="shm_to_ros.py"
+import argparse
+import ctypes
+import time
+
+import iceoryx2 as iox2
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image
+
+
+class ShmImageRepublisher(Node):
+    def __init__(
+        self,
+        *,
+        service_name: str,
+        topic: str,
+        width: int,
+        height: int,
+        encoding: str,
+        bytes_per_pixel: int,
+        frame_id: str,
+    ):
+        super().__init__("shm_image_republisher")
+        self.width = width
+        self.height = height
+        self.encoding = encoding
+        self.bytes_per_pixel = bytes_per_pixel
+        self.frame_id = frame_id
+        self.expected_size = width * height * bytes_per_pixel
+        self.step = width * bytes_per_pixel
+        self.publisher = self.create_publisher(Image, topic, 10)
+
+        self.iox_node = iox2.NodeBuilder.new().create(iox2.ServiceType.Ipc)
+        service = (
+            self.iox_node.service_builder(iox2.ServiceName.new(service_name))
+            .publish_subscribe(iox2.Slice[ctypes.c_uint8])
+            .enable_safe_overflow(True)
+            .subscriber_max_buffer_size(2)
+            .open_or_create()
+        )
+        self.subscriber = service.subscriber_builder().create()
+        self.get_logger().info(
+            f"Republishing SHM '{service_name}' to ROS topic '{topic}' "
+            f"as {width}x{height} {encoding}"
+        )
+
+    def publish_next(self) -> bool:
+        sample = self.subscriber.receive()
+        if sample is None:
+            return False
+
+        try:
+            payload = bytes(sample.payload())
+        finally:
+            delete = getattr(sample, "delete", None)
+            if delete is not None:
+                delete()
+
+        if len(payload) != self.expected_size:
+            self.get_logger().warn(
+                f"dropping SHM sample: expected {self.expected_size} bytes, "
+                f"got {len(payload)}"
+            )
+            return True
+
+        msg = Image()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = self.frame_id
+        msg.height = self.height
+        msg.width = self.width
+        msg.encoding = self.encoding
+        msg.is_bigendian = 0
+        msg.step = self.step
+        msg.data = payload
+        self.publisher.publish(msg)
+        return True
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--service", default="camera/zed/left")
+    parser.add_argument("--topic", default="/zed/left/image_raw")
+    parser.add_argument("--width", type=int, default=1280)
+    parser.add_argument("--height", type=int, default=720)
+    parser.add_argument("--encoding", default="bgra8")
+    parser.add_argument("--bytes-per-pixel", type=int, default=4)
+    parser.add_argument("--frame-id", default="camera")
+    args = parser.parse_args()
+
+    rclpy.init()
+    node = ShmImageRepublisher(
+        service_name=args.service,
+        topic=args.topic,
+        width=args.width,
+        height=args.height,
+        encoding=args.encoding,
+        bytes_per_pixel=args.bytes_per_pixel,
+        frame_id=args.frame_id,
+    )
+
+    try:
+        while rclpy.ok():
+            received = node.publish_next()
+            rclpy.spin_once(node, timeout_sec=0.0)
+            if not received:
+                time.sleep(0.0005)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
+```
+
 ### Publish frames yourself
 
 The SDK gives you a track handle; you push raw pixel buffers into it. Adamo allocates a private iceoryx2 service for the track and routes the frames into the encoder.
