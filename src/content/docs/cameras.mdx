@@ -110,12 +110,116 @@ Two patterns: **consume** an existing iceoryx2 service produced by another proce
 
 ### Consume an existing SHM service
 
+Use this when another process already owns the camera or sensor and can publish
+raw frames into iceoryx2. The general flow is:
+
+1. Your camera process captures or generates one complete raw frame.
+2. It publishes that frame as a single `iox2.Slice[ctypes.c_uint8]` sample.
+3. Adamo attaches to the same iceoryx2 service with `robot.attach_video(..., shm=...)`.
+4. The native Adamo pipeline reads the SHM frames, hardware-encodes them, and streams the video track.
+
+The producer and Adamo bridge must agree on the iceoryx2 service name, frame
+width, frame height, pixel format, and frame rate. The SHM payload is raw frame
+bytes only. Do not prepend timestamps, headers, or metadata. For `1280x720 BGRA`,
+each sample must contain exactly `1280 * 720 * 4 = 3,686,400` bytes.
+
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-robot.attach_video("head", shm="head_cam", width=1280, height=720)
+Run the publisher and Adamo bridge as separate processes on the same host:
+
+```sh
+export ADAMO_API_KEY="ak_..."
+python zed_left_to_shm.py
+python shm_to_adamo.py
 ```
+
+The publisher below is a ZED-specific example: it captures the left image from
+the ZED SDK and publishes it as raw `BGRA` frames. For other camera types, keep
+the iceoryx2 publishing shape the same and replace only the frame acquisition
+code.
+
+```python title="zed_left_to_shm.py"
+import ctypes
+
+import iceoryx2 as iox2
+import numpy as np
+import pyzed.sl as sl
+
+SERVICE = "camera/zed/left"
+FPS = 60
+
+params = sl.InitParameters()
+params.camera_resolution = sl.RESOLUTION.HD720
+params.camera_fps = FPS
+params.depth_mode = sl.DEPTH_MODE.NONE
+
+camera = sl.Camera()
+status = camera.open(params)
+if status != sl.ERROR_CODE.SUCCESS:
+    raise RuntimeError(f"ZED open failed: {status}")
+
+info = camera.get_camera_information()
+resolution = info.camera_configuration.resolution
+WIDTH = int(resolution.width)
+HEIGHT = int(resolution.height)
+PIXEL_FORMAT = "BGRA"
+FRAME_SIZE = WIDTH * HEIGHT * 4
+
+node = iox2.NodeBuilder.new().create(iox2.ServiceType.Ipc)
+service = (
+    node.service_builder(iox2.ServiceName.new(SERVICE))
+    .publish_subscribe(iox2.Slice[ctypes.c_uint8])
+    .enable_safe_overflow(True)
+    .subscriber_max_buffer_size(2)
+    .open_or_create()
+)
+publisher = service.publisher_builder().initial_max_slice_len(FRAME_SIZE).create()
+
+runtime = sl.RuntimeParameters()
+image = sl.Mat()
+
+while True:
+    if camera.grab(runtime) != sl.ERROR_CODE.SUCCESS:
+        continue
+
+    camera.retrieve_image(image, sl.VIEW.LEFT)
+    frame = np.ascontiguousarray(image.get_data())
+    payload = frame.tobytes()
+    if len(payload) != FRAME_SIZE:
+        continue
+
+    sample = publisher.loan_slice_uninit(FRAME_SIZE)
+    ctypes.memmove(sample.payload_ptr, payload, FRAME_SIZE)
+    sample.assume_init().send()
+```
+
+```python title="shm_to_adamo.py"
+import os
+
+import adamo
+
+robot = adamo.Robot(
+    api_key=os.environ["ADAMO_API_KEY"],
+    name="my-robot",
+    protocol="quic",
+)
+
+robot.attach_video(
+    "main",
+    shm="camera/zed/left",
+    width=1280,
+    height=720,
+    pixel_format="BGRA",
+    fps=60,
+    bitrate_kbps=4000,
+)
+
+robot.run()
+```
+
+The Adamo side is camera-agnostic. It only needs the service name and frame
+layout that your publisher uses.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
