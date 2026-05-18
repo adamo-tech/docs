@@ -246,73 +246,58 @@ The flow is:
 2. A ROS republisher subscribes to that SHM service.
 3. The republisher copies each raw frame into a `sensor_msgs/Image` message.
 
-The example below assumes `1280x720 BGRA` frames from `camera/zed/left`, but the
-same pattern works for other camera types. Change the service name, dimensions,
-ROS topic, `encoding`, and `bytes_per_pixel` to match your producer.
+This single example assumes `1280x720 BGRA` frames from `camera/zed/left`. For
+other camera types, change the constants at the top to match your producer.
 
 ```sh
 source /opt/ros/humble/setup.bash
-python shm_to_ros.py \
-  --service camera/zed/left \
-  --topic /zed/left/image_raw \
-  --width 1280 \
-  --height 720 \
-  --encoding bgra8 \
-  --bytes-per-pixel 4 \
-  --frame-id zed_left_camera
+python shm_to_ros.py
 ```
 
 ```python title="shm_to_ros.py"
-import argparse
 import ctypes
 import time
 
 import iceoryx2 as iox2
 import rclpy
-from rclpy.node import Node
 from sensor_msgs.msg import Image
 
+SERVICE = "camera/zed/left"
+TOPIC = "/zed/left/image_raw"
+WIDTH = 1280
+HEIGHT = 720
+ENCODING = "bgra8"
+BYTES_PER_PIXEL = 4
+FRAME_ID = "zed_left_camera"
 
-class ShmImageRepublisher(Node):
-    def __init__(
-        self,
-        *,
-        service_name: str,
-        topic: str,
-        width: int,
-        height: int,
-        encoding: str,
-        bytes_per_pixel: int,
-        frame_id: str,
-    ):
-        super().__init__("shm_image_republisher")
-        self.width = width
-        self.height = height
-        self.encoding = encoding
-        self.bytes_per_pixel = bytes_per_pixel
-        self.frame_id = frame_id
-        self.expected_size = width * height * bytes_per_pixel
-        self.step = width * bytes_per_pixel
-        self.publisher = self.create_publisher(Image, topic, 10)
+EXPECTED_SIZE = WIDTH * HEIGHT * BYTES_PER_PIXEL
+STEP = WIDTH * BYTES_PER_PIXEL
 
-        self.iox_node = iox2.NodeBuilder.new().create(iox2.ServiceType.Ipc)
-        service = (
-            self.iox_node.service_builder(iox2.ServiceName.new(service_name))
-            .publish_subscribe(iox2.Slice[ctypes.c_uint8])
-            .enable_safe_overflow(True)
-            .subscriber_max_buffer_size(2)
-            .open_or_create()
-        )
-        self.subscriber = service.subscriber_builder().create()
-        self.get_logger().info(
-            f"Republishing SHM '{service_name}' to ROS topic '{topic}' "
-            f"as {width}x{height} {encoding}"
-        )
+iox_node = iox2.NodeBuilder.new().create(iox2.ServiceType.Ipc)
+service = (
+    iox_node.service_builder(iox2.ServiceName.new(SERVICE))
+    .publish_subscribe(iox2.Slice[ctypes.c_uint8])
+    .enable_safe_overflow(True)
+    .subscriber_max_buffer_size(2)
+    .open_or_create()
+)
+subscriber = service.subscriber_builder().create()
 
-    def publish_next(self) -> bool:
-        sample = self.subscriber.receive()
+rclpy.init()
+node = rclpy.create_node("shm_image_republisher")
+publisher = node.create_publisher(Image, TOPIC, 10)
+node.get_logger().info(
+    f"Republishing SHM '{SERVICE}' to ROS topic '{TOPIC}' "
+    f"as {WIDTH}x{HEIGHT} {ENCODING}"
+)
+
+try:
+    while rclpy.ok():
+        sample = subscriber.receive()
         if sample is None:
-            return False
+            rclpy.spin_once(node, timeout_sec=0.0)
+            time.sleep(0.0005)
+            continue
 
         try:
             payload = bytes(sample.payload())
@@ -321,63 +306,29 @@ class ShmImageRepublisher(Node):
             if delete is not None:
                 delete()
 
-        if len(payload) != self.expected_size:
-            self.get_logger().warn(
-                f"dropping SHM sample: expected {self.expected_size} bytes, "
+        if len(payload) != EXPECTED_SIZE:
+            node.get_logger().warn(
+                f"dropping SHM sample: expected {EXPECTED_SIZE} bytes, "
                 f"got {len(payload)}"
             )
-            return True
+            continue
 
         msg = Image()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = self.frame_id
-        msg.height = self.height
-        msg.width = self.width
-        msg.encoding = self.encoding
+        msg.header.stamp = node.get_clock().now().to_msg()
+        msg.header.frame_id = FRAME_ID
+        msg.height = HEIGHT
+        msg.width = WIDTH
+        msg.encoding = ENCODING
         msg.is_bigendian = 0
-        msg.step = self.step
+        msg.step = STEP
         msg.data = payload
-        self.publisher.publish(msg)
-        return True
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--service", default="camera/zed/left")
-    parser.add_argument("--topic", default="/zed/left/image_raw")
-    parser.add_argument("--width", type=int, default=1280)
-    parser.add_argument("--height", type=int, default=720)
-    parser.add_argument("--encoding", default="bgra8")
-    parser.add_argument("--bytes-per-pixel", type=int, default=4)
-    parser.add_argument("--frame-id", default="camera")
-    args = parser.parse_args()
-
-    rclpy.init()
-    node = ShmImageRepublisher(
-        service_name=args.service,
-        topic=args.topic,
-        width=args.width,
-        height=args.height,
-        encoding=args.encoding,
-        bytes_per_pixel=args.bytes_per_pixel,
-        frame_id=args.frame_id,
-    )
-
-    try:
-        while rclpy.ok():
-            received = node.publish_next()
-            rclpy.spin_once(node, timeout_sec=0.0)
-            if not received:
-                time.sleep(0.0005)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
-
-
-if __name__ == "__main__":
-    main()
+        publisher.publish(msg)
+        rclpy.spin_once(node, timeout_sec=0.0)
+except KeyboardInterrupt:
+    pass
+finally:
+    node.destroy_node()
+    rclpy.shutdown()
 ```
 
 ### Publish frames yourself
