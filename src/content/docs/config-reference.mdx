@@ -80,7 +80,7 @@ video_tracks:
 | `v4l2_device` | `v4l2` | string | Device path (e.g., `"/dev/video0"`). |
 | `v4l2_capture_resolution` | `v4l2` | [int, int] | Capture resolution as `[width, height]`. Must match a resolution the camera supports. |
 | `shm_service` | `shm` | string | iceoryx2 service name to subscribe to. |
-| `source_format` | both | string | Pixel format hint (e.g., `"BGRA"`, `"YUY2"`, `"NV12"`). On Jetson, V4L2 sources auto-detect. |
+| `source_format` | both | string | Source data format hint. Raw formats include `"BGRA"`, `"YUY2"`, `"NV12"`, and `"I420"`. Compressed MJPEG is accepted as `"mjpeg"`, `"mjpg"`, `"jpeg"`, or `"image/jpeg"`. On Jetson, V4L2 raw formats auto-detect. |
 
 ### Encoder Selection
 
@@ -216,4 +216,23 @@ video_tracks:
       min_bitrate: 1000
       max_bitrate: 12000
       priority: 1.0
+```
+
+### MJPEG over Shared Memory
+
+When a producer publishes complete JPEG frames to an iceoryx2 service, attach the track as `shm` and set `source_format: "mjpeg"`. The `v4l2_capture_resolution` still describes the decoded frame size.
+
+```yaml
+api_key: "ak_xxxxx"
+robot_name: "orin"
+
+video_tracks:
+  - name: "mjpeg"
+    source_type: "shm"
+    shm_service: "head_cam_mjpeg"
+    v4l2_capture_resolution: [1280, 720]
+    source_format: "mjpeg"
+    encoder: "auto"
+    bitrate: 4000
+    fps: 30
 ```

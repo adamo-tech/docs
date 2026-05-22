@@ -1,6 +1,6 @@
 ---
 title: "Adding Cameras"
-description: "V4L2 devices and shared-memory frames — the two camera input methods, per language"
+description: "V4L2 devices, shared-memory frames, and compressed MJPEG inputs"
 ---
 
 import { Tabs, TabItem } from "@astrojs/starlight/components";
@@ -11,6 +11,8 @@ There are two input methods:
 
 1. **V4L2** — direct device capture from `/dev/videoN`. Use this for USB webcams, RealSense, and any V4L2-compatible camera.
 2. **Shared memory (iceoryx2)** — frames produced by another process on the same host (a custom driver, a perception pipeline, an external bridge), or pushed in from your own SDK code via the caller-fed `video()` track.
+
+Those sources can carry raw pixels such as `BGRA`, `NV12`, or `I420`. They can also carry compressed Motion JPEG frames by setting the source format to `mjpeg`.
 
 ## USB / V4L2 Cameras
 
@@ -70,6 +72,20 @@ v4l2-ctl -d /dev/video0 --list-formats     # what pixel formats it supports
 ```
 
 On Jetson the SDK auto-detects the V4L2 pixel format (YUY2, NV12, …) so the encoder uses the optimal GPU colourspace path.
+
+If the camera exposes an MJPEG mode, request it with `pixel_format="mjpeg"`:
+
+```python
+robot.attach_video(
+    "usb_mjpeg",
+    device="/dev/video0",
+    width=1280,
+    height=720,
+    fps=30,
+    bitrate_kbps=4000,
+    pixel_format="mjpeg",
+)
+```
 
 ## Multiple Cameras
 
@@ -221,6 +237,20 @@ robot.run()
 The Adamo side is camera-agnostic. It only needs the service name and frame
 layout that your publisher uses.
 
+If the shared-memory service publishes complete JPEG frames instead of raw pixels, set `pixel_format="mjpeg"`:
+
+```python
+robot.attach_video(
+    "head",
+    shm="head_cam_mjpeg",
+    width=1280,
+    height=720,
+    fps=30,
+    bitrate_kbps=4000,
+    pixel_format="mjpeg",
+)
+```
+
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
 
@@ -355,6 +385,8 @@ while True:
 
 The encoder pipeline auto-starts on the first `track.send()`.
 
+`track.send()` is for fixed-size raw pixel buffers. For variable-size MJPEG frames, publish complete JPEG frames to an iceoryx2 service and consume that service with `attach_video(..., shm=..., pixel_format="mjpeg")`.
+
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
 
@@ -387,14 +419,17 @@ adamo_video_track_send(t, frame_bytes, frame_len);
 </TabItem>
 </Tabs>
 
-### Supported pixel formats
+### Supported data types
 
-| Format | Bytes per pixel | Notes |
-|--------|------------------|-------|
-| `BGRA`, `RGBA`, `BGRX`, `RGBX` | 4 | Most convenient for OpenCV / numpy. |
-| `RGB`, `BGR`                   | 3 | |
-| `YUY2`, `UYVY`                 | 2 | |
-| `I420`, `NV12`                 | 1.5 | Most efficient on the encoder. |
+| Format | Payload size | Notes |
+|--------|--------------|-------|
+| `BGRA`, `RGBA`, `BGRX`, `RGBX` | 4 bytes per pixel | Most convenient for OpenCV / numpy. |
+| `RGB`, `BGR`                   | 3 bytes per pixel | |
+| `YUY2`, `UYVY`                 | 2 bytes per pixel | |
+| `I420`, `NV12`                 | 1.5 bytes per pixel | Most efficient raw formats for the encoder. |
+| `MJPEG`, `MJPG`, `JPEG`, `image/jpeg` | Variable | Compressed Motion JPEG. Each source sample must contain one complete JPEG frame. Supported for V4L2, GStreamer, and consume-side SHM sources. |
+
+MJPEG sources are decoded and re-encoded into the configured output codec. On Jetson, Adamo avoids the Jetson `nvjpegdec` path for non-16-aligned MJPEG dimensions because that decoder can corrupt the bottom of frames; the stream still uses the Jetson hardware H.264 encoder after decode.
 
 ## Tuning Quality
 
