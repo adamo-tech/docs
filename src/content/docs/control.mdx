@@ -435,6 +435,183 @@ fn main() -> adamo::Result<()> {
 ```
 
 </TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+#define _POSIX_C_SOURCE 199309L
+
+#include <adamo/adamo.h>
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#define N_JOINTS 7
+#define EFFORT_BYTES ((1 + N_JOINTS) * 8)
+#define RATE_HZ 100.0
+#define GAIN 0.1
+
+static int host_is_little_endian(void) {
+    const uint16_t probe = 1;
+    return *(const uint8_t *)&probe == 1;
+}
+
+static void pack_be_double(double value, uint8_t *out) {
+    uint8_t bytes[8];
+    memcpy(bytes, &value, 8);
+    if (host_is_little_endian()) {
+        for (int i = 0; i < 8; i++) out[i] = bytes[7 - i];
+    } else {
+        memcpy(out, bytes, 8);
+    }
+}
+
+static double unpack_be_double(const uint8_t *in) {
+    uint8_t bytes[8];
+    if (host_is_little_endian()) {
+        for (int i = 0; i < 8; i++) bytes[i] = in[7 - i];
+    } else {
+        memcpy(bytes, in, 8);
+    }
+    double value = 0.0;
+    memcpy(&value, bytes, 8);
+    return value;
+}
+
+static void pack_efforts(double timestamp,
+                         const double efforts[N_JOINTS],
+                         uint8_t out[EFFORT_BYTES]) {
+    pack_be_double(timestamp, out);
+    for (int i = 0; i < N_JOINTS; i++) {
+        pack_be_double(efforts[i], out + (i + 1) * 8);
+    }
+}
+
+static int unpack_efforts(const uint8_t *payload,
+                          size_t len,
+                          double *timestamp,
+                          double efforts[N_JOINTS]) {
+    if (len != EFFORT_BYTES) return -1;
+    *timestamp = unpack_be_double(payload);
+    for (int i = 0; i < N_JOINTS; i++) {
+        efforts[i] = unpack_be_double(payload + (i + 1) * 8);
+    }
+    return 0;
+}
+
+static double now_seconds(void) {
+    return (double)adamo_fabric_now_us() / 1000000.0;
+}
+
+static void sleep_tick(void) {
+    struct timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = (long)(1000000000.0 / RATE_HZ);
+    nanosleep(&ts, NULL);
+}
+
+static void read_follower_external_efforts(double efforts[N_JOINTS]) {
+    /* Fill from your follower driver, e.g. get_all_external_efforts(). */
+    for (int i = 0; i < N_JOINTS; i++) efforts[i] = 0.0;
+}
+
+static void apply_leader_external_efforts(const double efforts[N_JOINTS]) {
+    /* Send to your leader driver, e.g. set_all_external_efforts(...). */
+    (void)efforts;
+}
+
+static int run_follower(adamo_session_t *session, const char *topic) {
+    adamo_publisher_t *pub = adamo_publisher(
+        session, topic, /* priority */ 250, /* express */ 1, /* reliable */ 0);
+    if (!pub) return -1;
+
+    for (;;) {
+        double efforts[N_JOINTS];
+        uint8_t payload[EFFORT_BYTES];
+        read_follower_external_efforts(efforts);
+        pack_efforts(now_seconds(), efforts, payload);
+        if (adamo_publisher_put(pub, payload, sizeof(payload)) != 0) {
+            adamo_publisher_free(pub);
+            return -1;
+        }
+        sleep_tick();
+    }
+}
+
+static int run_leader(adamo_session_t *session, const char *topic) {
+    adamo_subscriber_t *sub = adamo_subscribe(session, topic);
+    if (!sub) return -1;
+
+    const double teleop_started_at = now_seconds();
+    for (;;) {
+        adamo_sample_t *latest = NULL;
+        for (;;) {
+            adamo_sample_t *sample = adamo_sub_try_recv(sub);
+            if (!sample) {
+                const char *err = adamo_last_error();
+                if (err && *err) {
+                    if (latest) adamo_sample_free(latest);
+                    adamo_sub_free(sub);
+                    return -1;
+                }
+                break;
+            }
+            if (latest) adamo_sample_free(latest);
+            latest = sample;
+        }
+
+        if (latest) {
+            double timestamp = 0.0;
+            double measured[N_JOINTS];
+            if (unpack_efforts(latest->payload, latest->payload_len,
+                               &timestamp, measured) == 0 &&
+                timestamp >= teleop_started_at) {
+                double applied[N_JOINTS];
+                for (int i = 0; i < N_JOINTS; i++) {
+                    applied[i] = -GAIN * measured[i];
+                }
+                apply_leader_external_efforts(applied);
+            }
+            adamo_sample_free(latest);
+        }
+
+        sleep_tick();
+    }
+}
+
+int main(int argc, char **argv) {
+    const char *api_key = getenv("ADAMO_API_KEY");
+    const char *robot = getenv("ADAMO_ROBOT_NAME");
+    if (!api_key) {
+        fprintf(stderr, "set ADAMO_API_KEY\n");
+        return 1;
+    }
+    if (!robot) robot = "my-arm";
+
+    char topic[256];
+    snprintf(topic, sizeof(topic), "%s/trossen/reference/follower_effort", robot);
+
+    adamo_session_t *session = adamo_open(
+        api_key, adamo_protocol_t_ADAMO_PROTOCOL_QUIC);
+    if (!session) {
+        fprintf(stderr, "adamo_open: %s\n", adamo_last_error());
+        return 1;
+    }
+
+    const char *mode = argc > 1 ? argv[1] : "leader";
+    int rc = strcmp(mode, "follower") == 0
+        ? run_follower(session, topic)
+        : run_leader(session, topic);
+
+    fprintf(stderr, "adamo error: %s\n", adamo_last_error());
+    adamo_session_free(session);
+    return rc == 0 ? 0 : 1;
+}
+```
+
+</TabItem>
 </Tabs>
 
 ## Real-Time Priority
