@@ -70,14 +70,14 @@ You can substitute any input source — Quest controllers, Leap Motion, Apple Vi
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
-use adamo::{Protocol, PublisherOptions, Session};
+use adamo::{PublisherOptions, Session};
 use serde::Serialize;
 
 #[derive(Serialize)]
 struct HandFrame { pos: [f32; 3], quat: [f32; 4], trigger: f32 }
 
 fn main() -> adamo::Result<()> {
-    let session = Session::open("ak_...", Protocol::Quic)?;
+    let session = Session::open_default("ak_...")?;
     let opts = PublisherOptions {
         priority: 250,        // REAL_TIME
         express: true,
@@ -102,8 +102,7 @@ The Rust SDK has no high-level `Robot` participant for the publish-only case —
 <TabItem label="C" icon="seti:c">
 
 ```c
-adamo_session_t *sess = adamo_open(
-    "ak_...", adamo_protocol_t_ADAMO_PROTOCOL_QUIC);
+adamo_session_t *sess = adamo_open_default("ak_...");
 
 adamo_publisher_t *left = adamo_publisher(
     sess, "xr-operator/control/xr/hand/left",

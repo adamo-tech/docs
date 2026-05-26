@@ -31,8 +31,8 @@ If you use `adamo.Robot(...)`, a liveliness token at `{name}/alive` is declared 
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
-use adamo::{Protocol, Session};
-let session = Session::open("ak_...", Protocol::Quic)?;
+use adamo::Session;
+let session = Session::open_default("ak_...")?;
 let _token = session.alive("my-arm")?;     // dropped → undeclared
 // ... do work ...
 ```
@@ -41,7 +41,7 @@ let _token = session.alive("my-arm")?;     // dropped → undeclared
 <TabItem label="C" icon="seti:c">
 
 ```c
-adamo_session_t *sess = adamo_open("ak_...", adamo_protocol_t_ADAMO_PROTOCOL_QUIC);
+adamo_session_t *sess = adamo_open_default("ak_...");
 adamo_liveliness_token_t *tok = adamo_liveliness_declare(sess, "my-arm");
 /* ... do work ... */
 adamo_liveliness_token_free(tok);

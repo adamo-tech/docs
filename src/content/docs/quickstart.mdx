@@ -88,10 +88,10 @@ robot.run()
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
-use adamo::{Protocol, Robot};
+use adamo::Robot;
 
 fn main() -> adamo::Result<()> {
-    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::Quic)?;
+    let mut robot = Robot::new_default("ak_...", Some("my-arm"))?;
     robot.attach_v4l2("main", "/dev/video0", 1280, 720, 30, 4000, false)?;
     robot.run()
 }
@@ -105,8 +105,7 @@ fn main() -> adamo::Result<()> {
 #include <stdio.h>
 
 int main(void) {
-    adamo_robot_t *robot = adamo_robot_new(
-        "ak_...", "my-arm", adamo_protocol_t_ADAMO_PROTOCOL_QUIC);
+    adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-arm");
     if (!robot) {
         fprintf(stderr, "adamo_robot_new: %s\n", adamo_last_error());
         return 1;
@@ -123,7 +122,40 @@ int main(void) {
 </TabItem>
 </Tabs>
 
-The default transport is **QUIC** — reliable streams over a single multiplexed UDP socket. For LAN / unreliable-tolerant traffic pass `protocol="udp"` (Python), `Protocol::Udp` (Rust), or `ADAMO_PROTOCOL_UDP` (C). For environments that block UDP/QUIC, use `tcp` / `Tcp` / `ADAMO_PROTOCOL_TCP`.
+## Common Bugs
+
+### The robot starts but never connects
+
+The default transport is **QUIC**, which runs over UDP. Some corporate networks, lab firewalls, VPNs, and hotel Wi-Fi block outbound UDP even when normal HTTPS works. If the SDK logs connection timeouts or the robot never appears in the operator UI, retry with TCP.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+robot = adamo.Robot(api_key="ak_...", name="my-arm", protocol="tcp")
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::{Protocol, Robot};
+
+let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::Tcp)?;
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_robot_t *robot = adamo_robot_new(
+    "ak_...", "my-arm", adamo_protocol_t_ADAMO_PROTOCOL_TCP);
+```
+
+</TabItem>
+</Tabs>
+
+TCP is usually a little less latency-efficient than QUIC, but it is the right choice when the network blocks UDP. For LAN or unreliable-tolerant traffic, you can explicitly choose UDP with `protocol="udp"` (Python), `Protocol::Udp` (Rust), or `adamo_protocol_t_ADAMO_PROTOCOL_UDP` (C).
 
 ## Run It
 
@@ -171,10 +203,10 @@ robot.run()
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
-use adamo::{Protocol, Robot};
+use adamo::Robot;
 
 fn main() -> adamo::Result<()> {
-    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::Quic)?;
+    let mut robot = Robot::new_default("ak_...", Some("my-arm"))?;
     robot.attach_v4l2("wrist_left",  "/dev/video0", 1280, 720, 30, 4000, false)?;
     robot.attach_v4l2("wrist_right", "/dev/video1", 1280, 720, 30, 4000, false)?;
     robot.run()
@@ -185,8 +217,7 @@ fn main() -> adamo::Result<()> {
 <TabItem label="C" icon="seti:c">
 
 ```c
-adamo_robot_t *robot = adamo_robot_new(
-    "ak_...", "my-arm", adamo_protocol_t_ADAMO_PROTOCOL_QUIC);
+adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-arm");
 adamo_robot_attach_video_v4l2(robot, "wrist_left",  "/dev/video0", 1280, 720, 30, 4000, false);
 adamo_robot_attach_video_v4l2(robot, "wrist_right", "/dev/video1", 1280, 720, 30, 4000, false);
 adamo_robot_run(robot);

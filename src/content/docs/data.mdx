@@ -28,8 +28,8 @@ session.put("my-arm/sensors/temperature", b"22.5")
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
-use adamo::{Protocol, PublishOptions, Session};
-let session = Session::open("ak_...", Protocol::Quic)?;
+use adamo::{PublishOptions, Session};
+let session = Session::open_default("ak_...")?;
 session.put("my-arm/sensors/temperature", b"22.5", PublishOptions::default())?;
 ```
 
@@ -37,7 +37,7 @@ session.put("my-arm/sensors/temperature", b"22.5", PublishOptions::default())?;
 <TabItem label="C" icon="seti:c">
 
 ```c
-adamo_session_t *sess = adamo_open("ak_...", adamo_protocol_t_ADAMO_PROTOCOL_QUIC);
+adamo_session_t *sess = adamo_open_default("ak_...");
 adamo_put(sess, "my-arm/sensors/temperature",
           (uint8_t*)"22.5", 4, /* priority */ 128, /* express */ 0);
 ```
@@ -64,8 +64,8 @@ with session.publisher("my-arm/sensors/imu", express=True) as pub:
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
-use adamo::{Protocol, PublisherOptions, Session};
-let session = Session::open("ak_...", Protocol::Quic)?;
+use adamo::{PublisherOptions, Session};
+let session = Session::open_default("ak_...")?;
 let pub_ = session.publisher(
     "my-arm/sensors/imu",
     PublisherOptions { priority: 128, express: true, reliable: false },

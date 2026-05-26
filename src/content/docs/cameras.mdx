@@ -40,10 +40,10 @@ robot.run()
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
-use adamo::{Protocol, Robot};
+use adamo::Robot;
 
 fn main() -> adamo::Result<()> {
-    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::Quic)?;
+    let mut robot = Robot::new_default("ak_...", Some("my-arm"))?;
     robot.attach_v4l2("main", "/dev/video0", 1280, 720, 30, 4000, false)?;
     robot.run()
 }
@@ -218,7 +218,6 @@ import adamo
 robot = adamo.Robot(
     api_key=os.environ["ADAMO_API_KEY"],
     name="my-robot",
-    protocol="quic",
 )
 
 robot.attach_video(
@@ -391,10 +390,10 @@ The encoder pipeline auto-starts on the first `track.send()`.
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
-use adamo::{Protocol, Robot};
+use adamo::Robot;
 
 fn main() -> adamo::Result<()> {
-    let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::Quic)?;
+    let mut robot = Robot::new_default("ak_...", Some("my-arm"))?;
     let mut track = robot.video("overlay", 1280, 720, "BGRA", 30, 4000, false)?;
     std::thread::spawn(move || {
         loop {

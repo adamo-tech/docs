@@ -92,6 +92,7 @@ QUIC is the recommended default — reliable streams over a single multiplexed U
 ## Sessions
 
 ```c
+adamo_session_t *adamo_open_default(const char *api_key);
 adamo_session_t *adamo_open(const char *api_key, adamo_protocol_t protocol);
 void             adamo_session_free(adamo_session_t *sess);
 
@@ -99,7 +100,7 @@ const char *adamo_session_org(const adamo_session_t *sess);     // NUL-terminate
 size_t      adamo_session_org_len(const adamo_session_t *sess); // bytes, excluding NUL
 ```
 
-`adamo_open` returns `NULL` on failure. `adamo_session_free` is NULL-safe and closes the underlying connection if this was the last reference.
+`adamo_open_default` opens with the default transport. `adamo_open` is available when you need to select a specific transport. Both return `NULL` on failure. `adamo_session_free` is NULL-safe and closes the underlying connection if this was the last reference.
 
 `adamo_session_org` returns a NUL-terminated C string valid for the lifetime of the session. `adamo_session_org_len` is provided for callers that prefer length-prefixed reads.
 
@@ -309,6 +310,11 @@ These are free functions — they don't take a session, so any code on the host 
 When the library is built with the video feature, the following are available:
 
 ```c
+adamo_robot_t *adamo_robot_new_default(
+    const char *api_key,
+    const char *name                   // may be NULL — random name assigned
+);
+
 adamo_robot_t *adamo_robot_new(
     const char *api_key,
     const char *name,                  // may be NULL — random name assigned
@@ -409,7 +415,7 @@ A header-only wrapper providing move-only RAII handles and exception-based error
 #include <iostream>
 
 int main() {
-    auto sess = adamo::Session::open("ak_your_key", adamo::Protocol::Quic);
+    auto sess = adamo::Session::open("ak_your_key");
 
     sess.put("my-robot/sensors/temperature", "22.5");
 
@@ -460,6 +466,7 @@ namespace adamo {
 ```cpp
 class Session {
 public:
+    static Session open(const std::string &api_key);
     static Session open(const std::string &api_key,
                         Protocol p);
 
@@ -546,8 +553,10 @@ Both are RAII move-only handles. `LivelinessToken` keeps the token alive until d
 class Robot {
 public:
     static Robot create(const std::string &api_key,
+                        std::optional<std::string> name);
+    static Robot create(const std::string &api_key,
                         std::optional<std::string> name,
-                        Protocol p = default_protocol);
+                        Protocol p);
 
     VideoTrack video(const std::string &name,
                      std::uint32_t width, std::uint32_t height,
