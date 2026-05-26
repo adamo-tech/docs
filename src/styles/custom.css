@@ -856,6 +856,13 @@ main {
 
 /* Tables, tabs, details, and media */
 .sl-markdown-content table:not(:where(.not-content *)) {
+  display: table;
+  width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+  overflow: hidden;
+  border-collapse: separate;
+  border-spacing: 0;
   border: 1px solid var(--color-border-subtle);
   border-radius: 12px;
   background: rgba(14, 14, 14, 0.6);
@@ -863,11 +870,27 @@ main {
 
 .sl-markdown-content :is(th, td):not(:where(.not-content *)) {
   border-bottom-color: var(--color-border-subtle);
+  padding: 0.75rem 1rem;
+  text-align: start;
+  overflow-wrap: anywhere;
+  vertical-align: top;
 }
 
 .sl-markdown-content th:not(:where(.not-content *)) {
   color: var(--color-text-primary);
   font-weight: 400;
+}
+
+.sl-markdown-content :is(th:first-child, td:first-child):not(:where(.not-content *)) {
+  padding-inline-start: 1rem;
+}
+
+.sl-markdown-content :is(th:last-child, td:last-child):not(:where(.not-content *)) {
+  padding-inline-end: 1rem;
+}
+
+.sl-markdown-content tr:last-child td:not(:where(.not-content *)) {
+  border-bottom: 0;
 }
 
 starlight-tabs [role='tablist'] {
