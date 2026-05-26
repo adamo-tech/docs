@@ -212,6 +212,231 @@ adamo_subscribe_cb(sess, "xr-operator/control/xr/hand/*", on_hand, NULL);
 </TabItem>
 </Tabs>
 
+## Bilateral Force Feedback
+
+The Trossen bilateral teleop example sends measured follower joint efforts back to the leader on a real-time control topic. The leader keeps only the newest sample, scales it negatively, then applies it in the leader arm's external-effort mode.
+
+The example below isolates the feedback path. Replace the two hardware-driver functions with calls to your robot API:
+
+- follower side: read measured external efforts from the follower arm
+- leader side: apply external efforts to the leader arm
+
+The payload is eight big-endian `f64` values: `[timestamp_seconds, effort_0, ..., effort_6]`.
+
+<Aside>Force feedback writes actuator efforts. Clamp torques in your driver, reject stale samples, and always clear effort commands before leaving external-effort mode.</Aside>
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import os
+import struct
+import sys
+import time
+
+import adamo
+
+N_JOINTS = 7
+RATE_HZ = 100.0
+GAIN = 0.1
+ROBOT = os.getenv("ADAMO_ROBOT_NAME", "my-arm")
+EFFORT_TOPIC = f"{ROBOT}/trossen/reference/follower_effort"
+
+
+def now_seconds(session):
+    return session.fabric_now_us() / 1_000_000.0
+
+
+def pack_efforts(timestamp, efforts):
+    if len(efforts) != N_JOINTS:
+        raise ValueError(f"expected {N_JOINTS} joint efforts")
+    return struct.pack("!" + "d" * (1 + N_JOINTS), timestamp, *efforts)
+
+
+def unpack_efforts(payload):
+    if len(payload) != 8 * (1 + N_JOINTS):
+        raise ValueError(f"bad effort payload size: {len(payload)}")
+    values = struct.unpack("!" + "d" * (1 + N_JOINTS), payload)
+    return values[0], list(values[1:])
+
+
+def read_follower_external_efforts():
+    raise NotImplementedError("read joint efforts from your follower driver")
+
+
+def apply_leader_external_efforts(efforts):
+    raise NotImplementedError("send joint efforts to your leader driver")
+
+
+def run_follower(session):
+    with session.publisher(
+        EFFORT_TOPIC,
+        priority=250,
+        express=True,
+        reliable=False,
+    ) as pub:
+        while True:
+            efforts = read_follower_external_efforts()
+            pub.put(pack_efforts(now_seconds(session), efforts))
+            time.sleep(1.0 / RATE_HZ)
+
+
+def run_leader(session):
+    teleop_started_at = now_seconds(session)
+
+    with session.subscribe(EFFORT_TOPIC) as sub:
+        while True:
+            latest = None
+            while True:
+                sample = sub.try_recv()
+                if sample is None:
+                    break
+                latest = sample
+
+            if latest is not None:
+                timestamp, measured = unpack_efforts(latest.payload)
+                if timestamp >= teleop_started_at:
+                    applied = [-GAIN * effort for effort in measured]
+                    apply_leader_external_efforts(applied)
+
+            time.sleep(1.0 / RATE_HZ)
+
+
+session = adamo.connect(
+    api_key=os.environ["ADAMO_API_KEY"],
+    protocol="quic",
+)
+
+mode = sys.argv[1] if len(sys.argv) > 1 else "leader"
+if mode == "follower":
+    run_follower(session)
+else:
+    run_leader(session)
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::{Protocol, PublisherOptions, Session};
+use std::{env, thread, time::Duration};
+
+const N_JOINTS: usize = 7;
+const EFFORT_BYTES: usize = (1 + N_JOINTS) * 8;
+const RATE_HZ: f64 = 100.0;
+const GAIN: f64 = 0.1;
+
+fn effort_topic() -> String {
+    let robot = env::var("ADAMO_ROBOT_NAME").unwrap_or_else(|_| "my-arm".to_string());
+    format!("{robot}/trossen/reference/follower_effort")
+}
+
+fn now_seconds() -> f64 {
+    adamo::fabric_now_us() as f64 / 1_000_000.0
+}
+
+fn pack_efforts(timestamp: f64, efforts: [f64; N_JOINTS]) -> [u8; EFFORT_BYTES] {
+    let mut out = [0_u8; EFFORT_BYTES];
+    for (i, value) in std::iter::once(timestamp)
+        .chain(efforts.iter().copied())
+        .enumerate()
+    {
+        let start = i * 8;
+        out[start..start + 8].copy_from_slice(&value.to_be_bytes());
+    }
+    out
+}
+
+fn unpack_efforts(payload: &[u8]) -> Option<(f64, [f64; N_JOINTS])> {
+    if payload.len() != EFFORT_BYTES {
+        return None;
+    }
+
+    let mut timestamp_bytes = [0_u8; 8];
+    timestamp_bytes.copy_from_slice(&payload[0..8]);
+
+    let mut efforts = [0.0_f64; N_JOINTS];
+    for (i, effort) in efforts.iter_mut().enumerate() {
+        let start = (i + 1) * 8;
+        let mut bytes = [0_u8; 8];
+        bytes.copy_from_slice(&payload[start..start + 8]);
+        *effort = f64::from_be_bytes(bytes);
+    }
+
+    Some((f64::from_be_bytes(timestamp_bytes), efforts))
+}
+
+fn realtime_options() -> PublisherOptions {
+    PublisherOptions {
+        priority: 250,
+        express: true,
+        reliable: false,
+    }
+}
+
+fn read_follower_external_efforts() -> [f64; N_JOINTS] {
+    todo!("read joint efforts from your follower driver")
+}
+
+fn apply_leader_external_efforts(_efforts: [f64; N_JOINTS]) {
+    todo!("send joint efforts to your leader driver")
+}
+
+fn run_follower(session: &Session) -> adamo::Result<()> {
+    let topic = effort_topic();
+    let publisher = session.publisher(&topic, realtime_options())?;
+
+    loop {
+        let efforts = read_follower_external_efforts();
+        let payload = pack_efforts(now_seconds(), efforts);
+        publisher.put(&payload)?;
+        thread::sleep(Duration::from_secs_f64(1.0 / RATE_HZ));
+    }
+}
+
+fn run_leader(session: &Session) -> adamo::Result<()> {
+    let topic = effort_topic();
+    let subscriber = session.subscribe(&topic)?;
+    let teleop_started_at = now_seconds();
+
+    loop {
+        let mut latest = None;
+        while let Some(sample) = subscriber.try_recv()? {
+            latest = Some(sample);
+        }
+
+        if let Some(sample) = latest {
+            if let Some((timestamp, measured)) = unpack_efforts(&sample.payload) {
+                if timestamp >= teleop_started_at {
+                    let mut applied = [0.0_f64; N_JOINTS];
+                    for (out, effort) in applied.iter_mut().zip(measured.iter()) {
+                        *out = -GAIN * *effort;
+                    }
+                    apply_leader_external_efforts(applied);
+                }
+            }
+        }
+
+        thread::sleep(Duration::from_secs_f64(1.0 / RATE_HZ));
+    }
+}
+
+fn main() -> adamo::Result<()> {
+    let api_key = env::var("ADAMO_API_KEY").expect("set ADAMO_API_KEY");
+    let session = Session::open(&api_key, Protocol::Quic)?;
+    let mode = env::args().nth(1).unwrap_or_else(|| "leader".to_string());
+
+    if mode == "follower" {
+        run_follower(&session)
+    } else {
+        run_leader(&session)
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
 ## Real-Time Priority
 
 Control topics should be published with **REAL_TIME** priority and dropped on congestion — a command that arrives 200 ms late is worse than no command at all. The robot side doesn't choose priority on subscribe (the router uses the publisher's choice), but it's worth knowing the convention so your own operator programs follow it.
