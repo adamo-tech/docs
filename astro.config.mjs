@@ -12,6 +12,7 @@ export default defineConfig({
         replacesTitle: true,
       },
       expressiveCode: {
+        themes: ["ayu-mirage"],
         styleOverrides: {
           frames: {
             terminalTitlebarDotsOpacity: "0",

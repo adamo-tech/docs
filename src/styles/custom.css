@@ -23,6 +23,12 @@
   --color-accent-blue-soft: rgba(157, 206, 231, 0.12);
   --color-accent-blue-muted: rgba(157, 206, 231, 0.22);
   --color-accent-blue-line: rgba(157, 206, 231, 0.34);
+  --color-code-bg: #1f2430;
+  --color-code-header: #242936;
+  --color-code-border: #3b4354;
+  --color-code-text: #cccac2;
+  --color-code-muted: #707a8c;
+  --color-code-accent: #ffcc66;
   --container-max: 1172px;
   --duration-fast: 150ms;
   --duration-normal: 300ms;
@@ -774,12 +780,41 @@ main {
 
 /* Code */
 .expressive-code {
-  --ec-brdCol: #181818 !important;
-  --ec-frm-edBg: var(--color-bg-card) !important;
+  --ec-brdCol: var(--color-code-border) !important;
+  --ec-frm-edBg: var(--color-code-header) !important;
+  --ec-frm-edActTabBg: var(--color-code-header) !important;
+  --ec-frm-edActTabIndTopCol: var(--color-code-accent) !important;
+  --ec-frm-edTabBarBg: var(--color-code-header) !important;
+  --ec-frm-edTabBarBrdCol: var(--color-code-border) !important;
+  --ec-frm-edTabsFg: var(--color-code-muted) !important;
+  --ec-frm-edActTabFg: var(--color-code-text) !important;
+  --ec-frm-trmTtbBg: var(--color-code-header) !important;
+  --ec-frm-trmTtbFg: var(--color-code-muted) !important;
+  --ec-frm-tooltipSuccessBg: var(--color-code-header) !important;
+  --ec-frm-tooltipSuccessFg: var(--color-code-text) !important;
 }
 
 .expressive-code .frame {
+  border: 1px solid var(--color-code-border);
   border-radius: 12px;
+  background: var(--color-code-bg);
+  overflow: hidden;
+}
+
+.expressive-code .frame .header {
+  border-color: var(--color-code-border);
+  background: var(--color-code-header);
+  color: var(--color-code-muted);
+}
+
+.expressive-code .frame .header,
+.expressive-code .frame .header span,
+.expressive-code .frame .header button {
+  font-family: var(--font-hedvig);
+}
+
+.expressive-code .frame .header button {
+  color: var(--color-code-text);
 }
 
 .expressive-code .frame.is-terminal .header {
@@ -791,23 +826,29 @@ main {
 }
 
 .expressive-code .frame.is-terminal pre {
-  border-top: 1px solid #181818;
+  border-top: 1px solid var(--color-code-border);
   border-top-left-radius: 12px;
   border-top-right-radius: 12px;
 }
 
 .expressive-code pre,
 .sl-markdown-content pre:not(:where(.not-content *)) {
-  border: 1px solid #181818;
+  border: 1px solid var(--color-code-border);
   border-radius: 12px;
-  background: #050505 !important;
+  background: var(--color-code-bg) !important;
+  color: var(--color-code-text);
+}
+
+.expressive-code .frame pre {
+  border: 0;
+  border-radius: 0;
 }
 
 .sl-markdown-content :not(pre) > code:not(:where(.not-content *)) {
-  border: 1px solid var(--color-border-subtle);
+  border: 1px solid rgba(112, 122, 140, 0.32);
   border-radius: 0.375rem;
-  background: var(--color-bg-card);
-  color: var(--color-text-primary);
+  background: rgba(112, 122, 140, 0.16);
+  color: var(--color-code-text);
   font-family: var(--font-mono);
   font-size: 0.86em;
   padding: 0.12em 0.35em;
