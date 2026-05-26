@@ -8,6 +8,8 @@ export default defineConfig({
       title: "Adamo",
       logo: {
         src: "./src/assets/logo.svg",
+        alt: "Adamo",
+        replacesTitle: true,
       },
       expressiveCode: {
         styleOverrides: {
@@ -19,6 +21,7 @@ export default defineConfig({
       },
       customCss: ["./src/styles/custom.css"],
       components: {
+        Header: "./src/components/Header.astro",
         ThemeProvider: "./src/components/ThemeProvider.astro",
         ThemeSelect: "./src/components/ThemeSelect.astro",
       },
@@ -45,10 +48,6 @@ export default defineConfig({
         {
           label: "SDK References",
           items: ["python-sdk", "rust-sdk", "c-sdk", "typescript-sdk"],
-        },
-        {
-          label: "Advanced",
-          items: ["config-reference"],
         },
       ],
     }),

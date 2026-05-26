@@ -20,16 +20,6 @@ The pattern is symmetric: an operator is just another `adamo.Robot` (Python) or 
 
 A control loop has two sides:
 
-```
-┌──────────────┐                                        ┌──────────────┐
-│   Operator   │  publish: control/xr/hand/{side}       │     Robot    │
-│ (xr-operator)│ ──────────────────────────────────────▶│   (my-arm)   │
-│              │  publish: control/xr/head              │              │
-└──────────────┘                                        └──────────────┘
-                                                              │
-                ◀───────────────── stream: video/* ───────────┘
-```
-
 Both sides connect to the same Adamo network. Each side picks a `name`, opens an SDK session, and the topic key expressions follow the convention `{name}/{track}` — the SDK adds the org scope for you.
 
 Use **REAL_TIME priority** (`250`) for control commands so they drain ahead of video under congestion. Use **drop-on-congestion** + **best-effort reliability** so a stuck operator never blocks the robot.

@@ -1,0 +1,71 @@
+---
+import config from "virtual:starlight/user-config";
+
+import Search from "virtual:starlight/components/Search";
+import SocialIcons from "virtual:starlight/components/SocialIcons";
+import logoUrl from "../assets/logo.svg";
+
+const shouldRenderSearch =
+  config.pagefind || config.components.Search !== "@astrojs/starlight/components/Search.astro";
+---
+
+<div class="adamo-header-shell">
+  <a class="adamo-corner-logo" href="/" aria-label="Adamo docs home">
+    <img src={logoUrl.src} alt="Adamo" width="72" height="13" />
+  </a>
+
+  <nav class="adamo-docs-nav" aria-label="Primary">
+    <a class="adamo-nav-logo" href="/" aria-label="Adamo docs home">
+      <img src={logoUrl.src} alt="" width="72" height="13" />
+    </a>
+
+    <div class="adamo-nav-group">
+      <a class="adamo-nav-link adamo-nav-link--desktop" href="https://adamohq.com/">Main site</a>
+      <a
+        class="adamo-nav-link adamo-nav-link--desktop adamo-nav-link--login"
+        href="https://operate.adamohq.com/"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Log in
+      </a>
+    </div>
+
+    <div class="adamo-nav-search print:hidden">
+      {shouldRenderSearch && <Search />}
+    </div>
+
+    <div class="adamo-nav-actions print:hidden">
+      <div class="adamo-social sl-flex" aria-label="Social links">
+        <SocialIcons />
+      </div>
+      <a
+        class="adamo-nav-cta"
+        href="https://calendar.app.google/MAimy7qh7bBJLhna8"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Talk to a dev
+      </a>
+    </div>
+  </nav>
+</div>
+
+<script>
+  const nav = document.querySelector(".adamo-docs-nav");
+  const collapseAfter = 144;
+  const expandBefore = 24;
+
+  function syncCollapsedState() {
+    if (!nav) return;
+
+    if (window.scrollY > collapseAfter) {
+      nav.setAttribute("data-scrolled", "");
+    } else if (window.scrollY < expandBefore) {
+      nav.removeAttribute("data-scrolled");
+    }
+  }
+
+  syncCollapsedState();
+  window.addEventListener("scroll", syncCollapsedState, { passive: true });
+</script>
