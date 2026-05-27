@@ -783,6 +783,7 @@ Each publish contains one ROS envelope. Consumers should decode the envelope and
 XR controller Joy messages use:
 
 ```ts
+const rawAxisCount = xrGamepad.axes.length;
 axes = [
   ...xrGamepad.axes,
   ...xrGamepad.buttons.map((button) => button.value),
@@ -790,7 +791,30 @@ axes = [
 buttons = xrGamepad.buttons.map((button) => button.pressed ? 1 : 0);
 ```
 
-The raw axis and button order is the order reported by the WebXR runtime for that controller. In the current multi-camera XR renderer, the left-controller **X** button is read as `xrGamepad.buttons[4]` for the in-VR layout edit toggle. That means it appears in the published XR Joy message as `buttons[4]`, and its analog value appears at `axes[xrGamepad.axes.length + 4]`.
+The raw axis and button order is the order reported by the WebXR runtime for that controller. The UI does not remap XR controller buttons to Xbox-style button indices.
+
+For controllers using the WebXR [`xr-standard`](https://www.w3.org/TR/webxr-gamepads-module-1/#xr-standard-heading) mapping, the Joy values are:
+
+| Joy value | WebXR value | Meaning |
+|-----------|-------------|---------|
+| `axes[0]` | `xrGamepad.axes[0]` | Primary touchpad X, or placeholder `0` |
+| `axes[1]` | `xrGamepad.axes[1]` | Primary touchpad Y, or placeholder `0` |
+| `axes[2]` | `xrGamepad.axes[2]` | Primary thumbstick X |
+| `axes[3]` | `xrGamepad.axes[3]` | Primary thumbstick Y |
+| `buttons[0]` | `xrGamepad.buttons[0].pressed` | Primary trigger pressed |
+| `axes[rawAxisCount + 0]` | `xrGamepad.buttons[0].value` | Primary trigger analog value |
+| `buttons[1]` | `xrGamepad.buttons[1].pressed` | Grip / squeeze pressed |
+| `axes[rawAxisCount + 1]` | `xrGamepad.buttons[1].value` | Grip / squeeze analog value |
+| `buttons[2]` | `xrGamepad.buttons[2].pressed` | Primary touchpad pressed, if present |
+| `axes[rawAxisCount + 2]` | `xrGamepad.buttons[2].value` | Primary touchpad button value |
+| `buttons[3]` | `xrGamepad.buttons[3].pressed` | Primary thumbstick pressed, if present |
+| `axes[rawAxisCount + 3]` | `xrGamepad.buttons[3].value` | Primary thumbstick button value |
+| `buttons[4]` | `xrGamepad.buttons[4].pressed` | First extra button. On current Quest/Pico-style controllers this is usually **X** on left hand and **A** on right hand. |
+| `axes[rawAxisCount + 4]` | `xrGamepad.buttons[4].value` | First extra button value |
+| `buttons[5]` | `xrGamepad.buttons[5].pressed` | Second extra button. On current Quest/Pico-style controllers this is usually **Y** on left hand and **B** on right hand. |
+| `axes[rawAxisCount + 5]` | `xrGamepad.buttons[5].value` | Second extra button value |
+
+`rawAxisCount` is commonly `4` for thumbstick controllers, so the trigger analog value is commonly `axes[4]`, grip is `axes[5]`, thumbstick button value is `axes[7]`, and the first extra face button value is `axes[8]`. Check `axes.length - buttons.length` if you want to derive the offset at runtime.
 
 Hand tracking publishes `PoseArray` joints in this fixed order:
 
