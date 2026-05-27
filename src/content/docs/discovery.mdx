@@ -1,6 +1,6 @@
 ---
-title: "Robot Discovery"
-description: "Liveliness tokens — list which robots are online and watch for joins/leaves"
+title: "Robot and Topic Discovery"
+description: "List online robots, watch joins/leaves, and tap live topics"
 ---
 
 import { Tabs, TabItem } from "@astrojs/starlight/components";
@@ -8,6 +8,8 @@ import { Tabs, TabItem } from "@astrojs/starlight/components";
 Adamo uses **liveliness tokens** to track which participants are online. A robot declares a token; the token disappears when the connection drops; everyone else watches the token namespace and reacts.
 
 This is what powers the robot list on operate.adamohq.com. You can also use it directly from your own programs to build dashboards, fleet-management tools, or operators that automatically connect to the first available robot.
+
+For live topic inspection, subscribe to a wildcard and print the keys that arrive. Adamo does not keep a global registry of every possible pub/sub key; a topic is visible when it publishes traffic. Use liveliness for "who is online?" and a wildcard topic tap for "what is flowing right now?".
 
 ## Declaring Yourself Alive
 
@@ -90,6 +92,105 @@ adamo_liveliness_tokens_free(tokens, count);
 </Tabs>
 
 You can narrow the pattern — `arm-*/alive` for a specific class of robot, `**/video/*/alive` to enumerate active video tracks (each track also declares its own liveliness).
+
+## Listing Live Topics
+
+There is no broker-side "list every topic that could exist" call for live traffic. The practical live workflow is to subscribe to a wildcard, print each new `sample.key`, and keep the process running while you operate the robot.
+
+Use patterns like:
+
+| Pattern | What you will see |
+|---------|-------------------|
+| `my-arm/**` | Every sample under one robot. |
+| `**/control/**` | Gamepad, XR, GELLO, and other control inputs. |
+| `**/video/**` | Video packets and video-side control/stat topics. |
+| `**` | Every sample visible to your org. Noisy, but useful when debugging. |
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+
+session = adamo.connect(api_key="ak_...")
+seen = set()
+
+with session.subscribe("my-arm/**") as sub:
+    for sample in sub:
+        if sample.key not in seen:
+            seen.add(sample.key)
+            print(sample.key)
+```
+
+Drive the robot from operate.adamohq.com while this runs. You should see keys such as `my-arm/control/joy`, `my-arm/control/cdr/xr_tracking`, `my-arm/video/main`, and `my-arm/stats/latency` as those streams publish.
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Session;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+
+let session = Session::open_default("ak_...")?;
+let seen = Arc::new(Mutex::new(HashSet::new()));
+let seen_for_cb = Arc::clone(&seen);
+
+let _sub = session.subscribe_with("my-arm/**", move |sample| {
+    let mut seen = seen_for_cb.lock().unwrap();
+    if seen.insert(sample.key.clone()) {
+        println!("{}", sample.key);
+    }
+})?;
+
+std::thread::park();
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+#include <adamo/adamo.h>
+#include <stdio.h>
+
+void on_sample(const adamo_sample_t *s, void *user) {
+    (void)user;
+    printf("%s\n", s->key);
+}
+
+adamo_session_t *sess = adamo_open_default("ak_...");
+adamo_cb_sub_t *sub = adamo_subscribe_cb(sess, "my-arm/**", on_sample, NULL);
+/* Keep process alive while you inspect traffic. */
+```
+
+For C, this prints every matching sample. Pipe the output through `sort -u` if you want a deduplicated list.
+
+</TabItem>
+<TabItem label="TypeScript" icon="seti:typescript">
+
+```ts
+import { watchTopics } from "@adamo/fleet";
+
+const handle = await watchTopics(
+  session,
+  `adamo/${org}/my-arm/**`,
+  { ttlMs: 5000 },
+);
+
+handle.onUpdate((topics) => {
+  console.table(topics);
+});
+
+// Later:
+handle.close();
+```
+
+The TypeScript SDK works with full router keys, so include the `adamo/{org}/` prefix.
+
+</TabItem>
+</Tabs>
+
+If you need a durable topic list for a recording, use the Data page in operate.adamohq.com or the recorded-data APIs. Recorded sessions store their topic list because those topics have already been observed and persisted.
 
 ## Watching for Changes
 

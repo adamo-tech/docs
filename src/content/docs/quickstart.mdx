@@ -182,6 +182,25 @@ See [The operate.adamohq.com Platform](/web-interface/) for the full tour.
 
 To make the robot *respond* to gamepad or VR input, see [Receiving Control](/control/).
 
+## Inspect Live Topics
+
+When you are not sure what is flowing through the network, subscribe to a wildcard and print the keys that arrive. This is the live equivalent of "list topics": it observes traffic, so quiet topics appear only after they publish a sample.
+
+```python
+import adamo
+
+session = adamo.connect(api_key="ak_...")
+seen = set()
+
+with session.subscribe("my-arm/**") as sub:
+    for sample in sub:
+        if sample.key not in seen:
+            seen.add(sample.key)
+            print(sample.key)
+```
+
+Use `my-arm/**` for one robot, `**/control/**` for control traffic, or `**` when you really want to see every sample in your org. See [Robot and Topic Discovery](/discovery/#listing-live-topics) for Python, Rust, C, and TypeScript versions.
+
 ## Add More Cameras
 
 Most robots have more than one camera. Just call the attach method again — once per track.
