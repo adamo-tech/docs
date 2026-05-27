@@ -668,3 +668,137 @@ await watchFrameSafety(session, org, "my-arm", ({ isStale }) => {
 For lower-level dashboards, subscribe to video latency stats directly and read `frameAgeMs`, `maxFrameAgeMs`, `droppedFrames`, and `channelLag`.
 
 See [Building Your Own Operator](/operator/) for the publisher side end-to-end.
+
+## Hosted UI Payload Reference
+
+The current `adamo-ts/examples/web` frontend publishes operator input as real-time, best-effort messages. The exact key and payload depend on the input mode.
+
+### CDR ROS envelope
+
+When the UI is using CDR mode, the bytes on the Adamo key are a small ROS envelope followed by the CDR-encoded ROS message:
+
+```text
+u32 topic_length_be
+utf8 topic
+u32 type_length_be
+utf8 type
+bytes cdr_payload
+```
+
+The `topic` and `type` fields describe the inner ROS message. The `cdr_payload` is the serialized message named by `type`.
+
+### Browser gamepad / Xbox controller
+
+Gamepad input is published on:
+
+```text
+adamo/{org}/{robot}/control/joy
+```
+
+By default the payload is a ROS envelope with:
+
+| Inner field | Value |
+|-------------|-------|
+| `topic` | `/joy` |
+| `type` | `sensor_msgs/msg/Joy` |
+| `payload` | CDR `sensor_msgs/msg/Joy` |
+
+The Joy message uses `header.frame_id = "joy"` and contains six axes plus 21 button slots. Standard W3C / Xbox controllers populate buttons `0..16`; buttons `17..20` are reserved and normally remain `0`.
+
+| Axis | Meaning | Range |
+|------|---------|-------|
+| `axes[0]` | Left stick X | `-1` left, `+1` right |
+| `axes[1]` | Left stick Y | `-1` up, `+1` down |
+| `axes[2]` | Right stick X | `-1` left, `+1` right |
+| `axes[3]` | Right stick Y | `-1` up, `+1` down |
+| `axes[4]` | Left trigger analog | `0` released, `1` pressed |
+| `axes[5]` | Right trigger analog | `0` released, `1` pressed |
+
+| Button | Xbox / W3C control |
+|--------|--------------------|
+| `buttons[0]` | A |
+| `buttons[1]` | B |
+| `buttons[2]` | X |
+| `buttons[3]` | Y |
+| `buttons[4]` | LB |
+| `buttons[5]` | RB |
+| `buttons[6]` | LT pressed |
+| `buttons[7]` | RT pressed |
+| `buttons[8]` | Back / Select |
+| `buttons[9]` | Start |
+| `buttons[10]` | Left stick click |
+| `buttons[11]` | Right stick click |
+| `buttons[12]` | D-pad up |
+| `buttons[13]` | D-pad down |
+| `buttons[14]` | D-pad left |
+| `buttons[15]` | D-pad right |
+| `buttons[16]` | Guide / Xbox |
+
+If joystick serialization is switched to JSON in the UI, the same key carries:
+
+```json
+{
+  "type": "JoystickCommand",
+  "sequence_id": 42,
+  "stamp": 1710000000.123,
+  "axes": [0, 0, 0, 0, 0, 0],
+  "buttons": [0, 0, 0]
+}
+```
+
+### Logitech Extreme 3D Pro
+
+The Logitech Extreme 3D Pro uses the same `control/joy` key and payload format, but the axes are mapped as a joystick:
+
+| Axis | Meaning |
+|------|---------|
+| `axes[0]` | Stick X |
+| `axes[1]` | Stick Y |
+| `axes[2]` | Twist / rudder |
+| `axes[3]` | Throttle, with forward usually negative |
+| `axes[4]` | Unused, normally `0` |
+| `axes[5]` | Unused, normally `0` |
+
+Buttons `0..11` are copied from the physical buttons. Buttons `12..15` are the hat switch when the browser reports it as buttons.
+
+### XR head, controllers, and hands
+
+XR tracking is published on one Adamo key:
+
+```text
+adamo/{org}/{robot}/control/cdr/xr_tracking
+```
+
+Each publish contains one ROS envelope. Consumers should decode the envelope and dispatch by the inner `topic`:
+
+| Inner topic | Type | Contents |
+|-------------|------|----------|
+| `/head_pose` | `geometry_msgs/msg/PoseStamped` | Head pose |
+| `/controller/{handedness}` | `geometry_msgs/msg/PoseStamped` | Physical controller grip pose, or hand wrist pose when hand tracking is active without a physical controller |
+| `/controller/{handedness}/joy` | `sensor_msgs/msg/Joy` | XR controller axes and buttons |
+| `/hand/{handedness}` | `geometry_msgs/msg/PoseArray` | 25 hand joint poses when hand tracking is enabled |
+
+`{handedness}` is normally `left` or `right`. Pose headers use `frame_id = "xr_origin"`. Positions are in meters in the WebXR `local-floor` reference space. Orientations are published as ROS quaternions `{x, y, z, w}`; the frontend converts from WebXR's internal `[w, x, y, z]` order before encoding the ROS message.
+
+XR controller Joy messages use:
+
+```ts
+axes = [
+  ...xrGamepad.axes,
+  ...xrGamepad.buttons.map((button) => button.value),
+];
+buttons = xrGamepad.buttons.map((button) => button.pressed ? 1 : 0);
+```
+
+The raw axis and button order is the order reported by the WebXR runtime for that controller. In the current multi-camera XR renderer, the left-controller **X** button is read as `xrGamepad.buttons[4]` for the in-VR layout edit toggle. That means it appears in the published XR Joy message as `buttons[4]`, and its analog value appears at `axes[xrGamepad.axes.length + 4]`.
+
+Hand tracking publishes `PoseArray` joints in this fixed order:
+
+```text
+wrist,
+thumb-metacarpal, thumb-phalanx-proximal, thumb-phalanx-distal, thumb-tip,
+index-finger-metacarpal, index-finger-phalanx-proximal, index-finger-phalanx-intermediate, index-finger-phalanx-distal, index-finger-tip,
+middle-finger-metacarpal, middle-finger-phalanx-proximal, middle-finger-phalanx-intermediate, middle-finger-phalanx-distal, middle-finger-tip,
+ring-finger-metacarpal, ring-finger-phalanx-proximal, ring-finger-phalanx-intermediate, ring-finger-phalanx-distal, ring-finger-tip,
+pinky-finger-metacarpal, pinky-finger-phalanx-proximal, pinky-finger-phalanx-intermediate, pinky-finger-phalanx-distal, pinky-finger-tip
+```
