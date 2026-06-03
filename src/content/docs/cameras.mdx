@@ -430,6 +430,112 @@ adamo_video_track_send(t, frame_bytes, frame_len);
 
 MJPEG sources are decoded and re-encoded into the configured output codec. On Jetson, Adamo avoids the Jetson `nvjpegdec` path for non-16-aligned MJPEG dimensions because that decoder can corrupt the bottom of frames; the stream still uses the Jetson hardware H.264 encoder after decode.
 
+## GStreamer Pipelines
+
+Use a GStreamer pipeline when the camera is best accessed through a GStreamer
+element, such as `zedsrc`, `nvarguscamerasrc`, a hardware decoder, or another
+custom source. In Python, pass a source pipeline string with `pipeline=`:
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-robot")
+robot.attach_video(
+    "main",
+    pipeline=(
+        "videotestsrc is-live=true "
+        "! capsfilter caps=video/x-raw,format=BGRA,width=1280,height=720,framerate=30/1"
+    ),
+    width=1280,
+    height=720,
+    fps=30,
+    pixel_format="BGRA",
+    encoder="nvv4l2h264enc",
+    bitrate_kbps=4000,
+)
+robot.run()
+```
+
+The pipeline string should describe a **source bin**, not a full Adamo output
+pipeline. It should end in raw video frames, or `image/jpeg` frames if you set
+`pixel_format="mjpeg"`. Do not include Adamo's encoder, parser, network sink,
+or final `appsink`; the SDK adds its own queue, hardware encoder, parser, and
+transport publisher.
+
+Use explicit `capsfilter caps=...` elements rather than shorthand caps syntax.
+For example, use this:
+
+```text
+zedsrc stream-type=2 camera-resolution=3 camera-fps=60 ! capsfilter caps=video/x-raw,format=BGRA,framerate=60/1
+```
+
+not this:
+
+```text
+zedsrc stream-type=2 camera-resolution=3 camera-fps=60 ! video/x-raw,format=BGRA,framerate=60/1
+```
+
+The caps should match the frame layout you pass to `attach_video`: pixel format,
+width, height, and frame rate. If the GStreamer source negotiates `BGRA`
+`1280x720@30`, pass `pixel_format="BGRA"`, `width=1280`, `height=720`, and
+`fps=30`.
+
+### Reading from another pipeline's tee
+
+A GStreamer `tee` pad belongs to the pipeline that created it; a separate Adamo
+process cannot attach to that pad directly. If another process already owns the
+camera pipeline, tee one branch to a GStreamer `shmsink`, bridge that socket
+into an iceoryx2 service, then attach Adamo with `shm=`.
+
+Producer pipeline branch:
+
+```bash
+... ! tee name=t \
+  t. ! queue ! existing_sink \
+  t. ! queue leaky=downstream max-size-buffers=1 \
+     ! capsfilter caps=video/x-raw,format=BGRA,width=1280,height=720,framerate=30/1 \
+     ! shmsink socket-path=/tmp/adamo-main.sock wait-for-connection=false sync=false
+```
+
+Bridge the GStreamer socket to an iceoryx2 video service:
+
+```bash
+target/release/shm-publisher --source gstreamer \
+  --pipeline "shmsrc socket-path=/tmp/adamo-main.sock is-live=true do-timestamp=true ! capsfilter caps=video/x-raw,format=BGRA,width=1280,height=720,framerate=30/1" \
+  --service camera/main
+```
+
+Then publish that service through Adamo:
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-robot")
+robot.attach_video(
+    "main",
+    shm="camera/main",
+    width=1280,
+    height=720,
+    fps=30,
+    pixel_format="BGRA",
+    encoder="nvv4l2h264enc",
+    bitrate_kbps=4000,
+)
+robot.run()
+```
+
+The raw buffers crossing the GStreamer shared-memory socket do not include a
+self-describing frame layout. Make sure the `format`, `width`, `height`, and
+`framerate` caps after `shmsrc` describe exactly what the tee branch writes into
+`shmsink`. The SDK `width`/`height`/`fps`/`pixel_format` values must describe
+that same layout.
+
+Avoid passing `shmsrc ... ! capsfilter ...` directly as `pipeline=` for live
+external tee sources. The SDK currently probes GStreamer source caps before
+starting the real track, and live external `shmsrc` sources can stall there
+before `video/<track>/alive` is declared. The `shmsink` → `shm-publisher` →
+SDK `shm=` path above is the reliable path today.
+
 ## Tuning Quality
 
 Two knobs cover almost everything:
