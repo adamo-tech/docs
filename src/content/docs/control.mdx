@@ -82,13 +82,103 @@ The standard W3C / Xbox button and axis mapping is documented in the [TypeScript
 
 When a viewer enters immersive VR mode on a stereo track, the headset publishes pose data continuously:
 
-| Topic                       | Payload                  | Description |
-|-----------------------------|--------------------------|-------------|
-| `{robot}/head_pose`         | CDR-encoded `PoseStamped`| Headset pose |
-| `{robot}/controller/left`   | CDR-encoded `PoseStamped`| Left controller |
-| `{robot}/controller/right`  | CDR-encoded `PoseStamped`| Right controller |
+| Inner topic | Payload | Description |
+|-------------|---------|-------------|
+| `/head_pose` | `geometry_msgs/msg/PoseStamped` | Headset pose |
+| `/controller/left` | `geometry_msgs/msg/PoseStamped` | Left controller |
+| `/controller/right` | `geometry_msgs/msg/PoseStamped` | Right controller |
+| `/controller/{handedness}/joy` | `sensor_msgs/msg/Joy` | XR controller axes and buttons |
 
-Subscribe the same way as gamepad.
+The hosted UI sends XR data on `{robot}/control/cdr/xr_tracking`. Each payload is a ROS envelope whose inner topic is `/head_pose`, `/controller/{handedness}`, or `/controller/{handedness}/joy`.
+
+Save this as `adamo_xr_to_ros.py`:
+
+```python
+#!/usr/bin/env python3
+import argparse
+from functools import partial
+import struct
+
+import adamo
+import rclpy
+from geometry_msgs.msg import PoseStamped
+from rclpy.serialization import deserialize_message
+from sensor_msgs.msg import Joy
+
+
+ROS_TYPES = {
+    "geometry_msgs/msg/PoseStamped": PoseStamped,
+    "sensor_msgs/msg/Joy": Joy,
+}
+
+
+def decode_ros_envelope(payload: bytes):
+    offset = 0
+    topic_len = struct.unpack_from(">I", payload, offset)[0]
+    offset += 4
+    topic = payload[offset : offset + topic_len].decode("utf-8")
+    offset += topic_len
+
+    type_len = struct.unpack_from(">I", payload, offset)[0]
+    offset += 4
+    type_name = payload[offset : offset + type_len].decode("utf-8")
+    offset += type_len
+
+    return topic, type_name, payload[offset:]
+
+
+def publish_xr_sample(sample, *, node, publishers):
+    inner_topic, type_name, cdr_payload = decode_ros_envelope(sample.payload)
+    msg_type = ROS_TYPES.get(type_name)
+    if msg_type is None:
+        node.get_logger().warn(f"Ignoring unsupported XR type: {type_name}")
+        return
+
+    ros_topic = f"/adamo/xr{inner_topic}"
+    if ros_topic not in publishers:
+        publishers[ros_topic] = node.create_publisher(msg_type, ros_topic, 10)
+        node.get_logger().info(f"Publishing XR {inner_topic} -> {ros_topic}")
+
+    publishers[ros_topic].publish(deserialize_message(cdr_payload, msg_type))
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--api-key", required=True)
+    parser.add_argument("--robot", required=True)
+    args = parser.parse_args()
+
+    rclpy.init()
+    node = rclpy.create_node("adamo_xr_bridge")
+    publishers = {}
+    session = adamo.connect(api_key=args.api_key)
+
+    sub = session.subscribe(
+        f"{args.robot}/control/cdr/xr_tracking",
+        callback=partial(publish_xr_sample, node=node, publishers=publishers),
+    )
+    node.get_logger().info(f"Bridging {args.robot}/control/cdr/xr_tracking")
+
+    try:
+        rclpy.spin(node)
+    finally:
+        sub.close()
+        session.close()
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
+```
+
+Run it from a ROS-sourced shell:
+
+```bash
+python3 adamo_xr_to_ros.py --api-key ak_... --robot my-arm
+```
+
+It republishes to ROS topics such as `/adamo/xr/head_pose`, `/adamo/xr/controller/left`, and `/adamo/xr/controller/left/joy`.
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
