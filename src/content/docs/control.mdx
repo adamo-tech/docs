@@ -673,6 +673,29 @@ See [Building Your Own Operator](/operator/) for the publisher side end-to-end.
 
 The current `adamo-ts/examples/web` frontend publishes operator input as real-time, best-effort messages. The exact key and payload depend on the input mode.
 
+### Browser keyboard
+
+Raw keyboard state is published on:
+
+```text
+adamo/{org}/{robot}/control/json/keyboard
+```
+
+The payload is UTF-8 JSON:
+
+```json
+{
+  "key": "w",
+  "code": "KeyW",
+  "action": "down",
+  "stamp": 1770210000000
+}
+```
+
+`key` is the browser `KeyboardEvent.key` value, so it reflects the active keyboard layout and modifiers. `code` is the browser `KeyboardEvent.code` value, so it identifies the physical key position. `action` is `"down"` or `"up"`, and `stamp` is `Date.now()` in milliseconds.
+
+The hosted UI suppresses browser auto-repeat events. While a physical key remains held, it republishes a `"down"` heartbeat about every 100 ms. Receivers should treat the heartbeat as a dead-man signal and stop the associated motion if it expires, rather than relying only on a single `"up"` edge.
+
 ### CDR ROS envelope
 
 When the UI is using CDR mode, the bytes on the Adamo key are a small ROS envelope followed by the CDR-encoded ROS message:
