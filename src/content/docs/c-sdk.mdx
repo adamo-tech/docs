@@ -341,6 +341,27 @@ int32_t adamo_robot_attach_video_v4l2(
 
 The SDK owns capture and encoding; frames never cross back into C. Returns `0` on success, `-1` on failure.
 
+### Existing shared-memory service
+
+```c
+int32_t adamo_robot_attach_video_shm(
+    adamo_robot_t *robot,
+    const char *name,                  // track name
+    const char *service,               // "camera/front"
+    uint32_t width,
+    uint32_t height,
+    const char *pixel_format,          // "BGRA", "NV12", "mjpeg", ...
+    uint32_t fps,
+    uint32_t bitrate_kbps,
+    bool stereo
+);
+```
+
+Consume an iceoryx2 service produced by another process. The producer must
+publish one complete frame per `[u8]` sample with no timestamps, headers, or
+metadata prepended. Use `"mjpeg"` when each sample is a complete JPEG frame.
+Returns `0` on success, `-1` on failure.
+
 ### Caller-fed shared-memory track
 
 ```c

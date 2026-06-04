@@ -420,12 +420,30 @@ impl Robot {
         stereo: bool,
     ) -> Result<()>;
 
+    /// Existing iceoryx2 SHM service. The SDK owns decoding/encoding.
+    pub fn attach_shm(
+        &mut self,
+        name: &str,
+        service: &str,          // "camera/front"
+        width: u32,
+        height: u32,
+        pixel_format: &str,     // "BGRA", "NV12", "mjpeg", ...
+        fps: u32,
+        bitrate_kbps: u32,
+        stereo: bool,
+    ) -> Result<()>;
+
     /// Block driving the pipeline forever. Consumes self.
     pub fn run(self) -> Result<()>;
 }
 ```
 
 `Send`. `Drop` releases the handle (unless `run()` consumed it).
+
+`attach_shm` consumes frames from another process. That producer must publish
+one complete frame per iceoryx2 `[u8]` sample with no timestamps, headers, or
+metadata prepended. `pixel_format` must match the producer's payload layout;
+use `"mjpeg"` when each sample is a complete JPEG frame.
 
 <Aside>The `attach_gst(...)` GStreamer pipeline path is still present in the crate but deprecated for new code; use V4L2 or shared memory instead.</Aside>
 

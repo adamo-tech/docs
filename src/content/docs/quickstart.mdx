@@ -228,6 +228,7 @@ fn main() -> adamo::Result<()> {
     let mut robot = Robot::new_default("ak_...", Some("my-arm"))?;
     robot.attach_v4l2("wrist_left",  "/dev/video0", 1280, 720, 30, 4000, false)?;
     robot.attach_v4l2("wrist_right", "/dev/video1", 1280, 720, 30, 4000, false)?;
+    robot.attach_shm("head", "head_cam", 1280, 720, "BGRA", 30, 4000, false)?;
     robot.run()
 }
 ```
@@ -239,6 +240,7 @@ fn main() -> adamo::Result<()> {
 adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-arm");
 adamo_robot_attach_video_v4l2(robot, "wrist_left",  "/dev/video0", 1280, 720, 30, 4000, false);
 adamo_robot_attach_video_v4l2(robot, "wrist_right", "/dev/video1", 1280, 720, 30, 4000, false);
+adamo_robot_attach_video_shm(robot, "head", "head_cam", 1280, 720, "BGRA", 30, 4000, false);
 adamo_robot_run(robot);
 ```
 

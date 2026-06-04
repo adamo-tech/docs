@@ -253,12 +253,61 @@ robot.attach_video(
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
 
-The Rust SDK does not yet expose a consume-side `attach_shm` helper. Use the publish-frames-yourself pattern below, or wrap the producer in Python.
+Use `Robot::attach_shm` when another process already publishes complete frames
+to an iceoryx2 service:
+
+```rust
+use adamo::Robot;
+
+fn main() -> adamo::Result<()> {
+    let mut robot = Robot::new_default("ak_...", Some("my-robot"))?;
+
+    robot.attach_shm(
+        "main",
+        "camera/zed/left",
+        1280,
+        720,
+        "BGRA",
+        60,
+        4000,
+        false,
+    )?;
+
+    robot.run()
+}
+```
+
+For compressed Motion JPEG services, pass `"mjpeg"` as the pixel format:
+
+```rust
+robot.attach_shm("head", "head_cam_mjpeg", 1280, 720, "mjpeg", 30, 4000, false)?;
+```
 
 </TabItem>
 <TabItem label="C" icon="seti:c">
 
-The C SDK does not yet expose a consume-side helper. Use the publish-frames-yourself pattern below, or wrap the producer in Python.
+Use `adamo_robot_attach_video_shm` when another process already publishes
+complete frames to an iceoryx2 service:
+
+```c
+adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-robot");
+
+adamo_robot_attach_video_shm(
+    robot,
+    "main",
+    "camera/zed/left",
+    1280,
+    720,
+    "BGRA",
+    60,
+    4000,
+    false
+);
+
+adamo_robot_run(robot);
+```
+
+For compressed Motion JPEG services, pass `"mjpeg"` as the pixel format.
 
 </TabItem>
 </Tabs>
