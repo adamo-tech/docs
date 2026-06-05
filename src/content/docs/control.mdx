@@ -301,6 +301,81 @@ adamo_subscribe_cb(sess, "xr-operator/control/xr/hand/*", on_hand, NULL);
 </TabItem>
 </Tabs>
 
+## Task Signals
+
+For labelling data collection, the hosted UI can emit **task start/stop signals** — the operator picks a named task and marks when it begins and ends. This is opt-in (Settings → Tasks → "Show task list" in the web app) and is a standalone signal: it does **not** touch the recording pipeline. Use it to segment and tag what your robot is doing.
+
+The signal is published on:
+
+```text
+{robot}/tasks/signal
+```
+
+reliably (`DATA` priority), as UTF-8 JSON:
+
+```json
+{
+  "action": "start",
+  "task_id": "d69c5a80-9f03-4d8a-b32a-3819cd00a7c9",
+  "task_name": "Solder my own hand",
+  "ts": 1780686715804
+}
+```
+
+`action` is `"start"` or `"stop"`. `task_id` is the task's UUID (matches the task in the web app); `task_name` is the human-readable label (may be absent); `ts` is `Date.now()` in milliseconds. Subscribe to `*/tasks/signal` to catch every robot in the org — the robot is the first key segment.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo, json
+
+session = adamo.connect(api_key="ak_...")
+
+def on_task(sample):
+    sig = json.loads(sample.payload)
+    robot = sample.key.split("/")[0]
+    print(robot, sig["action"], sig["task_id"], sig.get("task_name"))
+
+sub = session.subscribe("*/tasks/signal", callback=on_task)
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Session;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct TaskSignal { action: String, task_id: String, task_name: Option<String> }
+
+fn main() -> adamo::Result<()> {
+    let session = Session::open_default("ak_...")?;
+    let _sub = session.subscribe_with("*/tasks/signal", |s| {
+        let sig: TaskSignal = serde_json::from_slice(&s.payload).unwrap();
+        println!("{} {} {:?}", sig.action, sig.task_id, sig.task_name);
+    })?;
+    std::thread::park();
+    Ok(())
+}
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+void on_task(const adamo_sample_t *s, void *user) {
+    /* s->key is e.g. "arm-01/tasks/signal"; decode JSON from
+       s->payload, s->payload_len for action / task_id / task_name */
+}
+
+adamo_subscribe_cb(sess, "*/tasks/signal", on_task, NULL);
+```
+
+</TabItem>
+</Tabs>
+
 ## Bilateral Force Feedback
 
 A bilateral teleop setup sends measured follower joint efforts back to the leader on a real-time control topic. The leader keeps only the newest sample, scales it negatively, then applies it in the leader arm's external-effort mode.
