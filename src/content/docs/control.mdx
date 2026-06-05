@@ -376,6 +376,45 @@ adamo_subscribe_cb(sess, "*/tasks/signal", on_task, NULL);
 </TabItem>
 </Tabs>
 
+### Managing tasks programmatically
+
+Tasks and sets are normally created in the web app, but you can also manage them over a small REST API — handy for pre-creating a set before a collection run so the `task_id` is known up front. Authenticate with your **org API key** (the same `ak_…` key the SDKs use): exchange it for a short-lived bearer token, then call the task endpoints. The token response also gives you your `org_id`.
+
+```bash
+RESP=$(curl -s -X POST https://api.adamohq.com/api/keys/token -H "X-API-Key: ak_...")
+TOKEN=$(jq -r .token   <<<"$RESP")
+ORG=$(jq -r .org_id <<<"$RESP")
+```
+
+All endpoints are under `https://api.adamohq.com/api/orgs/{org_id}` and take/return JSON:
+
+| Method | Path | Body | Description |
+|---|---|---|---|
+| `GET` | `/task-sets` | — | List sets, each with its tasks (ordered by `position`) |
+| `POST` | `/task-sets` | `{name, position?}` | Create a set |
+| `GET` | `/task-sets/{set_id}` | — | Get one set with its tasks |
+| `DELETE` | `/task-sets/{set_id}` | — | Delete a set (and its tasks) |
+| `POST` | `/task-sets/{set_id}/tasks` | `{name, position?}` | Add a task |
+| `PATCH` | `/task-sets/{set_id}/tasks/{task_id}` | `{name?, position?}` | Rename / reorder a task |
+| `DELETE` | `/task-sets/{set_id}/tasks/{task_id}` | — | Remove a task |
+
+```bash
+# Create a set, then add a task to it
+SET=$(curl -s -X POST https://api.adamohq.com/api/orgs/$ORG/task-sets \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"Pick and place"}' | jq -r .id)
+
+curl -X POST https://api.adamohq.com/api/orgs/$ORG/task-sets/$SET/tasks \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"Grasp the cube"}'
+```
+
+The `task_id` returned here is the same UUID that appears in the task signal above, so a script can lay out a set and the operator just selects and records.
+
+<Aside type="note">
+An org API key grants org-scoped task management. Signed-in users (Supabase tokens) are instead limited by their org role — owner, admin, or developer may write. Tokens from `/api/keys/token` are short-lived (~1 hour); re-exchange the key when one expires.
+</Aside>
+
 ## Bilateral Force Feedback
 
 A bilateral teleop setup sends measured follower joint efforts back to the leader on a real-time control topic. The leader keeps only the newest sample, scales it negatively, then applies it in the leader arm's external-effort mode.
