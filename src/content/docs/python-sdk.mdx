@@ -778,6 +778,41 @@ class Frame:
 
 ## Errors
 
-The SDK raises `ValueError` for bad arguments (mutually exclusive options, malformed specs), `RuntimeError` for state errors (closed track / session without API key), `TimeoutError` from `Robot.recv(timeout=…)`, and `ImportError` from optional features when their extras aren't installed.
+SDK-specific failures derive from `adamo.AdamoError`, so one handler catches everything Adamo-related while unrelated bugs surface normally:
 
-The transport layer raises its own exceptions for connection / publish / subscribe failures; those propagate as-is.
+| Exception | Raised when |
+|---|---|
+| `adamo.AuthError` | The Adamo API rejected the API key or token. |
+| `adamo.NetworkError` | The Adamo API or a relay could not be reached. Also subclasses builtin `ConnectionError`, so existing generic handlers keep working. |
+
+```python
+try:
+    session = adamo.connect(api_key="ak_...")
+except adamo.AuthError:
+    ...  # bad or inactive key — check operate.adamohq.com → Settings → API Keys
+except adamo.AdamoError:
+    ...  # any other SDK failure
+```
+
+The SDK also raises `ValueError` for bad arguments (mutually exclusive options, malformed specs), `RuntimeError` for state errors (closed track), `TimeoutError` from `Robot.recv(timeout=…)` and `measure_rtt`, and `ImportError` from optional features when their extras aren't installed.
+
+## Doctor
+
+`python -m adamo doctor` diagnoses the local setup: API key validity, QUIC reachability (including whether the network blocks UDP), encoder availability, glibc version, and the video extras. Run it first when anything misbehaves — the output is designed to be copy-pasted into a support request.
+
+```text
+$ python -m adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
+adamo doctor
+
+  ✓ python 3.11.9
+  ✓ adamo 0.4.32
+  ✓ linux aarch64
+  ✓ glibc 2.35
+  ✓ API key valid (org: my-org)
+  ✓ QUIC transport connected, relay RTT 12.4ms
+  ✓ H.264 encoder: nvv4l2h264enc
+  ✓ iceoryx2 0.8.1 (shared-memory video ready)
+  ✓ numpy available
+
+No problems found.
+```

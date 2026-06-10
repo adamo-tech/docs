@@ -485,8 +485,18 @@ Returns the best available H.264 encoder for the host (NVENC, VA-API, VideoToolb
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum Error {
-    /// An error reported by the underlying SDK shared library.
+    /// The Adamo API rejected the credentials (bad or inactive API key).
+    Auth(String),
+    /// The Adamo API or a relay could not be reached.
+    Network(String),
+    /// Invalid argument: bad option value, closed handle, or bad config.
+    Invalid(String),
+    /// Video pipeline failure: encoder/decoder unavailable, capture or
+    /// shared-memory source failed.
+    Video(String),
+    /// An uncategorized error reported by the underlying SDK library.
     Ffi(String),
     /// A Rust string contained an interior NUL byte and could not cross FFI.
     InteriorNul,
@@ -501,7 +511,18 @@ impl std::error::Error for Error;
 impl From<std::ffi::NulError> for Error;
 ```
 
-Errors are printable via `Display`. Underlying SDK error messages come through `Error::Ffi(String)`.
+Match on the variant to branch by failure category — no string parsing needed:
+
+```rust
+match Session::open_default(&api_key) {
+    Ok(session) => { /* ... */ }
+    Err(Error::Auth(msg)) => eprintln!("check the API key: {msg}"),
+    Err(Error::Network(msg)) => eprintln!("connectivity problem: {msg}"),
+    Err(e) => eprintln!("{e}"),
+}
+```
+
+The enum is `#[non_exhaustive]` — always include a catch-all arm.
 
 ---
 

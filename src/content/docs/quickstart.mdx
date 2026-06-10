@@ -124,6 +124,14 @@ int main(void) {
 
 ## Common Issues
 
+### First step: run the doctor
+
+```sh
+python -m adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
+```
+
+It checks API key validity, QUIC reachability (including whether this network blocks UDP), encoder availability, and the video extras — and prints output you can paste straight into a support request.
+
 ### The robot starts but never connects
 
 The default transport is **QUIC**, which runs over UDP (port 443). Some corporate networks, lab firewalls, VPNs, and hotel Wi-Fi block outbound UDP even when normal HTTPS works.

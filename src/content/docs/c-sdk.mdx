@@ -79,9 +79,36 @@ Each tarball ships:
 
 ```c
 const char *adamo_last_error(void);
+adamo_error_code_t adamo_last_error_code(void);
 ```
 
-Returns the most recent error message for the current thread, or `NULL` if there is none. The pointer is valid until the next fallible call. Each thread has its own slot.
+`adamo_last_error` returns the most recent error message for the current thread, or `NULL` if there is none. The pointer is valid until the next fallible call. Each thread has its own slot.
+
+`adamo_last_error_code` returns the category of that error — branch on the code, show the message to humans. Values are stable across releases:
+
+```c
+typedef enum adamo_error_code_t {
+    adamo_error_code_t_ADAMO_OK           = 0,  // no error
+    adamo_error_code_t_ADAMO_ERR_AUTH     = 1,  // API rejected the credentials
+    adamo_error_code_t_ADAMO_ERR_NETWORK  = 2,  // API or relay unreachable
+    adamo_error_code_t_ADAMO_ERR_TIMEOUT  = 3,  // blocking call timed out
+    adamo_error_code_t_ADAMO_ERR_INVALID  = 4,  // null pointer, closed handle, bad config
+    adamo_error_code_t_ADAMO_ERR_VIDEO    = 5,  // encoder/decoder/capture/shm failure
+    adamo_error_code_t_ADAMO_ERR_INTERNAL = 6,  // anything else
+} adamo_error_code_t;
+```
+
+```c
+adamo_session_t *sess = adamo_open_default(api_key);
+if (!sess) {
+    if (adamo_last_error_code() == adamo_error_code_t_ADAMO_ERR_AUTH) {
+        /* bad key — prompt the user, don't retry */
+    }
+    fprintf(stderr, "%s\n", adamo_last_error());
+}
+```
+
+The C++ wrapper carries the same code on every exception via `adamo::Error::code()`.
 
 ---
 
@@ -601,7 +628,9 @@ namespace adamo {
     enum class Protocol : int { Quic, Udp, Tcp };
     inline constexpr Protocol default_protocol = Protocol::Quic;
 
-    class Error : public std::runtime_error;
+    class Error : public std::runtime_error {
+        adamo_error_code_t code() const noexcept;  // category, stable across releases
+    };
 
     struct SampleView {                  // borrowed view (callbacks)
         std::string_view key;
