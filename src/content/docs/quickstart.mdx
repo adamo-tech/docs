@@ -126,7 +126,11 @@ int main(void) {
 
 ### The robot starts but never connects
 
-The default transport is **QUIC**, which runs over UDP. Some corporate networks, lab firewalls, VPNs, and hotel Wi-Fi block outbound UDP even when normal HTTPS works. If the SDK logs connection timeouts or the robot never appears in the operator UI, retry with TCP.
+The default transport is **QUIC**, which runs over UDP (port 443). Some corporate networks, lab firewalls, VPNs, and hotel Wi-Fi block outbound UDP even when normal HTTPS works.
+
+The fix is to open the firewall, not to switch transports: ask your network administrator to allow **outbound UDP 443** to the Adamo relays (`*.adamohq.com`).
+
+To confirm UDP blocking is the problem — or to get telemetry flowing while the firewall change lands — you can temporarily connect over TCP:
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
@@ -155,7 +159,7 @@ adamo_robot_t *robot = adamo_robot_new(
 </TabItem>
 </Tabs>
 
-TCP is usually a little less latency-efficient than QUIC, but it is the right choice when the network blocks UDP. For LAN or unreliable-tolerant traffic, you can explicitly choose UDP with `protocol="udp"` (Python), `Protocol::Udp` (Rust), or `adamo_protocol_t_ADAMO_PROTOCOL_UDP` (C).
+Treat TCP as a diagnostic or telemetry-only fallback. **Do not teleoperate over TCP**: when packets drop, TCP retransmits and queues everything behind the loss, so control commands arrive late and bunched together — on a moving robot that is dangerous.
 
 ## Run It
 

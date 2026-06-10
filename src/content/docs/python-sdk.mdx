@@ -67,7 +67,7 @@ Token auth is still used by browser/user flows, but token-based Python live sess
 | `token` | A Supabase JWT. Used for user-authenticated sessions. |
 | `org_id` | Required only with `token` if the user belongs to multiple orgs. |
 | `api_url` | Override the Adamo API base URL. |
-| `protocol` | Transport — `"quic"` (default), `"udp"`, or `"tcp"`. |
+| `protocol` | Transport — `"quic"` (default; use it in all cases), `"udp"`, or `"tcp"` (telemetry/diagnostic fallback — don't teleoperate over TCP). |
 | `mtls` | Use the mTLS QUIC path when routers require client certificates. |
 
 Raises `ValueError` if both `api_key` and `token` are passed, or if neither is. Raises `NotImplementedError` for token-based native sessions.

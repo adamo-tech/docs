@@ -95,7 +95,7 @@ typedef enum adamo_protocol_t {
 } adamo_protocol_t;
 ```
 
-QUIC is the recommended default — reliable streams over a single multiplexed UDP socket. UDP is the lowest-latency unreliable transport. TCP is a fallback for environments that block UDP/QUIC.
+Use QUIC in all cases — reliable streams over a single multiplexed UDP socket. TCP is a telemetry/diagnostic fallback for networks that block UDP: TCP retransmission queues control signals behind packet loss, so don't teleoperate over it — ask the network admin to open outbound UDP 443 instead.
 
 ---
 

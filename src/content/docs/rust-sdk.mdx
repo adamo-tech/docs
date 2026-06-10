@@ -207,7 +207,7 @@ pub enum Protocol {
 }
 ```
 
-Transport selection. Use **QUIC** for the normal path — reliable streams over a single multiplexed UDP socket. `Udp` is the lowest-latency unreliable transport. `Tcp` is a fallback for environments that block UDP/QUIC.
+Transport selection. Use **QUIC** in all cases — reliable streams over a single multiplexed UDP socket. `Tcp` is a telemetry/diagnostic fallback for networks that block UDP: TCP retransmission queues control signals behind packet loss, so don't teleoperate over it — ask the network admin to open outbound UDP 443 instead.
 
 ---
 
