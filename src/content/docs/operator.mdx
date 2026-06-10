@@ -121,11 +121,21 @@ For non-trivial JSON you'll want a library — [cJSON](https://github.com/DaveGa
 For operators that run in a browser — your own teleop UI, a customer-facing dashboard — use the [TypeScript SDK](/typescript-sdk/). Same primitives plus React components for video, gamepad, and presence:
 
 ```tsx
-import { AdamoProvider, Stream, GamepadController } from "@adamo/react";
+import { AdamoProvider, Stream, GamepadController, useOrg } from "@adamo/react";
 
-<AdamoProvider url="wss://router.adamohq.com:443" org="my-org">
-  <Stream robot="my-arm" track="main" />
-  <GamepadController topic="adamo/my-org/my-arm/control/joy" />
+function Teleop() {
+  const org = useOrg();
+  return (
+    <>
+      <Stream robot="my-arm" track="main" />
+      <GamepadController topic={`adamo/${org}/my-arm/control/joy`} />
+    </>
+  );
+}
+
+// The relay URL, org, and auth all resolve from the API key.
+<AdamoProvider apiKey="ak_your_key_here">
+  <Teleop />
 </AdamoProvider>
 ```
 

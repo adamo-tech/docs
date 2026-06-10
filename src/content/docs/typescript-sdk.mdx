@@ -16,7 +16,7 @@ The SDK is split across four packages:
 | `@adamo/teleop` | Gamepad (joystick) input management and Joy message encoding. |
 | `@adamo/fleet` | Imperative (non-React) topic discovery and subscription utilities. |
 
-Transport is over WebSocket (`wss://`) or QUIC. The Adamo router URL is typically `wss://router.adamohq.com:443`.
+Transport is over WebSocket (`wss://`) or WebTransport. The SDK resolves the right relay for your organization from the Adamo API at connect time — you never hardcode a relay URL.
 
 ### Installation
 
@@ -33,14 +33,21 @@ Wrap your entire app in `<AdamoProvider>`. It creates a session and provides it 
 ```tsx
 import { AdamoProvider } from "@adamo/react";
 
-// Connect by URL (recommended)
+// Connect with an API key (recommended) — the relay URL, org, and
+// auth are all resolved from the API automatically.
 function App() {
   return (
-    <AdamoProvider url="wss://router.adamohq.com:443" org="my-org">
+    <AdamoProvider apiKey="ak_your_key_here">
       <RobotUI />
     </AdamoProvider>
   );
 }
+```
+
+For user-authenticated apps (e.g. Supabase login), pass the user's JWT as `authToken` — it is attached to the connection for relays that enforce per-user auth, and refreshed on reconnect:
+
+```tsx
+<AdamoProvider apiKey="ak_your_key_here" authToken={supabaseSession.access_token}>
 ```
 
 You can also pass a pre-existing session (useful in Tauri where the session lives in native code):
@@ -62,12 +69,17 @@ function App({ session }: { session: Session }) {
 
 | Prop | Type | Description |
 |---|---|---|
-| `url` | `string` (optional) | WebSocket URL of the Adamo router. Used when `session` is not provided. |
-| `session` | `Session` (optional) | Pre-existing session. Takes precedence over `url`. |
-| `org` | `string` (optional) | Organization slug used for topic namespacing. All built-in hooks and components prepend `adamo/{org}/` to topics. |
+| `apiKey` | `string` (optional) | Adamo API key (`ak_...`). Resolves the relay URL, org, and auth automatically. The standard way to connect. |
+| `apiUrl` | `string` (optional) | API base URL override (defaults to production). |
+| `authToken` | `string` (optional) | User JWT attached to the connection for relays enforcing per-user auth. Refreshed on reconnect. |
+| `session` | `Session` (optional) | Pre-existing session. Takes precedence over everything else. |
+| `url` | `string` (optional) | Advanced: explicit WebSocket relay URL override. `apiKey` resolves this automatically — only set it for custom topologies. |
+| `wtUrl` | `string` (optional) | Advanced: explicit WebTransport relay URL override. |
+| `org` | `string` (optional) | Advanced: org slug override for topic namespacing (`apiKey` resolves it). |
+| `orgId` | `string` (optional) | Advanced: org UUID override for usage admission (`apiKey` resolves it). |
 | `children` | `React.ReactNode` | Child components. |
 
-Exactly one of `url` or `session` should be provided.
+Pass `apiKey` (standard) or `session` (advanced). The `url`/`org` overrides exist for custom topologies and skip the API's relay selection.
 
 ### Session and Org Hooks
 
