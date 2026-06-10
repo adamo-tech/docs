@@ -27,14 +27,27 @@ Available builds:
 
 | Tarball stem | Host |
 |--------------|------|
-| `adamo-sdk-linux-arm64-video` | Jetson / Ubuntu 22.04 aarch64, with video pipeline |
+| `adamo-sdk-linux-arm64-video` | Jetson / Ubuntu 22.04 aarch64, with video |
 | `adamo-sdk-linux-arm64`       | Jetson / Ubuntu 22.04 aarch64, pub/sub only |
-| `adamo-sdk-linux-x86_64-video`| Ubuntu 22.04 x86_64, with video pipeline |
+| `adamo-sdk-linux-x86_64-video`| Ubuntu 22.04 x86_64, with video |
 | `adamo-sdk-linux-x86_64`      | Ubuntu 22.04 x86_64, pub/sub only |
+| `adamo-sdk-macos-arm64-video` | macOS arm64, with video |
 | `adamo-sdk-macos-arm64`       | macOS arm64, pub/sub only |
+| `adamo-sdk-macos-x86_64-video`| macOS x86_64, with video |
 | `adamo-sdk-macos-x86_64`      | macOS x86_64, pub/sub only |
 
 Replace `latest` with a pinned version (e.g. `0.3.1`) in production.
+
+The `-video` builds need the GStreamer runtime installed on the host:
+
+```sh
+# Ubuntu / Debian
+sudo apt-get install -y gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad gstreamer1.0-libav
+
+# macOS
+brew install gstreamer
+```
 
 Then in your project's `CMakeLists.txt`:
 
@@ -405,6 +418,139 @@ Returns the best available H.264 encoder name for the host (NVENC, VA-API, Video
 
 <Aside>The `adamo_robot_attach_video_gst(...)` GStreamer pipeline path is still present in the library but deprecated for new code; use V4L2 or shared-memory tracks instead.</Aside>
 
+### Receiving a video track
+
+```c
+adamo_video_receiver_t *adamo_video_receiver_open(
+    const adamo_session_t *sess,
+    const char *robot,                 // robot name
+    const char *track                  // track name, e.g. "main"
+);
+
+adamo_video_frame_t *adamo_video_receiver_recv(
+    const adamo_video_receiver_t *rx,
+    uint64_t timeout_ms                // 0 = wait forever
+);
+adamo_video_frame_t *adamo_video_receiver_try_recv(const adamo_video_receiver_t *rx);
+void adamo_video_frame_free(adamo_video_frame_t *frame);
+
+int32_t adamo_video_receiver_request_keyframe(const adamo_video_receiver_t *rx);
+int32_t adamo_video_receiver_stereo(const adamo_video_receiver_t *rx);
+int32_t adamo_video_receiver_stats(const adamo_video_receiver_t *rx,
+                                   adamo_video_receiver_stats_t *out);
+void adamo_video_receiver_free(adamo_video_receiver_t *rx);
+```
+
+Opens a robot's video track and decodes it to raw frames. Everything between the wire and your code — packet reassembly, loss recovery, codec detection, decoding — happens inside the receiver. A keyframe is requested automatically at open (and once per second until the first one arrives), so video starts without waiting for the encoder's next scheduled keyframe.
+
+```c
+typedef struct adamo_video_frame_t {
+    uint8_t *data;             // tightly packed RGBA8888
+    size_t   data_len;         // width * height * 4
+    uint32_t width, height;
+    uint64_t seq;              // frame sequence number from the robot encoder
+    uint64_t capture_unix_us;  // capture time on the fabric clock; 0 if unstamped
+    int32_t  keyframe;
+} adamo_video_frame_t;
+```
+
+Minimal consumer:
+
+```c
+adamo_session_t *sess = adamo_open_default(getenv("ADAMO_API_KEY"));
+adamo_video_receiver_t *rx = adamo_video_receiver_open(sess, "my-robot", "main");
+
+for (;;) {
+    adamo_video_frame_t *f = adamo_video_receiver_recv(rx, 100);
+    if (!f) continue;          // timeout; adamo_last_error() distinguishes failure
+    // f->data is width × height × 4 bytes of RGBA — upload to a texture,
+    // run inference, write to disk, ...
+    adamo_video_frame_free(f);
+}
+```
+
+The receiver buffers the two newest decoded frames and drops older ones when your loop falls behind — a slow consumer raises the drop counter, not the latency.
+
+`adamo_video_receiver_recv` returns `NULL` on timeout (`adamo_last_error()` reads `"recv timeout"`) or on receiver failure (any other message). `adamo_video_receiver_try_recv` returns `NULL` with no error set when no frame is ready.
+
+Glass-to-glass latency for a frame is `adamo_fabric_now_us() - f->capture_unix_us` — both stamps are on the fabric clock, so the subtraction is valid across machines.
+
+#### Options
+
+```c
+typedef struct adamo_video_receive_options_t {
+    const char *codec;          // "h264", "h265", "av1"; NULL = auto-detect
+    const char *decoder;        // explicit decoder name; NULL = best available
+    uint32_t max_queued_frames; // 0 = default (2)
+} adamo_video_receive_options_t;
+
+adamo_video_receive_options_t adamo_video_receive_options_default(void);
+
+adamo_video_receiver_t *adamo_video_receiver_open_configured(
+    const adamo_session_t *sess,
+    const char *robot,
+    const char *track,
+    const adamo_video_receive_options_t *opts   // NULL = defaults
+);
+```
+
+The defaults are right for almost every case: the codec is detected from the stream and hardware decoding is used when the host has it (VideoToolbox, NVDEC, VA-API), falling back to software.
+
+#### Stereo tracks
+
+A stereo track packs both eyes into each frame — side-by-side or stacked top-bottom. `adamo_video_receiver_stereo` returns `1` for stereo, `0` for mono, and `-1` while the track's metadata hasn't arrived yet. The packing layout follows from the frame shape: frames taller than wide are top-bottom, wider are side-by-side. To show one eye, crop half the frame (or use texture coordinates — see the streaming UI section below).
+
+#### Stats
+
+```c
+typedef struct adamo_video_receiver_stats_t {
+    uint64_t packets;         // raw packets received
+    uint64_t frames;          // complete encoded frames reassembled
+    uint64_t keyframes;
+    uint64_t frames_decoded;
+    uint64_t frames_dropped;  // dropped because the consumer or decoder lagged
+    uint64_t rlnc_recovered;  // lost packets recovered by forward error correction
+} adamo_video_receiver_stats_t;
+```
+
+Counters since open. Cheap to read — poll it from a UI timer.
+
+### Building a streaming UI
+
+The pattern for showing live video in any UI framework is the same three steps per UI frame:
+
+1. Drain the receiver to the newest frame with `try_recv`.
+2. Upload the RGBA buffer to a GPU texture.
+3. Draw the texture.
+
+```c
+// once per UI frame
+adamo_video_frame_t *frame = NULL, *next = NULL;
+while ((next = adamo_video_receiver_try_recv(rx)) != NULL) {
+    adamo_video_frame_free(frame);
+    frame = next;                       // keep only the newest
+}
+if (frame) {
+    glBindTexture(GL_TEXTURE_2D, tex);  // or your framework's equivalent
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                    frame->width, frame->height,
+                    GL_RGBA, GL_UNSIGNED_BYTE, frame->data);
+    adamo_video_frame_free(frame);
+}
+```
+
+For a stereo track, draw one eye by halving the texture coordinates instead of copying pixels — e.g. with Dear ImGui:
+
+```cpp
+// left eye of a top-bottom stereo frame
+ImGui::Image(texture, size, /*uv0*/ {0.0f, 0.0f}, /*uv1*/ {1.0f, 0.5f});
+```
+
+Two complete programs ship in the SDK repository under `adamo-c/examples/`:
+
+- `video_player.c` — SDL2 player with stereo view modes (full / left / right / anaglyph)
+- `imgui_stream.cpp` — Dear ImGui app with connect/disconnect, eye selection, and live stats
+
 ---
 
 ## Memory ownership summary
@@ -423,6 +569,8 @@ Returns the best available H.264 encoder name for the host (NVENC, VA-API, Video
 | `adamo_liveliness_sub_t *` | C caller | `adamo_liveliness_sub_free` |
 | `adamo_robot_t *` | C caller (until `adamo_robot_run`) | `adamo_robot_free` |
 | `adamo_video_track_t *` | C caller | `adamo_video_track_free` |
+| `adamo_video_receiver_t *` | C caller | `adamo_video_receiver_free` |
+| `adamo_video_frame_t *` | C caller | `adamo_video_frame_free` |
 | `const char *` from `adamo_session_org` / `adamo_last_error` / `adamo_detect_encoder` | borrowed | do not free |
 
 ---
@@ -477,6 +625,8 @@ namespace adamo {
 #ifdef ADAMO_HAS_VIDEO
     class VideoTrack;                    // move-only RAII
     class Robot;                         // move-only RAII
+    class VideoReceiver;                 // move-only RAII
+    class VideoFrame;                    // move-only RAII, owns the pixels
     inline std::string_view detect_encoder();
 #endif
 }
@@ -597,6 +747,48 @@ class VideoTrack {
 public:
     void send(const uint8_t *data, std::size_t len);
 };
+```
+
+### Video — `VideoReceiver` and `VideoFrame`
+
+```cpp
+class VideoReceiver {
+public:
+    static VideoReceiver open(const Session &session,
+                              const std::string &robot,
+                              const std::string &track);
+    static VideoReceiver open(const Session &session,
+                              const std::string &robot,
+                              const std::string &track,
+                              const adamo_video_receive_options_t &opts);
+
+    std::optional<VideoFrame> recv(std::uint64_t timeout_ms = 0);  // nullopt = timeout
+    std::optional<VideoFrame> try_recv();                          // nullopt = no frame yet
+
+    void request_keyframe();
+    std::optional<bool> stereo() const;    // nullopt until track metadata arrives
+    adamo_video_receiver_stats_t stats() const;
+};
+
+class VideoFrame {
+public:
+    const std::uint8_t *data() const;      // tightly packed RGBA8888
+    std::size_t   size() const;            // width() * height() * 4
+    std::uint32_t width() const;
+    std::uint32_t height() const;
+    std::uint64_t seq() const;
+    std::uint64_t capture_unix_us() const; // fabric clock; 0 if unstamped
+    bool          keyframe() const;
+};
+```
+
+```cpp
+auto session  = adamo::Session::open(api_key);
+auto receiver = adamo::VideoReceiver::open(session, "my-robot", "main");
+
+while (auto frame = receiver.recv(100)) {
+    upload_texture(frame->data(), frame->width(), frame->height());
+}
 ```
 
 Define `ADAMO_HAS_VIDEO` in your build to enable these — the CMake build does this automatically when `ADAMO_BUILD_VIDEO=ON`.
