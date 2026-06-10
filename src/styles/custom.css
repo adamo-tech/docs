@@ -135,8 +135,9 @@ body {
 .adamo-corner-logo {
   pointer-events: auto;
   position: fixed;
-  inset-block-start: 1rem;
-  inset-inline-start: 1.5rem;
+  inset-block-start: 1.3rem;
+  inset-inline-start: calc(var(--sl-sidebar-width) / 2);
+  transform: translateX(-50%);
   z-index: calc(var(--sl-z-index-navbar) + 1);
   display: inline-flex;
   align-items: center;
@@ -156,8 +157,8 @@ body {
 
 .adamo-corner-logo img {
   display: block;
-  width: 92px;
-  height: 16px;
+  width: 127px;
+  height: 22px;
 }
 
 .adamo-docs-nav {
