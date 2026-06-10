@@ -253,14 +253,18 @@ Either `topic` or `robot` (with optional `track`) must be provided.
 type StreamStats = {
   fps: number;           // Decoded frames per second
   kbps: number;          // Received bitrate in kilobits per second
-  jitterMs: number;      // Network jitter in milliseconds
+  jitterMs: number;      // Inter-packet transit-time jitter (EWMA, ms)
   rttMs: number;         // Round-trip time in milliseconds (from ping/pong)
   queueMs: number;       // Time a packet waits in the decode buffer (ms)
   decodeMs: number;      // Time to decode the last frame (ms)
   renderMs: number;      // Time to render the last frame (ms)
   totalPackets: number;  // Total video packets received
-  fecRecovered: number;  // Packets recovered via Reed-Solomon FEC
-  nackRecovered: number; // Packets recovered via NACK retransmission
+  fecRecovered: number;  // Packets recovered via FEC (cumulative)
+
+  // Datagram-ARQ chunk path (optional — present when the stream
+  // uses chunked datagram transport):
+  chunksRlncRecovered?: number;  // Chunk-level FEC recoveries; subset of fecRecovered
+  chunksRetransmitted?: number;  // Chunks replayed by router-side ARQ
 };
 ```
 

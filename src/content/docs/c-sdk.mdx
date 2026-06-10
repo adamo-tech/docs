@@ -33,10 +33,7 @@ Available builds:
 | `adamo-sdk-linux-x86_64`      | Ubuntu 22.04 x86_64, pub/sub only |
 | `adamo-sdk-macos-arm64-video` | macOS arm64, with video |
 | `adamo-sdk-macos-arm64`       | macOS arm64, pub/sub only |
-| `adamo-sdk-macos-x86_64-video`| macOS x86_64, with video |
-| `adamo-sdk-macos-x86_64`      | macOS x86_64, pub/sub only |
-
-Replace `latest` with a pinned version (e.g. `0.3.1`) in production.
+Replace `latest` with a pinned version (e.g. `0.1.68`) in production. Intel macOS is not currently supported.
 
 The `-video` builds need the GStreamer runtime installed on the host:
 
@@ -107,13 +104,14 @@ QUIC is the recommended default — reliable streams over a single multiplexed U
 ```c
 adamo_session_t *adamo_open_default(const char *api_key);
 adamo_session_t *adamo_open(const char *api_key, adamo_protocol_t protocol);
+adamo_session_t *adamo_open_mtls(const char *api_key, adamo_protocol_t protocol);
 void             adamo_session_free(adamo_session_t *sess);
 
 const char *adamo_session_org(const adamo_session_t *sess);     // NUL-terminated
 size_t      adamo_session_org_len(const adamo_session_t *sess); // bytes, excluding NUL
 ```
 
-`adamo_open_default` opens with the default transport. `adamo_open` is available when you need to select a specific transport. Both return `NULL` on failure. `adamo_session_free` is NULL-safe and closes the underlying connection if this was the last reference.
+`adamo_open_default` opens with the default transport. `adamo_open` is available when you need to select a specific transport. `adamo_open_mtls` additionally mints a per-session mTLS client certificate and presents it on the QUIC handshake — required once your routers enforce mTLS. All three return `NULL` on failure. `adamo_session_free` is NULL-safe and closes the underlying connection if this was the last reference.
 
 `adamo_session_org` returns a NUL-terminated C string valid for the lifetime of the session. `adamo_session_org_len` is provided for callers that prefer length-prefixed reads.
 
@@ -739,6 +737,14 @@ public:
                      std::uint32_t width, std::uint32_t height,
                      std::uint32_t fps, std::uint32_t bitrate_kbps,
                      bool stereo = false);
+
+    void attach_shm(const std::string &name, const std::string &service,
+                    std::uint32_t width, std::uint32_t height,
+                    const std::string &pixel_format,
+                    std::uint32_t fps, std::uint32_t bitrate_kbps,
+                    bool stereo = false);
+    void attach_shm(const std::string &name, const std::string &service,
+                    const VideoOptions &options);
 
     int run() &&;        // consumes the Robot; returns adamo_robot_run's int
 };

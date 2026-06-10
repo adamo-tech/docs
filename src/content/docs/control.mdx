@@ -849,27 +849,41 @@ adamo_publisher(sess, "control/joy",
 </TabItem>
 </Tabs>
 
-## Frame Safety Stats
+## Link Safety Gate
 
-Robots publish video latency and frame-age stats on `{robot}/stats/latency`. Use them as a safety gate before applying teleop commands.
+Robots publish a 1 Hz heartbeat on `{robot}/heartbeat` carrying latency stats — the network regime classified by the robot's congestion forecaster, jitter, loss rate, and queuing delay. Use it as a safety gate before applying teleop commands: stop the robot when heartbeats go stale or the regime degrades.
 
 ```python
-def on_safety(stats):
-    if stats.is_stale:
-        stop_robot()
+import time
+from adamo.stats import Regime
 
-session.watch_frame_safety("my-arm", on_safety, stale_after_ms=250)
+last_beat = time.monotonic()
+
+def on_stats(stats):
+    global last_beat
+    last_beat = time.monotonic()
+    if stats.regime is not Regime.STABLE:
+        slow_down()
+
+sub = session.watch_latency("my-arm", on_stats)
+
+# In the control loop: two missed heartbeats = stale link
+if time.monotonic() - last_beat > 2.5:
+    stop_robot()
 ```
 
 ```ts
-import { watchFrameSafety } from "@adamo/fleet";
+import { watchLatest } from "@adamo/fleet";
 
-await watchFrameSafety(session, org, "my-arm", ({ isStale }) => {
-  if (isStale) stopRobot();
-}, { staleAfterMs: 250 });
+let lastBeat = performance.now();
+const hb = await watchLatest(session, `adamo/${org}/my-arm/heartbeat`);
+hb.onMessage(() => { lastBeat = performance.now(); });
+
+// In the control loop: two missed heartbeats = stale link
+if (performance.now() - lastBeat > 2500) stopRobot();
 ```
 
-For lower-level dashboards, subscribe to video latency stats directly and read `frameAgeMs`, `maxFrameAgeMs`, `droppedFrames`, and `channelLag`.
+For dashboards, the parsed stats expose `regime`, `jitter_ms`, `garch_sigma_ms`, `target_bitrate_kbps`, `loss_rate`, and `queuing_delay_ms` — see the per-SDK `LatencyStats` reference.
 
 See [Building Your Own Operator](/operator/) for the publisher side end-to-end.
 

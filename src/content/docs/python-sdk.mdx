@@ -52,7 +52,7 @@ adamo.connect(
     api_key: str | None = None,
     token: str | None = None,
     org_id: str | None = None,
-    api_url: str = "https://q14iirks46.execute-api.eu-west-2.amazonaws.com",
+    api_url: str = "https://api.adamohq.com",
     protocol: str = "quic",
     mtls: bool = False,
 ) -> Session
@@ -191,6 +191,22 @@ session.on_liveliness(
 
 Watch for liveliness changes. The callback fires with `(key, is_alive)` whenever a token appears or disappears. `history=True` delivers the current set of live tokens up front so the handler sees them on subscribe.
 
+### `Session.fabric_now_us`
+
+```python
+session.fabric_now_us() -> int
+```
+
+Microseconds since the Unix epoch on the Adamo fabric clock. Until the first time sync completes, this falls back to the local wall clock.
+
+### `Session.fabric_synced`
+
+```python
+session.fabric_synced() -> bool
+```
+
+`True` once the first fabric time sync has completed (typically under 100 ms after connect).
+
 ### `Session.close`
 
 ```python
@@ -313,20 +329,22 @@ robot.video(
     *,
     width: int = 1280,
     height: int = 720,
-    pixel_format: str = "BGRA",
+    pixel_format: str,            # required — raw buffers carry no layout
     codec: str = "h264",
     encoder: str | None = None,
     bitrate_kbps: int = 2000,
+    adaptive_bitrate: bool = True,
+    min_bitrate_kbps: int | None = None,
+    max_bitrate_kbps: int | None = None,
+    bitrate_priority: float = 1.0,
     fps: int = 30,
+    backend: str | None = None,   # "gstreamer" or "hw_pipeline"
     keyframe_distance: float = 2.0,
     stereo: bool = False,
-    intrinsics: list[float] | None = None,
-    extrinsics: list[float] | None = None,
-    depth_for: str | None = None,
 ) -> VideoTrack
 ```
 
-Create a track whose frames you push from Python. Returns a `VideoTrack`; call `.send(frame)` with a numpy array (or bytes-like). The encoder pipeline auto-starts on the first `send()` if you haven't called `robot.run()` yourself.
+Create a track whose frames you push from Python. Returns a `VideoTrack`; call `.send(frame)` with a numpy array (or bytes-like). The encoder pipeline auto-starts on the first `send()` if you haven't called `robot.run()` yourself. `pixel_format` is required and raises `ValueError` when omitted. With `adaptive_bitrate` (the default) the encoder follows the congestion forecast between `min_bitrate_kbps` and `max_bitrate_kbps`; `bitrate_priority` weights this track's share when several tracks compete.
 
 ### Pub/sub
 

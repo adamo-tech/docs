@@ -55,6 +55,16 @@ impl Session {
 
 Open an authenticated session with an explicit transport. Use `Session::open_default` unless you need to select a specific transport.
 
+### `Session::open_mtls`
+
+```rust
+impl Session {
+    pub fn open_mtls(api_key: &str, protocol: Protocol) -> Result<Self>;
+}
+```
+
+Like `Session::open`, but additionally mints a per-session mTLS client certificate and presents it on the QUIC handshake — required once your routers enforce mTLS.
+
 ### `Session::org`
 
 ```rust
@@ -212,7 +222,7 @@ pub struct PublishOptions {
 
 impl Default for PublishOptions {
     fn default() -> Self {
-        Self { priority: 128, express: false }
+        Self { priority: Priority::DATA, express: false }  // DATA = 100
     }
 }
 ```
@@ -226,12 +236,12 @@ impl Default for PublishOptions {
 pub struct PublisherOptions {
     pub priority: u8,
     pub express: bool,
-    pub reliable: bool,  // BEST_EFFORT (false) vs RELIABLE (true, default)
+    pub reliable: bool,  // BEST_EFFORT (false, default) vs RELIABLE (true)
 }
 
 impl Default for PublisherOptions {
     fn default() -> Self {
-        Self { priority: 128, express: false, reliable: true }
+        Self { priority: Priority::DATA, express: false, reliable: false }
     }
 }
 ```
