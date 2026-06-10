@@ -14,7 +14,7 @@ cargo add adamo
 cargo add adamo --features video    # video capture + caller-fed tracks
 ```
 
-Pre-built `libadamo.so` ships for `aarch64-unknown-linux-gnu`. For local dev on other targets, build `adamo-c` from source and point the build at it via `ADAMO_LIB_DIR=/path/to/dir/with/libadamo.{so,dylib}`.
+Prebuilt `libadamo` is available for `aarch64-unknown-linux-gnu` (Jetson / Ubuntu 22.04 arm64 — bundled in the crate, offline-friendly), `x86_64-unknown-linux-gnu`, and `aarch64-apple-darwin` (fetched at build time, pinned by version and sha256; requires `curl`). All prebuilts include video. Other targets can point at a local build via `ADAMO_LIB_DIR=/path/to/dir/with/libadamo.{so,dylib}`.
 
 The crate is published as two:
 

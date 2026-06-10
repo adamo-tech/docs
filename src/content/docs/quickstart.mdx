@@ -37,7 +37,7 @@ For video capture (requires iceoryx2 on the host):
 cargo add adamo --features video
 ```
 
-Currently published for `aarch64-unknown-linux-gnu` (Jetson / Ubuntu 22.04 arm64). For local dev on other hosts, build `adamo-c` from source and point at it via `ADAMO_LIB_DIR=/path/to/dir/with/libadamo.{so,dylib}`.
+Prebuilt for `aarch64-unknown-linux-gnu` (Jetson / Ubuntu 22.04 arm64), `x86_64-unknown-linux-gnu`, and `aarch64-apple-darwin` — `cargo add adamo` just works on those hosts. Other targets can point at a local `libadamo` via `ADAMO_LIB_DIR`.
 
 </TabItem>
 <TabItem label="C" icon="seti:c">
