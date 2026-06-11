@@ -42,18 +42,21 @@ Prebuilt for `aarch64-unknown-linux-gnu` (Jetson / Ubuntu 22.04 arm64), `x86_64-
 </TabItem>
 <TabItem label="C" icon="seti:c">
 
-Build and install with CMake:
+Download the prebuilt tarball for your host and extract it into a CMake-discoverable prefix:
 
 ```sh
-git clone https://github.com/adamohq/adamo-network.git
-cd adamo-network/adamo-c
-cmake -S . -B build -DADAMO_BUILD_VIDEO=ON
-cmake --build build --target install
+# Linux arm64 (Jetson / Ubuntu 22.04 aarch64), with video:
+curl -fsSL -o adamo-sdk.tar.gz \
+  https://install.adamohq.com/sdk/adamo-sdk-linux-arm64-video-latest.tar.gz
+sudo tar xzf adamo-sdk.tar.gz -C /opt
 ```
+
+Builds are also available for Linux x86_64 and macOS arm64, with and without video — see the [C SDK install section](/c-sdk/#install) for the full list and the GStreamer runtime the `-video` builds need.
 
 Then in your project's `CMakeLists.txt`:
 
 ```cmake
+list(APPEND CMAKE_PREFIX_PATH "/opt/adamo-sdk-linux-arm64-video-latest")
 find_package(Adamo REQUIRED)
 target_link_libraries(my_robot PRIVATE Adamo::adamo)
 # C++17 RAII wrapper is also available:
