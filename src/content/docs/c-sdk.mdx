@@ -425,6 +425,78 @@ void adamo_video_track_free(adamo_video_track_t *track);  // NULL-safe
 
 Push raw frames yourself. Useful for perception pipelines and custom drivers.
 
+### Video protocol
+
+Video uses the **Adamo protocol** by default — the adaptive transport that watches the link from a rolling view of QUIC stats and tunes itself frame to frame: it delivers reliably on a clean low-RTT link, and switches to forward-error-corrected datagrams once RTT rises or loss turns bursty. The simple attach functions above always use it.
+
+To pin the **legacy Adamo protocol** — plain reliable, in-order delivery — use the *configured* attach variants. Each mirrors a simple function but takes an `adamo_video_options_t` instead of positional arguments (the same struct that carries codec, bitrate, and backend choices):
+
+```c
+typedef struct adamo_video_options_t {
+    uint32_t    width;
+    uint32_t    height;
+    const char *pixel_format;       // required for caller-fed/SHM; hint for V4L2/GStreamer
+    const char *codec;              // "h264" (default), "h265"/"hevc", "av1"
+    const char *encoder;            // explicit factory; NULL = auto-detect
+    uint32_t    bitrate_kbps;
+    int32_t     adaptive_bitrate;
+    uint32_t    min_bitrate_kbps;
+    uint32_t    max_bitrate_kbps;
+    float       bitrate_priority;
+    uint32_t    fps;
+    double      keyframe_distance;
+    int32_t     stereo;
+    adamo_video_backend_t backend;
+    const char *shm_publish;        // tee raw frames to an iceoryx2 service (V4L2 only)
+    const char *reliability;        // NULL/empty/"adamo" = Adamo protocol; "legacy" = legacy
+} adamo_video_options_t;
+
+adamo_video_options_t adamo_video_options_default(void);  // sensible defaults; reliability = NULL
+
+adamo_video_track_t *adamo_robot_video_configured(
+    adamo_robot_t *robot, const char *name,
+    const adamo_video_options_t *opts);                   // NULL = defaults
+
+int32_t adamo_robot_attach_video_v4l2_configured(
+    adamo_robot_t *robot, const char *name, const char *device,
+    const adamo_video_options_t *opts);
+
+int32_t adamo_robot_attach_video_shm_configured(
+    adamo_robot_t *robot, const char *name, const char *service,
+    const adamo_video_options_t *opts);
+
+int32_t adamo_robot_attach_video_gst_configured(
+    adamo_robot_t *robot, const char *name, const char *pipeline,
+    const adamo_video_options_t *opts);
+```
+
+`reliability` selects the protocol:
+
+| Value | Protocol |
+|-------|----------|
+| `NULL` / `""` / `"adamo"` | **Adamo protocol** — adaptive, the default. |
+| `"legacy"`                | **Legacy Adamo protocol** — reliable, in-order delivery. |
+
+An unrecognised value fails the attach with `ADAMO_ERR_INVALID` (read `adamo_last_error()` for the accepted list).
+
+```c
+adamo_video_options_t opts = adamo_video_options_default();
+opts.pixel_format = "BGRA";
+opts.reliability  = "legacy";   // pin the legacy Adamo protocol for this track
+adamo_robot_attach_video_shm_configured(robot, "main", "camera/front", &opts);
+```
+
+The C++ wrapper exposes the same field on `adamo::VideoOptions` (empty string = the Adamo protocol):
+
+```cpp
+adamo::VideoOptions opts;
+opts.pixel_format = "BGRA";
+opts.reliability  = "legacy";
+robot.attach_shm("main", "camera/front", opts);
+```
+
+<Aside>Pin the legacy protocol only when you have a reason to. The Adamo protocol already delivers reliably on a clean low-RTT link, and outperforms the legacy protocol once RTT rises or loss turns bursty.</Aside>
+
 ### Run
 
 ```c
