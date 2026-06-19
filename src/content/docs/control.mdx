@@ -85,11 +85,12 @@ When a viewer enters immersive VR mode on a stereo track, the headset publishes 
 | Inner topic | Payload | Description |
 |-------------|---------|-------------|
 | `/head_pose` | `geometry_msgs/msg/PoseStamped` | Headset pose |
-| `/controller/left` | `geometry_msgs/msg/PoseStamped` | Left controller |
-| `/controller/right` | `geometry_msgs/msg/PoseStamped` | Right controller |
+| `/controller/left` | `geometry_msgs/msg/PoseStamped` | Left controller grip (wrist/hold pose) |
+| `/controller/right` | `geometry_msgs/msg/PoseStamped` | Right controller grip (wrist/hold pose) |
+| `/controller/{handedness}/tip` | `geometry_msgs/msg/PoseStamped` | Controller tip — the aim pose (WebXR `targetRaySpace`) |
 | `/controller/{handedness}/joy` | `sensor_msgs/msg/Joy` | XR controller axes and buttons |
 
-The hosted UI sends XR data on `{robot}/control/cdr/xr_tracking`. Each payload is a ROS envelope whose inner topic is `/head_pose`, `/controller/{handedness}`, or `/controller/{handedness}/joy`.
+The hosted UI sends XR data on `{robot}/control/cdr/xr_tracking`. Each payload is a ROS envelope whose inner topic is `/head_pose`, `/controller/{handedness}`, `/controller/{handedness}/tip`, or `/controller/{handedness}/joy`.
 
 Save this as `adamo_xr_to_ros.py`:
 
@@ -1015,7 +1016,8 @@ Each publish contains one ROS envelope. Consumers should decode the envelope and
 | Inner topic | Type | Contents |
 |-------------|------|----------|
 | `/head_pose` | `geometry_msgs/msg/PoseStamped` | Head pose |
-| `/controller/{handedness}` | `geometry_msgs/msg/PoseStamped` | Physical controller grip pose, or hand wrist pose when hand tracking is active without a physical controller |
+| `/controller/{handedness}` | `geometry_msgs/msg/PoseStamped` | Physical controller grip pose (the wrist/hold point), or hand wrist pose when hand tracking is active without a physical controller |
+| `/controller/{handedness}/tip` | `geometry_msgs/msg/PoseStamped` | Physical controller tip — the aim pose from WebXR `targetRaySpace`. Published alongside the grip pose above: grip is where the hand holds the controller, tip is where it points. Omitted for a frame if the runtime reports no target-ray pose. |
 | `/controller/{handedness}/joy` | `sensor_msgs/msg/Joy` | XR controller axes and buttons |
 | `/hand/{handedness}` | `geometry_msgs/msg/PoseArray` | 25 hand joint poses when hand tracking is enabled |
 
