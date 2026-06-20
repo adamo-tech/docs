@@ -191,6 +191,22 @@ session.on_liveliness(
 
 Watch for liveliness changes. The callback fires with `(key, is_alive)` whenever a token appears or disappears. `history=True` delivers the current set of live tokens up front so the handler sees them on subscribe.
 
+### `Session.state_store`
+
+```python
+session.state_store(robot: str) -> StateStore
+```
+
+Declare a robot-owned [key/value store](/state/) on `{robot}/state/**`. The robot updates it; operators read with `get` / `subscribe`.
+
+### `Session.task_runner`
+
+```python
+session.task_runner(robot: str) -> TaskRunner
+```
+
+Declare a [task runner](/state/#task-runs) — a looping subtask sequence with an idle gap between reps — published on `{robot}/state/task_run`.
+
 ### `Session.fabric_now_us`
 
 ```python
@@ -269,6 +285,40 @@ subscriber.close()              # undeclares the subscription
 ```
 
 Supports the context-manager protocol.
+
+---
+
+## `StateStore`
+
+```python
+class adamo.StateStore
+```
+
+A robot-owned retained key/value store — see [Robot State](/state/).
+
+```python
+store.set(key: str, value) -> None    # dict/list/str -> JSON; bytes sent as-is
+store.get(key: str) -> bytes | None
+store.get_json(key: str)              # parsed JSON, or None
+store.delete(key: str) -> None
+```
+
+---
+
+## `TaskRunner`
+
+```python
+class adamo.TaskRunner
+```
+
+A looping subtask sequence with an idle gap between reps; publishes `{robot}/state/task_run`. See [Task Runs](/state/#task-runs).
+
+```python
+# subtasks: list of {"id", "name"} dicts or (id, name) tuples
+runner.select(task_set_id: str, name: str, subtasks) -> None
+runner.advance() -> None    # one pedal press
+runner.reset() -> None      # back to idle without counting a rep
+```
 
 ---
 

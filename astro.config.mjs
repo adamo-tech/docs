@@ -40,7 +40,7 @@ export default defineConfig({
         },
         {
           label: "Building Robots",
-          items: ["control", "data", "discovery"],
+          items: ["control", "data", "state", "discovery"],
         },
         {
           label: "Operating Robots",

@@ -1,0 +1,204 @@
+---
+title: "Robot State"
+description: "Publish robot state that operators read on demand or live, and run pedal-driven task sequences with the task runner."
+---
+
+import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
+
+A robot can publish named state that operators read — on demand or live. The robot owns the value; operators read it. State is held in memory by the robot process, so it resets when the robot restarts.
+
+Two APIs build on this:
+
+- **Shared state** — a key/value store the robot updates and operators read.
+- **Task runs** — a pedal-driven sequence of subtasks with progress and rep counting, shown in the web **Tasks** widget.
+
+## Shared State
+
+State values live under `{robot}/state/{key}`. The robot sets a value; operators read the latest with a one-shot query (request/response) or subscribe for live updates. Values are bytes — the SDK helpers below send JSON.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+
+session = adamo.connect(api_key="ak_...")
+state = session.state_store("my-arm")
+
+state.set("fork_height", {"current": 1.4})   # dict / list -> JSON
+state.set("mode", "manual")
+# state.delete("mode")
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Session;
+
+let session = Session::open_default("ak_...")?;
+let state = session.state_store("my-arm")?;
+
+state.set("fork_height", br#"{"current":1.4}"#)?;
+state.set("mode", b"manual")?;
+// state.delete("mode")?;
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_session_t *sess = adamo_open_default("ak_...");
+adamo_state_t *state = adamo_state_declare(sess, "my-arm");
+
+const char *json = "{\"current\":1.4}";
+adamo_state_set(state, "fork_height", (const uint8_t *)json, strlen(json));
+/* adamo_state_delete(state, "mode"); */
+/* adamo_state_free(state); when done */
+```
+
+</TabItem>
+</Tabs>
+
+Read it from an operator program (or another robot):
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+from adamo.operate import state_topic, state_topic_all
+
+session = adamo.connect(api_key="ak_...")
+
+# one-shot read
+for s in session.get(state_topic("my-arm", "fork_height")):
+    print(s.payload)            # b'{"current": 1.4}'
+
+# live updates for every state key
+session.subscribe(state_topic_all("my-arm"), callback=lambda s: print(s.key, s.payload))
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Session;
+use std::time::Duration;
+
+let session = Session::open_default("ak_...")?;
+for s in session.get("my-arm/state/fork_height", Duration::from_secs(2))? {
+    println!("{:?}", s.payload);
+}
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+size_t n = 0;
+adamo_sample_t **replies = adamo_get(sess, "my-arm/state/fork_height", 2000, &n);
+for (size_t i = 0; i < n; i++) {
+    /* replies[i]->payload, replies[i]->payload_len */
+}
+adamo_get_replies_free(replies, n);
+```
+
+</TabItem>
+</Tabs>
+
+## Task Runs
+
+For data collection a robot often runs an ordered list of subtasks over and over — flatten, fold the left side, fold the right side — advancing on a foot pedal, then looping. A **task runner** owns that cursor: it tracks the active subtask, counts reps, and returns to an **idle** gap when the set completes. It publishes the run on `{robot}/state/task_run`.
+
+Each pedal press is one `advance`:
+
+```text
+idle → subtask 1 → subtask 2 → … → subtask N → idle (rep++) → subtask 1 → …
+```
+
+`select` loads a set and parks at idle. Completing the last subtask returns to idle and increments the rep, so there is always a gap between runs. Wire your pedal to `advance` — the runner does the rest.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+
+session = adamo.connect(api_key="ak_...")
+runner = session.task_runner("my-arm")
+
+runner.select("fold-set", "Fold clothes", [
+    {"id": "s1", "name": "Flatten"},
+    {"id": "s2", "name": "Fold left"},
+    {"id": "s3", "name": "Fold right"},
+])
+
+# Wire your pedal (USB HID, GPIO, …) to advance:
+def on_pedal():
+    runner.advance()
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Session;
+
+let session = Session::open_default("ak_...")?;
+let runner = session.task_runner("my-arm")?;
+
+runner.select("fold-set", "Fold clothes", &[
+    ("s1", "Flatten"),
+    ("s2", "Fold left"),
+    ("s3", "Fold right"),
+])?;
+
+// On each pedal press:
+runner.advance()?;
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_task_runner_t *run = adamo_task_runner_declare(sess, "my-arm");
+
+const char *ids[]   = {"s1", "s2", "s3"};
+const char *names[] = {"Flatten", "Fold left", "Fold right"};
+adamo_task_runner_select(run, "fold-set", "Fold clothes", ids, names, 3);
+
+/* On each pedal press: */
+adamo_task_runner_advance(run);
+/* adamo_task_runner_reset(run);  return to idle without counting a rep */
+/* adamo_task_runner_free(run);   when done */
+```
+
+</TabItem>
+</Tabs>
+
+The web **Tasks** widget reads `{robot}/state/task_run` and renders the subtask list with the active one highlighted and the rep count — the operator picks which set to run there. You can also read the document directly.
+
+### The published document
+
+`{robot}/state/task_run` is UTF-8 JSON:
+
+```json
+{
+  "task_set_id": "fold-set",
+  "name": "Fold clothes",
+  "current_index": 2,
+  "rep": 7,
+  "subtasks": [
+    { "id": "s1", "name": "Flatten",   "status": "done" },
+    { "id": "s2", "name": "Fold left", "status": "done" },
+    { "id": "s3", "name": "Fold right","status": "active" }
+  ]
+}
+```
+
+`current_index` is `null` when idle (between reps). Each subtask `status` is `pending`, `active`, or `done`.
+
+<Aside type="note">
+Task definitions (the sets and their subtasks) are normally created in the web app or over the task REST API — see [Receiving Control → Managing tasks programmatically](/control/#managing-tasks-programmatically). The task runner here is the runtime side: it sequences whatever subtasks you hand `select`.
+</Aside>

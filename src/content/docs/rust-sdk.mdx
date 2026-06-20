@@ -170,6 +170,22 @@ where
 
 Watch for liveliness changes. The callback fires with `(prefix-stripped key, is_alive)` whenever a token appears or disappears. `history=true` delivers the current set up front.
 
+### `Session::state_store`
+
+```rust
+pub fn state_store(&self, robot: &str) -> Result<StateStore<'_>>;
+```
+
+Declare a robot-owned [key/value store](/state/) on `{robot}/state/**`. The robot updates it; operators read with `get` / `subscribe`.
+
+### `Session::task_runner`
+
+```rust
+pub fn task_runner(&self, robot: &str) -> Result<TaskRunner<'_>>;
+```
+
+Declare a [task runner](/state/#task-runs) — a looping subtask sequence with an idle gap between reps — published on `{robot}/state/task_run`.
+
 ### `Session::relay_rtt`
 
 ```rust
@@ -292,6 +308,31 @@ pub struct CallbackSubscriber<'a> {
 ```
 
 Returned by `Session::subscribe_with`. `Send + Sync`. The callback runs on a background receive thread and stays registered until this handle is dropped.
+
+---
+
+## `StateStore<'a>`
+
+A robot-owned retained key/value store — see [Robot State](/state/). Tied to its `Session` by lifetime; dropping it stops answering reads.
+
+```rust
+pub fn set(&self, key: &str, value: &[u8]) -> Result<()>;
+pub fn get(&self, key: &str) -> Result<Option<Vec<u8>>>;
+pub fn delete(&self, key: &str) -> Result<()>;
+```
+
+---
+
+## `TaskRunner<'a>`
+
+A looping subtask sequence with an idle gap between reps; publishes `{robot}/state/task_run`. See [Task Runs](/state/#task-runs).
+
+```rust
+// subtasks: &[(id, name)] in order
+pub fn select(&self, task_set_id: &str, name: &str, subtasks: &[(&str, &str)]) -> Result<()>;
+pub fn advance(&self) -> Result<()>;   // one pedal press
+pub fn reset(&self) -> Result<()>;     // back to idle without counting a rep
+```
 
 ---
 

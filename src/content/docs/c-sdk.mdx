@@ -328,6 +328,37 @@ Watch for liveliness changes. The callback fires with `(key, 1)` when a token ap
 
 ---
 
+## Robot state
+
+```c
+adamo_state_t *adamo_state_declare(const adamo_session_t *sess, const char *robot);
+
+int32_t adamo_state_set(const adamo_state_t *state, const char *key,
+                        const uint8_t *payload, size_t payload_len);
+int32_t adamo_state_get(const adamo_state_t *state, const char *key,
+                        uint8_t **out_payload, size_t *out_len);  // out NULL/0 if unset
+int32_t adamo_state_delete(const adamo_state_t *state, const char *key);
+void adamo_state_bytes_free(uint8_t *payload, size_t payload_len);
+void adamo_state_free(adamo_state_t *state);
+```
+
+A robot-owned retained key/value store on `{robot}/state/**` — the robot sets values; operators read them with `adamo_get` on `{robot}/state/{key}`. `adamo_state_get` reads the store's own latest value; free its buffer with `adamo_state_bytes_free`. See [Robot State](/state/).
+
+## Task runner
+
+```c
+adamo_task_runner_t *adamo_task_runner_declare(const adamo_session_t *sess, const char *robot);
+
+int32_t adamo_task_runner_select(const adamo_task_runner_t *runner,
+                                 const char *task_set_id, const char *name,
+                                 const char *const *ids, const char *const *names, size_t count);
+int32_t adamo_task_runner_advance(const adamo_task_runner_t *runner);  // one pedal press
+int32_t adamo_task_runner_reset(const adamo_task_runner_t *runner);    // back to idle, no rep
+void adamo_task_runner_free(adamo_task_runner_t *runner);
+```
+
+A looping subtask sequence with an idle gap between reps, published on `{robot}/state/task_run`. `ids` / `names` are parallel arrays of `count` strings. Wire your pedal to `adamo_task_runner_advance`. See [Task Runs](/state/#task-runs).
+
 ## Fabric time
 
 ```c
