@@ -44,7 +44,7 @@ export default defineConfig({
         },
         {
           label: "Operating Robots",
-          items: ["web-interface", "operator"],
+          items: ["web-interface", "direct-connection", "operator"],
         },
         {
           label: "SDK References",

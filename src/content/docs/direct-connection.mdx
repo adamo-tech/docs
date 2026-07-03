@@ -1,0 +1,103 @@
+---
+title: "Direct Connection (P2P)"
+description: "Lower-latency video by connecting the browser straight to the robot, skipping the relay"
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+By default, video travels **browser → Adamo router → robot**. A direct connection (peer-to-peer) sends it **straight between the browser and the robot** over WebTransport, cutting out the router hop for lower latency.
+
+It's **additive and automatic**: the browser uses the direct path when one is available and silently falls back to the relay when it isn't — so nothing breaks, you just get lower latency where the network allows it.
+
+## When it's used
+
+A direct connection is used only when **all** of these hold — otherwise the session stays on the relay, which always works:
+
+- **The robot opts in** to serving P2P (see below). Robots don't serve it by default.
+- **A direct network path exists** between your browser and the robot: the same LAN, the same [Tailscale](https://tailscale.com) tailnet, or a robot with a publicly reachable IP. Robots behind symmetric CGNAT (for example Starlink) usually can't be reached directly and stay on the relay.
+- **You're on Chrome / a Chromium browser.** The direct path pins a self-signed certificate, which only Chromium supports; Safari and Firefox fall back to the relay.
+
+## Enable it on the robot
+
+The robot has to opt in. Add one call to the robot you already have (see [Quickstart](/quickstart/)):
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm", p2p=True)
+robot.attach_video("main", device="/dev/video0")
+robot.run()
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Robot;
+
+fn main() -> adamo::Result<()> {
+    let mut robot = Robot::new_default("ak_...", Some("my-arm"))?;
+    robot.enable_p2p(443)?; // 0 → default port 443
+    robot.attach_v4l2("main", "/dev/video0", 1280, 720, 30, 4000, false)?;
+    robot.run()
+}
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-arm");
+adamo_robot_enable_p2p(robot, 443); // 0 → default port 443
+// ... attach video ...
+adamo_robot_run(robot);
+```
+
+</TabItem>
+<TabItem label="Config / CLI" icon="seti:shell">
+
+If you run the `adamo-network` binary against a YAML config, pass `--p2p` (and optionally `--p2p-port`, default 443):
+
+```sh
+adamo-network --config robot.yaml --p2p
+```
+
+Or set it in the config file:
+
+```yaml
+p2p: true
+p2p_port: 443
+```
+
+</TabItem>
+</Tabs>
+
+The P2P listener is additive — the robot keeps its normal relay connection, so operators who can't reach it directly still see video over the relay.
+
+## Use it in the browser
+
+Nothing to configure. Open the robot on [operate.adamohq.com](https://operate.adamohq.com) in Chrome and it connects directly when it can.
+
+- Chrome may show a one-time **"allow local network access"** prompt the first time — click **Allow** (it persists for the site).
+- To confirm you're direct, open the [Control Panel](/web-interface/#control-panel) latency breakdown: the path shows **`you ↔ robot (direct)`** instead of the router hops.
+
+## Best results: Tailscale
+
+The most reliable way to get direct connections across different networks is to put **both the robot and the machine running your browser on the same [Tailscale](https://tailscale.com) tailnet**. The robot then advertises its tailnet address as a candidate, and the connection works **regardless of NAT** — including symmetric CGNAT / Starlink, where a raw direct connection can't be established. The robot must be reachable on its P2P port over the tailnet's ACLs.
+
+## Force the relay
+
+Direct connections fall back to the relay automatically, but you can also force relay-only for a browser session — run this in the browser console and reload:
+
+```js
+localStorage.setItem('adamo_p2p', '0')
+```
+
+## Notes
+
+- Direct connections are **authenticated and org-scoped**, and teleop minutes are **metered**, exactly like the relay.
+- If a direct connection drops mid-session, video continues over the relay.
+- P2P carries **video** (and teleop) directly; discovery, fleet presence, and the robot list still go through the Adamo network as usual.
