@@ -7,30 +7,95 @@ import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
 
 A robot becomes useful when it does something with the input it receives. There are two sources of control:
 
-1. **operate.adamohq.com** — gamepad and VR input from the hosted operator, published as CDR-encoded payloads on `control/joy`, `head_pose`, and the controller poses.
+1. **operate.adamohq.com** — gamepad and VR input from the hosted operator, published as ROS envelopes containing CDR-encoded payloads on `control/joy` and `control/cdr/xr_tracking`.
 2. **Your own custom operator** — a teleop program you wrote yourself, publishing whatever topics and payload format you like (typically JSON). See [Building Your Own Operator](/operator/).
 
 For both, the SDK primitive is the same: subscribe to a key expression and react to incoming samples.
 
 ## Gamepad from operate.adamohq.com
 
-The web app publishes a Joy message to `{robot}/control/joy` whenever the gamepad changes. The wire format is CDR.
+The web app publishes a Joy message to `{robot}/control/joy` whenever the gamepad changes. The payload is a ROS envelope whose inner payload is a CDR-encoded `sensor_msgs/msg/Joy`.
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
 ```python
+import struct
+
 import adamo
-from pycdr2 import CdrReader  # pip install pycdr2
+
+
+def decode_ros_envelope(payload: bytes):
+    offset = 0
+    topic_len = struct.unpack_from(">I", payload, offset)[0]
+    offset += 4
+    topic = payload[offset : offset + topic_len].decode("utf-8")
+    offset += topic_len
+
+    type_len = struct.unpack_from(">I", payload, offset)[0]
+    offset += 4
+    type_name = payload[offset : offset + type_len].decode("utf-8")
+    offset += type_len
+
+    return topic, type_name, payload[offset:]
+
+
+class MinimalCdrReader:
+    def __init__(self, payload: bytes):
+        if len(payload) < 4 or payload[:2] != b"\x00\x01":
+            raise ValueError("expected little-endian CDR payload")
+        self.payload = payload
+        self.offset = 4
+        self.payload_start = 4
+
+    def align(self, size: int):
+        relative = self.offset - self.payload_start
+        self.offset += (size - (relative % size)) % size
+
+    def read_i32(self) -> int:
+        self.align(4)
+        value = struct.unpack_from("<i", self.payload, self.offset)[0]
+        self.offset += 4
+        return value
+
+    def read_u32(self) -> int:
+        self.align(4)
+        value = struct.unpack_from("<I", self.payload, self.offset)[0]
+        self.offset += 4
+        return value
+
+    def read_f32(self) -> float:
+        self.align(4)
+        value = struct.unpack_from("<f", self.payload, self.offset)[0]
+        self.offset += 4
+        return value
+
+    def read_string(self) -> str:
+        length = self.read_u32()  # includes null terminator
+        value = self.payload[self.offset : self.offset + length - 1].decode("utf-8")
+        self.offset += length
+        return value
+
+
+def decode_joy(cdr_payload: bytes):
+    reader = MinimalCdrReader(cdr_payload)
+    reader.read_i32()      # header.stamp.sec
+    reader.read_u32()      # header.stamp.nanosec
+    reader.read_string()   # header.frame_id
+
+    axes = [reader.read_f32() for _ in range(reader.read_u32())]
+    buttons = [reader.read_i32() for _ in range(reader.read_u32())]
+    return axes, buttons
 
 robot = adamo.Robot(api_key="ak_...", name="my-arm")
 
 @robot.on("my-arm", "control/joy", decode=None)
 def on_joy(payload: bytes):
-    rdr = CdrReader(payload)
-    rdr.read_header()                        # Joy message header
-    axes    = list(rdr.read_float32_array())
-    buttons = list(rdr.read_int32_array())
+    topic, type_name, cdr_payload = decode_ros_envelope(payload)
+    if topic != "/joy" or type_name != "sensor_msgs/msg/Joy":
+        return
+
+    axes, buttons = decode_joy(cdr_payload)
     # axes[0..1] = left stick X/Y, axes[2..3] = right stick X/Y, etc.
     drive(axes[0], axes[1])
 
@@ -46,14 +111,129 @@ use adamo::Session;
 fn main() -> adamo::Result<()> {
     let session = Session::open_default("ak_...")?;
     let _sub = session.subscribe_with("my-arm/control/joy", |sample| {
-        // sample.payload is a CDR-encoded Joy message.
-        // Decode with the `cdr-encoding` crate (or your own decoder).
-        if let Ok(joy) = cdr_encoding::deserialize::<JoyMsg>(&sample.payload) {
+        // sample.payload is a ROS envelope. Strip it before decoding CDR.
+        let Ok((topic, type_name, cdr_payload)) = decode_ros_envelope(&sample.payload) else {
+            return;
+        };
+        if topic != "/joy" || type_name != "sensor_msgs/msg/Joy" {
+            return;
+        }
+
+        // The helper below decodes the Joy fields used here.
+        if let Ok(joy) = decode_joy_cdr(cdr_payload) {
             drive(joy.axes[0], joy.axes[1]);
         }
     })?;
     std::thread::park();
     Ok(())
+}
+
+fn decode_ros_envelope(data: &[u8]) -> Result<(&str, &str, &[u8]), &'static str> {
+    if data.len() < 8 {
+        return Err("payload too short");
+    }
+
+    let mut offset = 0;
+    let topic_len = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+    offset += 4;
+    if offset + topic_len + 4 > data.len() {
+        return Err("bad topic length");
+    }
+    let topic = std::str::from_utf8(&data[offset..offset + topic_len]).map_err(|_| "bad topic")?;
+    offset += topic_len;
+
+    let type_len = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+    offset += 4;
+    if offset + type_len > data.len() {
+        return Err("bad type length");
+    }
+    let type_name = std::str::from_utf8(&data[offset..offset + type_len]).map_err(|_| "bad type")?;
+    offset += type_len;
+
+    Ok((topic, type_name, &data[offset..]))
+}
+
+struct JoyMsg {
+    axes: Vec<f32>,
+    buttons: Vec<i32>,
+}
+
+struct MinimalCdrReader<'a> {
+    data: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> MinimalCdrReader<'a> {
+    fn new(data: &'a [u8]) -> Result<Self, &'static str> {
+        if data.len() < 4 || data[0] != 0x00 || data[1] != 0x01 {
+            return Err("expected little-endian CDR payload");
+        }
+        Ok(Self { data, offset: 4 })
+    }
+
+    fn align(&mut self, size: usize) {
+        let relative = self.offset - 4;
+        self.offset += (size - (relative % size)) % size;
+    }
+
+    fn take<const N: usize>(&mut self) -> Result<[u8; N], &'static str> {
+        if self.offset + N > self.data.len() {
+            return Err("CDR payload ended early");
+        }
+        let bytes = self.data[self.offset..self.offset + N].try_into().unwrap();
+        self.offset += N;
+        Ok(bytes)
+    }
+
+    fn read_i32(&mut self) -> Result<i32, &'static str> {
+        self.align(4);
+        Ok(i32::from_le_bytes(self.take()?))
+    }
+
+    fn read_u32(&mut self) -> Result<u32, &'static str> {
+        self.align(4);
+        Ok(u32::from_le_bytes(self.take()?))
+    }
+
+    fn read_f32(&mut self) -> Result<f32, &'static str> {
+        self.align(4);
+        Ok(f32::from_le_bytes(self.take()?))
+    }
+
+    fn read_string(&mut self) -> Result<&'a str, &'static str> {
+        let len = self.read_u32()? as usize;
+        if len == 0 {
+            return Ok("");
+        }
+        if self.offset + len > self.data.len() {
+            return Err("CDR string ended early");
+        }
+        let value = std::str::from_utf8(&self.data[self.offset..self.offset + len - 1])
+            .map_err(|_| "bad CDR string")?;
+        self.offset += len;
+        Ok(value)
+    }
+}
+
+fn decode_joy_cdr(data: &[u8]) -> Result<JoyMsg, &'static str> {
+    let mut reader = MinimalCdrReader::new(data)?;
+    let _stamp_sec = reader.read_i32()?;
+    let _stamp_nsec = reader.read_u32()?;
+    let _frame_id = reader.read_string()?;
+
+    let axes_len = reader.read_u32()? as usize;
+    let mut axes = Vec::with_capacity(axes_len);
+    for _ in 0..axes_len {
+        axes.push(reader.read_f32()?);
+    }
+
+    let buttons_len = reader.read_u32()? as usize;
+    let mut buttons = Vec::with_capacity(buttons_len);
+    for _ in 0..buttons_len {
+        buttons.push(reader.read_i32()?);
+    }
+
+    Ok(JoyMsg { axes, buttons })
 }
 ```
 
@@ -64,7 +244,12 @@ fn main() -> adamo::Result<()> {
 adamo_session_t *sess = adamo_open_default("ak_...");
 
 void on_joy(const adamo_sample_t *s, void *user) {
-    /* decode CDR Joy message from s->payload, s->payload_len */
+    /*
+     * s->payload is a ROS envelope:
+     *   u32be topic_len, topic bytes, u32be type_len, type bytes, CDR payload.
+     * Strip the envelope, verify topic="/joy" and type="sensor_msgs/msg/Joy",
+     * then decode the remaining CDR bytes as sensor_msgs/msg/Joy.
+     */
 }
 
 adamo_cb_sub_t *sub = adamo_subscribe_cb(
@@ -180,39 +365,7 @@ python3 adamo_xr_to_ros.py --api-key ak_... --robot my-arm
 ```
 
 It republishes to ROS topics such as `/adamo/xr/head_pose`, `/adamo/xr/controller/left`, and `/adamo/xr/controller/left/joy`.
-
-<Tabs syncKey="lang">
-<TabItem label="Python" icon="seti:python">
-
-```python
-@robot.on("my-arm", "head_pose", decode=None)
-def on_head(payload: bytes):
-    pose = decode_pose_stamped(payload)
-    update_head_tracking(pose)
-```
-
-</TabItem>
-<TabItem label="Rust" icon="seti:rust">
-
-```rust
-let _head = session.subscribe_with("my-arm/head_pose", |sample| {
-    let pose: PoseStamped = cdr_encoding::deserialize(&sample.payload).unwrap();
-    update_head_tracking(pose);
-})?;
-```
-
-</TabItem>
-<TabItem label="C" icon="seti:c">
-
-```c
-void on_head(const adamo_sample_t *s, void *user) {
-    /* decode CDR PoseStamped */
-}
-adamo_subscribe_cb(sess, "my-arm/head_pose", on_head, NULL);
-```
-
-</TabItem>
-</Tabs>
+If you do not run ROS, subscribe to `{robot}/control/cdr/xr_tracking`, strip the ROS envelope with `decode_ros_envelope`, then dispatch by the inner `topic` and decode the remaining `cdr_payload` with your CDR decoder.
 
 ## Custom Control Topics
 
