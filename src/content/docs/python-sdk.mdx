@@ -358,7 +358,8 @@ robot.attach_video(
     device: str | int | None = None,
     shm: str | None = None,
     pipeline: str | None = None,         # legacy GStreamer path; deprecated
-    ros: str | None = None,              # legacy ROS bridge; deprecated
+    ros: str | None = None,              # ROS 2 topic (see the ROS 2 guide)
+    ros_format: str | None = None,       # override inferred handling, e.g. "ros_h264"
     codec: str = "h264",
     encoder: str | None = None,
     bitrate_kbps: int = 2000,
@@ -371,7 +372,18 @@ robot.attach_video(
 ) -> None
 ```
 
-Attach a track driven by the SDK pipeline. Pass exactly one of `device=` (V4L2 device path or index), `shm=` (iceoryx2 service name produced by another process), `pipeline=` (legacy GStreamer string — deprecated), or `ros=` (legacy ROS topic — deprecated).
+Attach a track driven by the SDK pipeline. Pass exactly one of `device=` (V4L2 device path or index), `shm=` (iceoryx2 service name produced by another process), `ros=` (ROS 2 topic — see [ROS 2](/ros/)), or `pipeline=` (legacy GStreamer string — deprecated).
+
+```python
+robot.enable_ros_control(
+    *,
+    domain_id: int = 0,                       # 0 honors ROS_DOMAIN_ID
+    control_channels: list[str] | None = None,
+    control_topics: list[str] | None = None,  # allowlist; None = unrestricted
+) -> None
+```
+
+Fan operator control out to the local ROS 2 graph as native topics — see [ROS 2](/ros/#operator-control-as-ros-topics). Requires a ROS-enabled build.
 
 ```python
 robot.video(

@@ -1,0 +1,141 @@
+---
+title: "ROS 2"
+description: "Stream ROS camera topics as video tracks and receive operator control as native ROS topics"
+---
+
+import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
+
+Adamo connects to a robot's ROS 2 graph directly. Two things come out of that:
+
+1. **Video** — a camera topic (`sensor_msgs/Image`, `CompressedImage`, or an H.264 stream) becomes a video track, hardware-encoded on the robot and streamed like any other camera.
+2. **Control** — operator input (gamepad, VR) arrives as native ROS 2 topics that any local node can subscribe to, with no Adamo code in your control stack.
+
+The bridge runs inside the robot process and speaks DDS to the local graph, so it works with stock ROS 2 (Humble, Jazzy, Kilted) using the default middleware. It needs no `rclpy`, no changes to your ROS installation, and no extra process. Nothing ROS-formatted leaves the robot: camera frames are encoded before they are published, and operator input arrives already in ROS wire format.
+
+## Requirements
+
+- ROS 2 nodes using a DDS middleware (the default on every current distro).
+- A ROS-enabled Adamo build.
+- `ROS_DOMAIN_ID` is honored; pass `domain_id` to override it.
+
+## Camera topics as video tracks
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+robot.attach_video(
+    "front",
+    ros="/camera/color/image_raw",
+    bitrate_kbps=4000,
+    fps=30,
+)
+robot.run()
+```
+
+</TabItem>
+<TabItem label="Config file">
+
+```yaml
+robot_name: "my-arm"
+api_key: "ak_..."
+
+video_tracks:
+  - name: "front"
+    source_type: "ros"
+    ros_topic: "/camera/color/image_raw"
+    encoder: "nvh264enc"
+    bitrate: 4000
+    fps: 30
+```
+
+</TabItem>
+</Tabs>
+
+The topic name selects the input handling:
+
+| Topic carries | Handling |
+| --- | --- |
+| Raw `sensor_msgs/Image` (`rgb8`, `bgra8`, `mono8`, `nv12`, …) | Encoded directly |
+| `sensor_msgs/CompressedImage` (JPEG, topics ending in `/compressed`) | Decoded, then encoded |
+| H.264 / `ffmpeg_image_transport` packets | Decoded, then re-encoded at your bitrate |
+
+If the inference picks wrong, set the type explicitly in the config file: `ros_image`, `ros_compressed_image`, `ros_h264`, `ros_h264_transcode`, `ros_ffmpeg_packet`, or `ros_ffmpeg_packet_transcode`. The non-`_transcode` H.264 variants forward the stream as-is instead of re-encoding — cheap, but bitrate and keyframes stay whatever the ROS publisher produces, so adaptive bitrate does not apply.
+
+Only topics attached to a track are read from the graph. The bridge creates a DDS reader when the track starts and destroys it when the track stops, so an idle Adamo integration costs your camera publishers nothing.
+
+## Operator control as ROS topics
+
+Enable the control fan-out and operator input from [operate.adamohq.com](https://operate.adamohq.com) is published into the local graph:
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+robot.enable_ros_control()
+robot.run()
+```
+
+</TabItem>
+<TabItem label="Config file">
+
+```yaml
+ros:
+  enabled: true
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-arm");
+adamo_robot_enable_ros_control(robot, 0);  /* domain_id 0 honors ROS_DOMAIN_ID */
+adamo_robot_run(robot);
+```
+
+</TabItem>
+</Tabs>
+
+Your nodes then subscribe like to any other topic:
+
+| ROS topic | Type | Source |
+| --- | --- | --- |
+| `/joy` | `sensor_msgs/msg/Joy` | Gamepad |
+| `/head_pose` | `geometry_msgs/msg/PoseStamped` | VR headset pose |
+| `/controller/{left,right}` | `geometry_msgs/msg/PoseStamped` | VR controller grip pose |
+| `/controller/{left,right}/tip` | `geometry_msgs/msg/PoseStamped` | VR controller aim pose |
+| `/controller/{left,right}/joy` | `sensor_msgs/msg/Joy` | VR controller axes and buttons |
+| `/teleop/clutch` | `std_msgs/msg/Bool` | VR clutch state |
+
+```python title="cmd_from_joy.py — plain rclpy, no Adamo imports"
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Joy
+
+rclpy.init()
+node = Node("teleop")
+node.create_subscription(Joy, "/joy", lambda msg: print(msg.axes), 10)
+rclpy.spin(node)
+```
+
+A message for a topic that no local node subscribes to is dropped on the robot — fan-out is driven by your graph's subscriptions. To additionally restrict which topics may be published at all, pass an allowlist:
+
+```python
+robot.enable_ros_control(control_topics=["/joy", "/teleop/clutch"])
+```
+
+<Aside>
+  If you hand-decoded these payloads before (see [Receiving
+  Control](/control/)), the fan-out replaces that code on ROS 2 robots: the
+  same messages arrive as native topics instead of envelopes.
+</Aside>
+
+## Notes
+
+- The bridge participates in local DDS discovery only. It does not extend your DDS domain off the robot, and remote operators cannot reach topics beyond the control fan-out.
+- One robot process runs one bridge; all ROS video tracks and the control fan-out share it.
+- Control topics follow the priority rules of the rest of the control plane — they are never queued behind video.

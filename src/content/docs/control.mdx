@@ -12,6 +12,13 @@ A robot becomes useful when it does something with the input it receives. There 
 
 For both, the SDK primitive is the same: subscribe to a key expression and react to incoming samples.
 
+<Aside>
+  On a ROS 2 robot you can skip the decoding below entirely: enable the [ROS 2
+  control fan-out](/ros/#operator-control-as-ros-topics) and the same gamepad
+  and VR messages arrive as native ROS topics (`/joy`, `/head_pose`,
+  `/controller/...`).
+</Aside>
+
 ## Gamepad from operate.adamohq.com
 
 The web app publishes a Joy message to `{robot}/control/joy` whenever the gamepad changes. The payload is a ROS envelope whose inner payload is a CDR-encoded `sensor_msgs/msg/Joy`.
