@@ -5,6 +5,18 @@ description: "Stream ROS camera topics as video tracks and receive operator cont
 
 import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
 
+<Aside type="danger" title="ROS adds latency and reduces stream reliability">
+  Every ROS video frame crosses the DDS transport as raw pixels and is
+  copied several times before it reaches the encoder, and compressed topics
+  add a full decode/re-encode step. This adds latency on every frame and
+  makes throughput depend on your ROS graph's health — a busy DDS domain,
+  QoS mismatches, or a stalled publisher all degrade the stream in ways
+  Adamo cannot correct. Use ROS inputs when the ROS graph is the only place
+  the frames exist. For production teleop, attach cameras through
+  [V4L2 or shared memory](/cameras/) instead — those paths feed the encoder
+  directly.
+</Aside>
+
 Adamo connects to a robot's ROS 2 graph directly. Two things come out of that:
 
 1. **Video** — a camera topic (`sensor_msgs/Image`, `CompressedImage`, or an H.264 stream) becomes a video track, hardware-encoded on the robot and streamed like any other camera.
