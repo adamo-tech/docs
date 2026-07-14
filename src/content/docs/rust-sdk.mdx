@@ -435,8 +435,42 @@ loop {
 
 ```rust
 #[cfg(feature = "video")]
-pub use robot::{Robot, VideoTrack, detect_encoder};
+pub use robot::{Robot, VideoBackend, VideoOptions, VideoTrack, detect_encoder};
 ```
+
+### `VideoBackend` and `VideoOptions`
+
+```rust
+pub enum VideoBackend {
+    Auto,          // choose the default for this source and host
+    GStreamer,     // force the GStreamer pipeline
+    HwPipeline,    // force the native hardware pipeline
+}
+
+pub struct VideoOptions {
+    pub width: u32,
+    pub height: u32,
+    pub pixel_format: Option<String>, // raw layout or h264/h265 input codec
+    pub codec: String,                // output: h264, h265, or av1
+    pub encoder: Option<String>,      // None = auto-detect
+    pub bitrate_kbps: u32,
+    pub adaptive_bitrate: bool,
+    pub min_bitrate_kbps: Option<u32>,
+    pub max_bitrate_kbps: Option<u32>,
+    pub bitrate_priority: f32,
+    pub fps: u32,
+    pub keyframe_distance: f64,
+    pub stereo: bool,
+    pub backend: VideoBackend,
+    pub shm_publish: Option<String>,
+    pub passthrough: bool,
+}
+```
+
+`VideoOptions::default()` produces a 1280×720, 30 fps H.264 track at
+2000 kbit/s with adaptive bitrate enabled. Builder helpers include
+`with_source_format`, `with_encoder`, `with_backend`, `with_shm_publish`, and
+`with_passthrough`.
 
 ### `Robot`
 
@@ -484,6 +518,15 @@ impl Robot {
         stereo: bool,
     ) -> Result<()>;
 
+    /// Existing SHM service with explicit input codec, output codec, encoder,
+    /// backend, and passthrough control.
+    pub fn attach_shm_with_options(
+        &mut self,
+        name: &str,
+        service: &str,
+        options: &VideoOptions,
+    ) -> Result<()>;
+
     /// Block driving the pipeline forever. Consumes self.
     pub fn run(self) -> Result<()>;
 }
@@ -495,6 +538,40 @@ impl Robot {
 one complete frame per iceoryx2 `[u8]` sample with no timestamps, headers, or
 metadata prepended. `pixel_format` must match the producer's payload layout;
 use `"mjpeg"` when each sample is a complete JPEG frame.
+
+For an encoded source, use `attach_shm_with_options`, set the source format to
+`"h264"` or `"h265"`, select the output `codec`, and leave `passthrough` false.
+Each sample must be one complete Annex-B access unit:
+
+```rust
+use adamo::{Protocol, Robot, VideoBackend, VideoOptions};
+
+let mut robot = Robot::new(&api_key, Some("my-robot"), Protocol::Quic)?;
+let options = VideoOptions {
+    width: 1920,
+    height: 1080,
+    codec: "h264".into(),
+    bitrate_kbps: 4000,
+    fps: 30,
+    backend: VideoBackend::HwPipeline,
+    passthrough: false,
+    ..VideoOptions::default()
+}
+.with_source_format("h265");
+
+robot.attach_shm_with_options(
+    "front",
+    "camera/front/encoded",
+    &options,
+)?;
+robot.run()?;
+```
+
+This decodes H.265 from shared memory and sends H.264 through Adamo. Use
+`VideoBackend::GStreamer` to force the GStreamer path. Set `passthrough: true`
+only when the input and output codecs match and no decode/re-encode is wanted.
+See [Adding Cameras: transcoding encoded shared memory](/cameras/#transcode-h264-or-h265-from-shared-memory)
+for the producer wire format and host encoder names.
 
 <Aside>The `attach_gst(...)` GStreamer pipeline path is still present in the crate but deprecated for new code; use V4L2 or shared memory instead.</Aside>
 

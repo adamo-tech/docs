@@ -1,6 +1,6 @@
 ---
 title: "Adding Cameras"
-description: "V4L2 devices, shared-memory frames, and compressed MJPEG inputs"
+description: "V4L2 devices and raw or encoded shared-memory video"
 ---
 
 import { Tabs, TabItem } from "@astrojs/starlight/components";
@@ -12,7 +12,10 @@ There are two input methods:
 1. **V4L2** — direct device capture from `/dev/videoN`. Use this for USB webcams, RealSense, and any V4L2-compatible camera.
 2. **Shared memory (iceoryx2)** — frames produced by another process on the same host (a custom driver, a perception pipeline, an external bridge), or pushed in from your own SDK code via the caller-fed `video()` track.
 
-Those sources can carry raw pixels such as `BGRA`, `NV12`, or `I420`. They can also carry compressed Motion JPEG frames by setting the source format to `mjpeg`.
+Those sources can carry raw pixels such as `BGRA`, `NV12`, or `I420`. They can
+also carry MJPEG frames or complete H.264/H.265 access units. Encoded H.264 and
+H.265 inputs can either be transcoded to the configured output codec or passed
+through unchanged.
 
 ## USB / V4L2 Cameras
 
@@ -312,6 +315,105 @@ For compressed Motion JPEG services, pass `"mjpeg"` as the pixel format.
 </TabItem>
 </Tabs>
 
+### Transcode H.264 or H.265 from shared memory
+
+Use this mode when another process already produces encoded video, but the
+codec sent through Adamo needs to be different. For example, a camera process
+can publish H.265 into shared memory while Adamo decodes it and re-encodes it as
+H.264 for the frontend.
+
+The producer and Adamo must use the same iceoryx2 service name. Each
+`[u8]` sample must contain exactly one complete **Annex-B access unit**, with no
+timestamp, size prefix, or application header prepended. Publish parameter sets
+(H.264 SPS/PPS or H.265 VPS/SPS/PPS) with keyframes so a decoder can join the
+stream. AVCC/HVCC length-prefixed samples must be converted to Annex-B first.
+
+The important options are:
+
+| Option | Meaning |
+|--------|---------|
+| Source format | The bytes in shared memory: `h264`/`avc` or `h265`/`hevc`. |
+| Output codec | The codec Adamo sends: normally `h264` or `h265`. |
+| Encoder | Optional host-specific encoder. Leave unset to auto-detect one. |
+| Passthrough | Keep `false` to decode and re-encode. Set `true` only to forward the original codec unchanged. |
+| Backend | `hw_pipeline` uses the native hardware path; `gstreamer` uses GStreamer. |
+
+#### Robot configuration
+
+```yaml title="h265-to-h264.yaml"
+robot_name: "my-robot"
+api_key: "ak_..."
+
+video_tracks:
+  - name: "front"
+    source_type: "shm"
+    shm_service: "camera/front/encoded"
+    source_format: "h265"       # input in shared memory
+    v4l2_capture_resolution: [1920, 1080]
+    fps: 30
+    encoder: "nvv4l2h264enc"    # H.264 output on Jetson
+    hw_pipeline: true
+    passthrough: false           # decode + re-encode
+    bitrate: 4000                # kbit/s
+    keyframe_distance: 2.0
+```
+
+Start the Adamo publisher, then start the process that writes access units:
+
+```sh
+adamo-network --config h265-to-h264.yaml
+```
+
+Use `vtenc_h264` on Apple Silicon, `nvh264enc` on an NVIDIA desktop GPU,
+`vah264enc` on Intel/AMD Linux, or `x264enc` for CPU encoding. On Jetson,
+`nvv4l2h264enc` selects the hardware encoder shown above. To produce H.265,
+choose the corresponding H.265 encoder and set the output codec accordingly.
+
+#### Rust SDK
+
+Install the video-enabled SDK:
+
+```sh
+cargo add adamo --features video
+```
+
+```rust
+use adamo::{Protocol, Robot, VideoBackend, VideoOptions};
+
+fn main() -> adamo::Result<()> {
+    let mut robot = Robot::new("ak_...", Some("my-robot"), Protocol::Quic)?;
+
+    let options = VideoOptions {
+        width: 1920,
+        height: 1080,
+        codec: "h264".into(),       // output sent through Adamo
+        bitrate_kbps: 4000,
+        fps: 30,
+        backend: VideoBackend::HwPipeline,
+        passthrough: false,
+        ..VideoOptions::default()
+    }
+    .with_source_format("h265");    // input in shared memory
+
+    robot.attach_shm_with_options(
+        "front",
+        "camera/front/encoded",
+        &options,
+    )?;
+    robot.run()
+}
+```
+
+`VideoBackend::GStreamer` selects the GStreamer path instead. The native
+hardware pipeline currently uses the host `ffmpeg` executable to decode
+encoded shared-memory input, so install FFmpeg and ensure it is on `PATH`.
+The GStreamer path needs the parser and decoder plugins for the input codec.
+
+To pass an encoded stream through without transcoding, set `passthrough: true`
+and make the output codec match the input. For example, H.265 passthrough uses
+`source_format: h265` and an H.265 codec/encoder tag. No decoder or encoder runs
+in passthrough mode.
+
 ### Republish SHM frames to ROS 2
 
 You can also bridge the same iceoryx2 service into ROS 2. This is useful when
@@ -476,6 +578,8 @@ adamo_video_track_send(t, frame_bytes, frame_len);
 | `YUY2`, `UYVY`                 | 2 bytes per pixel | |
 | `I420`, `NV12`                 | 1.5 bytes per pixel | Most efficient raw formats for the encoder. |
 | `MJPEG`, `MJPG`, `JPEG`, `image/jpeg` | Variable | Compressed Motion JPEG. Each source sample must contain one complete JPEG frame. Supported for V4L2, GStreamer, and consume-side SHM sources. |
+| `H264`, `AVC`, `video/h264` | Variable | One complete Annex-B H.264 access unit per SHM sample. Transcoded unless passthrough is enabled. |
+| `H265`, `HEVC`, `video/h265` | Variable | One complete Annex-B H.265 access unit per SHM sample. Transcoded unless passthrough is enabled. |
 
 MJPEG sources are decoded and re-encoded into the configured output codec. On Jetson, Adamo avoids the Jetson `nvjpegdec` path for non-16-aligned MJPEG dimensions because that decoder can corrupt the bottom of frames; the stream still uses the Jetson hardware H.264 encoder after decode.
 

@@ -480,6 +480,7 @@ typedef struct adamo_video_options_t {
     adamo_video_backend_t backend;
     const char *shm_publish;        // tee raw frames to an iceoryx2 service (V4L2 only)
     const char *reliability;        // NULL/empty/"adamo" = Adamo protocol; "legacy" = legacy
+    int32_t     passthrough;        // non-zero forwards matching H.264/H.265 unchanged
 } adamo_video_options_t;
 
 adamo_video_options_t adamo_video_options_default(void);  // sensible defaults; reliability = NULL
@@ -517,7 +518,33 @@ opts.reliability  = "legacy";   // pin the legacy Adamo protocol for this track
 adamo_robot_attach_video_shm_configured(robot, "main", "camera/front", &opts);
 ```
 
-The C++ wrapper exposes the same field on `adamo::VideoOptions` (empty string = the Adamo protocol):
+To transcode encoded shared-memory video, set `pixel_format` to the input codec,
+set `codec` to the desired output codec, and leave `passthrough` at its default
+zero value. Each shared-memory sample must contain one complete Annex-B access
+unit:
+
+```c
+adamo_video_options_t opts = adamo_video_options_default();
+opts.width          = 1920;
+opts.height         = 1080;
+opts.pixel_format   = "h265";       // input in shared memory
+opts.codec          = "h264";       // output sent through Adamo
+opts.bitrate_kbps   = 4000;
+opts.fps            = 30;
+opts.backend        = adamo_video_backend_t_ADAMO_VIDEO_BACKEND_HW_PIPELINE;
+opts.passthrough    = 0;
+
+adamo_robot_attach_video_shm_configured(
+    robot, "front", "camera/front/encoded", &opts);
+```
+
+Set `passthrough` to a non-zero value only when the input and output codecs
+match and the encoded access units should be forwarded without decoding or
+re-encoding. See [Adding Cameras: transcoding encoded shared memory](/cameras/#transcode-h264-or-h265-from-shared-memory)
+for the wire format, backend prerequisites, and encoder names.
+
+The C++ wrapper exposes `reliability` on `adamo::VideoOptions` as well (an
+empty string selects the Adamo protocol):
 
 ```cpp
 adamo::VideoOptions opts;
