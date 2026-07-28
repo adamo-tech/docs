@@ -1,0 +1,301 @@
+---
+title: "Streaming Audio"
+description: "Capture a robot microphone and stream it to operators alongside video and control"
+---
+
+import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
+
+Adamo streams audio the same way it streams cameras: you attach a named audio
+track on the robot, and it shows up for operators next to the video tracks. A
+robot can carry a microphone track and any number of camera tracks at once —
+they run on independent transports and stay loosely in sync through a shared
+capture clock, so speech lines up with the picture without you wiring anything
+together.
+
+Audio is a **robot-to-operator downlink**. The robot SDKs (Python, Rust, C/C++)
+*send* audio; the browser and the C/C++ SDK *receive* it. This mirrors video: an
+operator hears the robot, and a talk-back uplink is not part of the current
+release.
+
+<Aside type="tip">
+Audio is encoded with **Opus at 64 kbps stereo, 48 kHz, 20 ms frames** by
+default — about 1–2% of a typical video track. Unlike video, it is **not**
+adaptively downscaled under congestion: the bitrate allocator reserves audio's
+share off the top and adapts video into what remains, so speech stays
+intelligible when the link tightens.
+</Aside>
+
+## Attaching a microphone
+
+Attach an audio track before you call `run()`, exactly like a camera. The
+simplest source is `test`, a synthetic tone that needs no hardware — good for
+confirming the pipeline end to end. Swap it for a real microphone with the
+`alsa` source and a device string.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-robot")
+
+# Synthetic tone — no hardware, verifies the path:
+robot.attach_audio("mic", source_type="test")
+
+# A real ALSA microphone (prefer a plughw: device so it resamples for you):
+# robot.attach_audio("mic", source_type="alsa", device="plughw:1,0")
+
+robot.run()
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Robot;
+
+fn main() -> adamo::Result<()> {
+    let mut robot = Robot::new_default("ak_...", Some("my-robot"))?;
+
+    // Synthetic tone — no hardware, verifies the path:
+    robot.attach_audio_test("mic")?;
+
+    // A real ALSA microphone (device, bitrate_kbps, channels, sample_rate, frame_ms):
+    // robot.attach_audio_alsa("mic", Some("plughw:1,0"), 64, 2, 48_000, 20)?;
+
+    robot.run()
+}
+```
+
+Add the crate feature: `cargo add adamo --features audio`.
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-robot");
+
+// Synthetic tone — no hardware, verifies the path:
+adamo_robot_attach_audio_test(robot, "mic");
+
+// A real ALSA microphone:
+// adamo_robot_attach_audio_alsa(
+//     robot, "mic", "plughw:1,0",
+//     /* bitrate_kbps */ 64, /* channels */ 2,
+//     /* sample_rate */ 48000, /* frame_ms */ 20);
+
+adamo_robot_run(robot);
+```
+
+Build the library with `ADAMO_BUILD_AUDIO=ON` (it implies video). C++ callers use
+`robot.attach_audio_test("mic")` / `robot.attach_audio_alsa("mic", "plughw:1,0")`.
+
+</TabItem>
+</Tabs>
+
+The track publishes on `adamo/{org}/{robot}/audio/mic`. Any operator on
+[operate.adamohq.com](https://operate.adamohq.com) viewing the robot will hear it
+once they interact with the page (browsers block autoplay until a click — see
+[Operator playback](#operator-playback)).
+
+## Source types
+
+Every SDK accepts the same set of sources, selected by `source_type`:
+
+| `source_type` | What it captures | Notes |
+|---|---|---|
+| `test` | A synthetic tone | No hardware. CI and loopback checks. |
+| `auto` (default) | The platform's default input | GStreamer `autoaudiosrc` — ALSA on the robot, the OS input on a dev box. |
+| `alsa` | A specific ALSA device | Pass `device` (e.g. `"plughw:1,0"`). Prefer a `plughw:` device so ALSA resamples and reformats to Opus input for you. |
+| `pulse` | A PulseAudio / PipeWire device | Pass `device`. For workstation-robots where a sound daemon owns the device. |
+| `pipeline` | An arbitrary GStreamer source | Pass `pipeline=` — a launch string ending in raw audio. The SDK appends `audioconvert → audioresample → opusenc`. |
+
+The Rust convenience methods map to these directly:
+`attach_audio_test`, `attach_audio_alsa`, `attach_audio_gst` (a `pipeline`
+source), and `attach_audio` with `AudioOptions` for the full surface. The C SDK
+mirrors them one to one.
+
+### Channels are a ceiling, not a target
+
+`channels` is the **maximum** number of channels, not a demand. A mono
+microphone stays mono rather than being upmixed into a wasteful duplicated
+stereo pair — so the default `channels=2` is safe to leave on a mono lapel mic.
+The direct-ALSA capture path opens the device at its native channel count.
+
+## Tuning options
+
+Every knob has a working default; you rarely need more than `source_type` and
+`device`. The full option set (Python keywords shown; Rust `AudioOptions` and C
+`adamo_audio_options_t` carry the same fields):
+
+| Option | Default | Meaning |
+|---|---|---|
+| `bitrate_kbps` | `64` | Opus target bitrate. 64 kbps stereo is transparent for speech. |
+| `sample_rate` | `48000` | Capture/encode sample rate in Hz. |
+| `channels` | `2` | Channel ceiling (see above). |
+| `frame_ms` | `20` | Opus frame duration. Valid values: `2` (= 2.5 ms), `5`, `10`, `20`, `40`, `60`. Smaller is lower latency, larger is more efficient. |
+| `inband_fec` | `false` | Opus in-band FEC (LBRR). Only native consumers can decode it — browsers cannot, so it is off by default. Enable it for C-SDK-only deployments. |
+| `dtx` | `false` | Discontinuous transmission — stop sending during silence, dropping to ~1 kbps. |
+| `allow_missing` | `false` | Keep the robot running if this audio source is absent, instead of failing the attach. |
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+robot.attach_audio(
+    "mic",
+    source_type="alsa",
+    device="plughw:1,0",
+    bitrate_kbps=64,
+    channels=2,
+    sample_rate=48000,
+    frame_ms=20,
+    inband_fec=False,
+    dtx=False,
+)
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::AudioOptions;
+
+let opts = AudioOptions::default()
+    .with_source_type("alsa")
+    .with_device("plughw:1,0")
+    .with_bitrate_kbps(64)
+    .with_channels(2);
+
+robot.attach_audio("mic", &opts)?;
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_audio_options_t opts = adamo_audio_options_default();
+opts.source_type  = "alsa";
+opts.device       = "plughw:1,0";
+opts.bitrate_kbps = 64;
+opts.channels     = 2;
+
+adamo_robot_attach_audio_configured(robot, "mic", &opts);
+```
+
+</TabItem>
+</Tabs>
+
+## Operator playback
+
+### In the browser
+
+The hosted operator at [operate.adamohq.com](https://operate.adamohq.com) plays a
+robot's audio automatically once you interact with the page. Because browsers
+block audio autoplay, nothing is heard until the first click or keypress; in the
+VR view, putting the headset on (entering VR) is that gesture. A robot without an
+audio track is silently skipped — audio never delays or interferes with video.
+
+See [Web Interface](/web-interface/#audio) for the mute toggle and the audio
+stats readout.
+
+### In a custom browser UI
+
+The TypeScript SDK plays a robot's audio with the headless `<AudioStream>`
+component — mount one per robot. See the
+[TypeScript SDK audio reference](/typescript-sdk/#13-audio) for `<AudioStream>`,
+the lower-level `createAudioStream`, and the `enableAudio` option on the XR
+players.
+
+```tsx
+import { AudioStream } from "@adamo/react";
+
+// Headless — plays audio, renders nothing. Resumes on the first page gesture.
+<AudioStream robot="my-robot" track="mic" />
+```
+
+### In a native app (C / C++)
+
+The C SDK decodes an audio track to signed-16-bit PCM with `adamo_audio_receiver_*`,
+mirroring the video receiver. Native consumers get real packet-loss concealment
+(libopus PLC) that the browser cannot do. See the
+[C SDK audio reference](/c-sdk/#audio--adamo_build_audioon).
+
+```c
+adamo_audio_receiver_t *rx = adamo_audio_receiver_open(sess, "my-robot", "mic");
+for (;;) {
+    adamo_audio_frame_t *f = adamo_audio_receiver_recv(rx, 2000);
+    if (!f) continue;                 // timeout or error
+    // f->samples is f->sample_count interleaved int16 samples at f->sample_rate
+    adamo_audio_frame_free(f);
+}
+```
+
+<Aside>
+Python and Rust are **send-only** for audio, matching how they handle video —
+they capture and publish but do not decode. Consume audio from the browser or
+the C/C++ SDK.
+</Aside>
+
+## How loss is handled
+
+Audio recovers from packet loss in layers, so a dropout has to defeat several
+mechanisms before you hear it:
+
+1. **RLNC forward error correction** — repairs lost packets sub-round-trip, with
+   no retransmission request. This does the heavy lifting; audio ships with a
+   generous 50% repair rate because that overhead is trivial next to a video
+   track.
+2. **Opus in-band FEC** — a degraded copy of the previous frame, recoverable by
+   native (libopus) consumers only. Off by default because browsers can't use it.
+3. **Concealment** — when both fail, native consumers get libopus packet-loss
+   concealment (a plausibly-extrapolated frame); the browser gets silence, which
+   is an audible click. These gaps are counted in the receiver's `concealed`
+   stat so you can measure them.
+
+## Microphone hardware notes
+
+- **On a Jetson, use a USB microphone.** The onboard audio is a Tegra APE I2S
+  mesh that needs DAPM routing; a USB mic or USB audio interface is the reliable
+  path. Confirm the OS sees a capture device with `arecord -l`, and find its
+  ALSA address (the `plughw:CARD,DEVICE` string) with `arecord -L`.
+- **Verify the adapter actually has an input.** Many cheap USB "audio adapters"
+  are output-only. Check that it enumerates a microphone, not just headphones.
+- **A charge-only USB cable** will silently prevent the device from enumerating —
+  use a data cable.
+
+```sh
+arecord -l          # list capture-capable sound cards
+arecord -L          # list PCM device names, including plughw:CARD,DEV
+arecord -d 3 -f cd test.wav   # record 3 s to sanity-check the mic
+```
+
+## Availability
+
+Audio shipped across the stack. A few packaging details are worth knowing when
+you pick a build:
+
+| SDK | Audio support |
+|---|---|
+| **Python** | `attach_audio` in `adamo` 0.4.48+. The Linux aarch64 wheel (Jetson) supports every source type; the Linux x86_64 wheel supports `source_type="alsa"` (direct capture) only; the macOS wheel has no audio capture. |
+| **Rust** | The `adamo` crate 0.1.98+ with `--features audio` (implies `video`). Needs an audio-enabled `libadamo` — the published prebuilt from 0.1.98 onward carries it. |
+| **C / C++** | Build the library with CMake `-DADAMO_BUILD_AUDIO=ON` (implies `ADAMO_BUILD_VIDEO`). Guards the C++ types behind `ADAMO_HAS_AUDIO`. |
+| **TypeScript** | `@adamo/react` (`<AudioStream>`) and `@adamo/media` (`createAudioStream`, XR players). |
+
+Robots built from the standard release binary capture audio directly (no
+GStreamer runtime) from the ALSA path.
+
+## Topics
+
+An audio track uses the same key-expression convention as video, under an
+`audio/` prefix instead of `video/`:
+
+| Topic | Description |
+|---|---|
+| `adamo/{org}/{robot}/audio/{track}` | Opus frames plus FEC repair packets. |
+| `adamo/{org}/{robot}/audio/{track}/caps` | Queryable JSON: codec, sample rate, channels, frame duration, bitrate. A late-joining consumer queries this to configure its decoder. |
+| `adamo/{org}/{robot}/audio/{track}/alive` | Liveliness token — present while the track is streaming. Powers track discovery. |
+
+Robots also list their audio tracks in a separate `audio_tracks` array in the
+heartbeat payload, kept apart from the video `tracks` list.

@@ -708,6 +708,242 @@ Two complete programs ship in the SDK repository under `adamo-c/examples/`:
 
 ---
 
+## Audio — `ADAMO_BUILD_AUDIO=ON`
+
+When the library is built with the audio feature, the robot can capture and
+stream a microphone (send) and a consumer can decode a track to PCM (receive).
+`ADAMO_BUILD_AUDIO` **implies `ADAMO_BUILD_VIDEO`** — the `Robot` handle is shared
+— and defines `ADAMO_HAS_AUDIO` (which guards the C++ audio types). Audio is Opus;
+see [Streaming Audio](/audio/) for the concepts, source types, and hardware notes.
+
+```cmake
+cmake -DADAMO_BUILD_AUDIO=ON ...
+```
+
+The Opus decoder is statically vendored, so the receive side needs no system
+libopus at runtime. Direct ALSA capture (`source_type` `alsa`) links `libasound`.
+
+### Attaching a microphone (send)
+
+```c
+adamo_audio_options_t adamo_audio_options_default(void);
+
+int32_t adamo_robot_attach_audio_test(
+    adamo_robot_t *robot,
+    const char *name);                 // synthetic tone, no hardware
+
+int32_t adamo_robot_attach_audio_alsa(
+    adamo_robot_t *robot,
+    const char *name,                  // track name
+    const char *device,                // "plughw:1,0"; NULL = ALSA "default"
+    uint32_t bitrate_kbps,
+    uint8_t  channels,                 // ceiling — a mono source stays mono
+    uint32_t sample_rate,
+    uint32_t frame_ms);                // 2 (=2.5 ms), 5, 10, 20, 40, 60
+
+int32_t adamo_robot_attach_audio_gst(
+    adamo_robot_t *robot,
+    const char *name,
+    const char *pipeline);             // GStreamer source ending in raw audio
+
+int32_t adamo_robot_attach_audio_configured(
+    adamo_robot_t *robot,
+    const char *name,
+    const adamo_audio_options_t *opts);
+```
+
+Each returns `0` on success, `-1` on failure. The SDK owns capture and encoding;
+samples never cross back into C. The configured variant takes:
+
+```c
+typedef struct adamo_audio_options_t {
+    const char *source_type;    // NULL = "auto"; "alsa"|"pulse"|"pipeline"|"test"
+    const char *device;         // ALSA/Pulse device; NULL = default
+    const char *pipeline;       // GStreamer source; required for "pipeline"
+    const char *codec;          // NULL = "opus" (the only codec today)
+    uint32_t    bitrate_kbps;   // 64
+    uint32_t    sample_rate;    // 48000
+    uint8_t     channels;       // 2 — ceiling, not a target
+    uint32_t    frame_ms;       // 20
+    bool        inband_fec;     // false — only native consumers decode LBRR
+    bool        dtx;            // false — discontinuous transmission
+    bool        allow_missing;  // false
+} adamo_audio_options_t;
+```
+
+`adamo_audio_options_default()` returns Opus 64 kbps stereo, 48 kHz, 20 ms
+frames, FEC/DTX off, `auto` source. String fields are borrowed for the duration
+of the call.
+
+```c
+adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-robot");
+
+adamo_audio_options_t opts = adamo_audio_options_default();
+opts.source_type  = "alsa";
+opts.device       = "plughw:1,0";
+adamo_robot_attach_audio_configured(robot, "mic", &opts);
+
+adamo_robot_run(robot);
+```
+
+### Receiving a track (decode to PCM)
+
+`adamo_audio_receiver_*` mirrors `adamo_video_receiver_*`, delivering interleaved
+signed-16-bit PCM. Everything between the wire and your callback — depacketize,
+RLNC recovery, reorder, Opus decode, and **real packet-loss concealment** (libopus
+PLC, which the browser cannot do) — happens inside the receiver.
+
+```c
+adamo_audio_receive_options_t adamo_audio_receive_options_default(void);
+
+adamo_audio_receiver_t *adamo_audio_receiver_open(
+    const adamo_session_t *sess,
+    const char *robot,                 // robot name
+    const char *track);                // track name, e.g. "mic"
+
+adamo_audio_receiver_t *adamo_audio_receiver_open_configured(
+    const adamo_session_t *sess,
+    const char *robot,
+    const char *track,
+    const adamo_audio_receive_options_t *opts);   // NULL = defaults
+
+adamo_audio_frame_t *adamo_audio_receiver_recv(
+    const adamo_audio_receiver_t *rx,
+    uint64_t timeout_ms);              // 0 = wait forever
+adamo_audio_frame_t *adamo_audio_receiver_try_recv(const adamo_audio_receiver_t *rx);
+void adamo_audio_frame_free(adamo_audio_frame_t *frame);
+
+int32_t adamo_audio_receiver_stats(const adamo_audio_receiver_t *rx,
+                                   adamo_audio_receiver_stats_t *out);
+void adamo_audio_receiver_free(adamo_audio_receiver_t *rx);
+```
+
+```c
+typedef struct adamo_audio_frame_t {
+    const int16_t *samples;    // interleaved s16 PCM, owned by the frame
+    uintptr_t sample_count;    // total interleaved (= per_channel × channels)
+    uint32_t  sample_rate;
+    uint8_t   channels;
+    uint64_t  seq;             // monotonic per-track sequence
+    uint64_t  capture_unix_us; // capture time on the fabric clock; 0 if unstamped
+} adamo_audio_frame_t;
+
+typedef struct adamo_audio_receive_options_t {
+    uint32_t max_queued_frames;   // 0 = default (8)
+    uint32_t reorder_deadline_ms; // 0 = default (120) — head-gap hold before conceal
+} adamo_audio_receive_options_t;
+```
+
+`adamo_audio_receiver_recv` returns `NULL` on timeout (no error set) or on
+failure (`adamo_last_error()` populated); `try_recv` returns `NULL` with no error
+when nothing is ready. Frames are ~20 ms each (about 50/s). Glass-to-glass
+latency is `adamo_fabric_now_us() - f->capture_unix_us`.
+
+Minimal consumer:
+
+```c
+adamo_session_t *sess = adamo_open_default(getenv("ADAMO_API_KEY"));
+adamo_audio_receiver_t *rx = adamo_audio_receiver_open(sess, "my-robot", "mic");
+
+for (;;) {
+    adamo_audio_frame_t *f = adamo_audio_receiver_recv(rx, 2000);
+    if (!f) continue;                  // timeout; adamo_last_error() distinguishes failure
+    // f->samples: f->sample_count interleaved int16 samples at f->sample_rate.
+    // Feed an audio device, write a WAV, run VAD, ...
+    adamo_audio_frame_free(f);
+}
+```
+
+#### Stats
+
+```c
+typedef struct adamo_audio_receiver_stats_t {
+    uint64_t packets;    // source (0x0F) packets received
+    uint64_t repairs;    // RLNC repair (0x10) packets received
+    uint64_t recovered;  // packets recovered by RLNC, no retransmission
+    uint64_t concealed;  // frames filled by libopus PLC (RLNC couldn't recover)
+    uint64_t decoded;    // frames decoded and delivered (real + concealed)
+    uint64_t dropped;    // decoded frames dropped because the consumer lagged
+} adamo_audio_receiver_stats_t;
+```
+
+Two example programs ship under `adamo-c/examples/` (built when
+`ADAMO_BUILD_AUDIO=ON`):
+
+- `audio_verify.c` — attaches a `test` tone and an ALSA mic; a send smoke test
+- `audio_player.c` — opens a receiver and writes the decoded PCM to a WAV file
+
+### C++ audio — `Robot`, `AudioReceiver`, `AudioFrame`
+
+All under `#ifdef ADAMO_HAS_AUDIO`, following the C++ video shape.
+
+```cpp
+struct AudioOptions {
+    std::string source_type = "auto";      // auto | alsa | pulse | pipeline | test
+    std::optional<std::string> device;     // "plughw:1,0"
+    std::optional<std::string> pipeline;   // GStreamer source for `pipeline`
+    std::string codec = "opus";
+    std::uint32_t bitrate_kbps = 64;
+    std::uint32_t sample_rate  = 48000;
+    std::uint8_t  channels     = 2;        // ceiling — a mono source stays mono
+    std::uint32_t frame_ms     = 20;
+    bool inband_fec   = false;
+    bool dtx          = false;
+    bool allow_missing = false;
+};
+
+class Robot {
+public:
+    void attach_audio_test(const std::string &name);
+    void attach_audio_alsa(const std::string &name,
+                           std::optional<std::string> device = std::nullopt,
+                           std::uint32_t bitrate_kbps = 64,
+                           std::uint8_t  channels     = 2,
+                           std::uint32_t sample_rate  = 48000,
+                           std::uint32_t frame_ms     = 20);
+    void attach_audio_gst(const std::string &name, const std::string &pipeline);
+    void attach_audio(const std::string &name, const AudioOptions &options);
+};
+
+class AudioReceiver {                       // move-only RAII
+public:
+    static AudioReceiver open(const Session &session,
+                              const std::string &robot,
+                              const std::string &track);
+    static AudioReceiver open(const Session &session,
+                              const std::string &robot,
+                              const std::string &track,
+                              const adamo_audio_receive_options_t &opts);
+
+    std::optional<AudioFrame> recv(std::uint64_t timeout_ms = 0);  // nullopt = timeout
+    std::optional<AudioFrame> try_recv();                          // nullopt = nothing ready
+    adamo_audio_receiver_stats_t stats() const;
+};
+
+class AudioFrame {                          // move-only, owns the PCM buffer
+public:
+    const std::int16_t *samples() const;    // interleaved s16
+    std::size_t   count() const;            // per_channel × channels()
+    std::uint32_t sample_rate() const;
+    std::uint8_t  channels() const;
+    std::uint64_t seq() const;
+    std::uint64_t capture_unix_us() const;  // fabric clock; 0 if unstamped
+};
+```
+
+```cpp
+auto session  = adamo::Session::open(api_key);
+auto receiver = adamo::AudioReceiver::open(session, "my-robot", "mic");
+
+while (auto frame = receiver.recv(2000)) {
+    play(frame->samples(), frame->count(), frame->sample_rate(), frame->channels());
+}
+```
+
+All methods throw `adamo::Error` on failure.
+
+---
+
 ## Memory ownership summary
 
 | Handle / pointer | Owner | Free function |
@@ -726,6 +962,8 @@ Two complete programs ship in the SDK repository under `adamo-c/examples/`:
 | `adamo_video_track_t *` | C caller | `adamo_video_track_free` |
 | `adamo_video_receiver_t *` | C caller | `adamo_video_receiver_free` |
 | `adamo_video_frame_t *` | C caller | `adamo_video_frame_free` |
+| `adamo_audio_receiver_t *` | C caller | `adamo_audio_receiver_free` |
+| `adamo_audio_frame_t *` | C caller | `adamo_audio_frame_free` |
 | `const char *` from `adamo_session_org` / `adamo_last_error` / `adamo_detect_encoder` | borrowed | do not free |
 
 ---
@@ -785,6 +1023,13 @@ namespace adamo {
     class VideoReceiver;                 // move-only RAII
     class VideoFrame;                    // move-only RAII, owns the pixels
     inline std::string_view detect_encoder();
+#endif
+
+#ifdef ADAMO_HAS_AUDIO
+    struct AudioOptions;                 // capture/encode settings
+    class AudioReceiver;                 // move-only RAII
+    class AudioFrame;                    // move-only RAII, owns the PCM
+    // Robot also gains attach_audio_* methods.
 #endif
 }
 ```
