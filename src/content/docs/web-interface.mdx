@@ -41,6 +41,20 @@ A collapsible panel at the bottom shows stream stats (latency, FPS, RTT, bitrate
 
 ![Control panel with stream stats and input settings](../../assets/screenshots/control-panel.png)
 
+### Audio
+
+If the robot streams a microphone track (see [Streaming Audio](/audio/)), the
+operator plays it automatically. Browsers block audio autoplay, so nothing is
+heard until your first click or keypress on the page; entering VR counts as that
+gesture in the stereo view. Robots without an audio track are silently skipped —
+audio never delays or interferes with video.
+
+A **mute toggle** on the camera grid turns audio off without leaving the view.
+The control panel shows an audio chip (e.g. `Audio 48k stereo`) that turns amber
+with a `· N gaps` count when packets are lost, and the latency breakdown (the
+bar-chart hover) includes an Audio section with format, recovered packets, gaps,
+and decode queue depth.
+
 ### Adding Tracks
 
 Click "Add Track" to dynamically start a new video track on the robot without editing the config file. You can configure the source type, encoder, bitrate, and FPS from the dialog.

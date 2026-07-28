@@ -12,6 +12,7 @@ The `adamo` crate is a safe, idiomatic Rust wrapper over the Adamo SDK shared li
 ```sh
 cargo add adamo
 cargo add adamo --features video    # video capture + caller-fed tracks
+cargo add adamo --features audio    # Opus microphone streaming (implies video)
 ```
 
 Prebuilt `libadamo` is available for `aarch64-unknown-linux-gnu` (Jetson / Ubuntu 22.04 arm64 — bundled in the crate, offline-friendly), `x86_64-unknown-linux-gnu`, and `aarch64-apple-darwin` (fetched at build time, pinned by version and sha256; requires `curl`). All prebuilts include video. Other targets can point at a local build via `ADAMO_LIB_DIR=/path/to/dir/with/libadamo.{so,dylib}`.
@@ -597,6 +598,91 @@ Returns the best available H.264 encoder for the host (NVENC, VA-API, VideoToolb
 
 ---
 
+## Audio — `feature = "audio"`
+
+The `audio` feature adds microphone capture and Opus streaming to `Robot`. It
+**implies `video`** (the `Robot` handle is shared), and needs an audio-enabled
+`libadamo` — the published prebuilt carries it from `adamo` 0.1.98 onward.
+
+```sh
+cargo add adamo --features audio
+```
+
+Audio is **send-only** in the Rust SDK, matching video — the robot captures and
+publishes; decode audio from the browser or the C/C++ SDK. See
+[Streaming Audio](/audio/) for source types, defaults, and hardware notes.
+
+### `AudioOptions`
+
+```rust
+pub struct AudioOptions {
+    pub source_type: String,   // "auto" | "alsa" | "pipeline" | "test"
+    pub device: Option<String>,   // ALSA device, e.g. "plughw:1,0"
+    pub pipeline: Option<String>, // GStreamer source (source_type = "pipeline")
+    pub codec: String,            // "opus"
+    pub bitrate_kbps: u32,        // 64
+    pub sample_rate: u32,         // 48_000
+    pub channels: u8,             // 2 — ceiling, not a target
+    pub frame_ms: u32,            // 20 — one of 2 (=2.5 ms), 5, 10, 20, 40, 60
+    pub inband_fec: bool,         // false
+    pub dtx: bool,                // false
+    pub allow_missing: bool,      // false
+}
+```
+
+`AudioOptions::default()` is Opus 64 kbps stereo, 48 kHz, 20 ms frames, FEC/DTX
+off, `auto` source. Builder helpers: `with_source_type`, `with_device`,
+`with_pipeline`, `with_bitrate_kbps`, `with_channels`, `with_sample_rate`,
+`with_frame_ms`, `with_inband_fec`, `with_dtx`, `with_allow_missing`.
+
+### `Robot` audio methods
+
+```rust
+impl Robot {
+    /// Synthetic test tone — no hardware.
+    pub fn attach_audio_test(&mut self, name: &str) -> Result<()>;
+
+    /// Direct ALSA capture. `device` None uses the ALSA default.
+    pub fn attach_audio_alsa(
+        &mut self,
+        name: &str,
+        device: Option<&str>,   // "plughw:1,0"
+        bitrate_kbps: u32,
+        channels: u8,
+        sample_rate: u32,
+        frame_ms: u32,
+    ) -> Result<()>;
+
+    /// A GStreamer source string ending in raw audio.
+    pub fn attach_audio_gst(&mut self, name: &str, pipeline: &str) -> Result<()>;
+
+    /// Full option surface.
+    pub fn attach_audio(&mut self, name: &str, options: &AudioOptions) -> Result<()>;
+}
+```
+
+```rust
+use adamo::{AudioOptions, Robot};
+
+let mut robot = Robot::new_default("ak_...", Some("my-robot"))?;
+
+// Quick start: synthetic tone.
+robot.attach_audio_test("mic")?;
+
+// A real microphone with full options:
+let opts = AudioOptions::default()
+    .with_source_type("alsa")
+    .with_device("plughw:1,0")
+    .with_bitrate_kbps(64);
+robot.attach_audio("mic", &opts)?;
+
+robot.run()?;
+```
+
+A failure to attach surfaces as `Error::Audio`.
+
+---
+
 ## Errors
 
 ```rust
@@ -614,6 +700,8 @@ pub enum Error {
     /// Video pipeline failure: encoder/decoder unavailable, capture or
     /// shared-memory source failed.
     Video(String),
+    /// Audio pipeline failure: capture device, encoder, or source setup failed.
+    Audio(String),
     /// An uncategorized error reported by the underlying SDK library.
     Ffi(String),
     /// A Rust string contained an interior NUL byte and could not cross FFI.

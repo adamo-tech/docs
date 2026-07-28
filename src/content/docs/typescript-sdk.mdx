@@ -1035,6 +1035,14 @@ All topics follow the pattern `adamo/{org}/{robot}/...`. The `{org}` segment is 
 | `adamo/{org}/{robot}/video/{track}/nack` | UI → Robot | NACK retransmission requests. Binary: `[count: u16 BE][seq_0: u64 BE]...` |
 | `adamo/{org}/{robot}/video/{track}/keepalive` | UI → Robot | Sent on component mount to defer pipeline teardown during navigation. |
 
+### Audio Topics
+
+| Topic | Direction | Description |
+|---|---|---|
+| `adamo/{org}/{robot}/audio/{track}` | Robot → Cloud | Opus audio stream data. Binary. Decoded for you by `<AudioStream>` / `createAudioStream`. |
+| `adamo/{org}/{robot}/audio/{track}/caps` | Robot → Cloud | Queryable JSON caps: `{ codec, sample_rate, channels, frame_ms, bitrate_bps }`. Read to configure the decoder before the first frame. |
+| `adamo/{org}/{robot}/audio/{track}/alive` | Robot → Cloud | Liveliness token for this audio track. Present while streaming. |
+
 ### Control Topics
 
 | Topic | Direction | Description |
@@ -1270,3 +1278,141 @@ await player.enterVR();
 player.setConvergence(0.08); // Adjust stereo depth
 player.close();
 ```
+
+## 13. Audio
+
+Robots can stream an Opus microphone track alongside video (see
+[Streaming Audio](/audio/)). Audio is a per-robot, independent stream — it is not
+tied to a specific video track. Playback is receive-only in the browser; the
+robot SDKs send.
+
+### `<AudioStream>` (`@adamo/react`)
+
+A headless component that subscribes to a robot's audio track, decodes Opus via
+WebCodecs, and plays it. It renders nothing — mount one per robot you want to
+hear. Because browsers block autoplay, it stays silent until the first user
+gesture (click or keypress) anywhere on the page, then resumes automatically.
+
+```tsx
+import { AudioStream } from "@adamo/react";
+
+<AudioStream robot="arm-01" track="mic" />
+```
+
+A robot with no audio track is handled gracefully — the underlying caps query
+fails and the component simply stays silent, so you can mount it unconditionally.
+
+#### Props
+
+| Prop | Type | Default | Description |
+|---|---|---|---|
+| `robot` | `string` | — | Robot ID. Required. |
+| `track` | `string` | `"mic"` | Audio track name. |
+| `org` | `string` | provider's org | Org slug override. |
+| `volume` | `number` | `1` | Linear gain, 0–1. |
+| `muted` | `boolean` | `false` | Start muted. |
+| `onStats` | `(stats: AudioStats) => void` | — | Called about once per second with playback health. |
+
+There is no `topic` prop — audio is addressed by `robot` + `track`.
+
+### `AudioStats` type
+
+```ts
+type AudioStats = {
+  codec: string;            // negotiated codec, e.g. "opus"
+  sampleRate: number;       // from the track's caps document
+  channels: number;
+  packetsReceived: number;  // audio packets received
+  rlncRecovered: number;    // packets recovered from loss
+  repairsReceived: number;  // recovery packets received
+  concealed: number;        // gaps that couldn't be filled in time — audible breaks
+  decoded: number;          // frames decoded
+  played: number;           // frames handed to the audio device
+  decodeQueueSize: number;  // live decoder queue depth
+  g2gMs: number | null;     // glass-to-glass ms when a time sync is available
+};
+```
+
+### `createAudioStream(options)` (`@adamo/media`)
+
+The low-level entry point behind `<AudioStream>`, for non-React apps or custom
+pipelines. It owns the whole receive-and-play chain and returns a handle.
+
+```ts
+import { createAudioStream } from "@adamo/media";
+
+const audio = await createAudioStream({
+  session,
+  org: "my-org",
+  robot: "arm-01",
+  track: "mic",
+  onStats: (s) => console.log(s.concealed, "gaps"),
+});
+
+// Autoplay policy: nothing plays until a user gesture resumes the AudioContext.
+await audio.unlock();        // call from a click/keypress handler
+audio.setVolume(0.5);
+audio.close();
+```
+
+#### `AudioStreamOptions`
+
+```ts
+type AudioStreamOptions = {
+  session: Session;
+  audioTopic?: string;   // full topic, or build it from org/robot/track below
+  org?: string;
+  robot?: string;
+  track?: string;        // default "mic"
+  timeSync?: TimeSyncHandle; // shared fabric clock — enables glass-to-glass stats
+  jitterMs?: number;     // playout jitter buffer, also the nominal A/V offset (default 120)
+  volume?: number;       // 0..1 (default 1)
+  muted?: boolean;       // default false
+  onStats?: (stats: AudioStats) => void;
+  onError?: (err: Error) => void;
+};
+```
+
+#### `AudioStreamHandle`
+
+```ts
+type AudioStreamHandle = {
+  readonly codec: string | null;
+  readonly caps: AudioCaps | null; // { codec, sample_rate, channels, frame_ms, bitrate_bps }
+  setVolume(v: number): void;
+  setMuted(m: boolean): void;
+  unlock(): Promise<void>;         // resume the AudioContext from a user gesture
+  getStats(): AudioStats;
+  close(): void;
+};
+```
+
+`createAudioStream`, `AudioStreamOptions`, `AudioStreamHandle`, `AudioStats`, and
+`AudioCaps` are exported from `@adamo/media`. `<AudioStream>` and its
+`AudioStreamProps` are exported from `@adamo/react`.
+
+### Audio on the XR players
+
+`createXRStereoPlayer` and `createXRMultiCamPlayer` can play the robot's audio
+inside the immersive view. It is off unless you pass `enableAudio: true`;
+`enterVR()` performs the autoplay-unlock gesture for you.
+
+```ts
+const player = await createXRStereoPlayer({
+  session, org: "my-org", robot: "arm-01", track: "stereo",
+  canvas: previewCanvas,
+  enableAudio: true,
+  audioTrack: "mic",          // default "mic"
+  audioVolume: 1,
+  onAudioStats: (s) => {},
+});
+
+await player.enterVR();       // also unlocks audio
+player.setAudioVolume(0.5);
+player.setAudioMuted(true);
+```
+
+Audio options: `enableAudio`, `audioTrack`, `audioTopic`, `audioSession`,
+`audioJitterMs`, `audioVolume`, `onAudioStats`. Handle methods: `setAudioVolume`,
+`setAudioMuted`, `unlockAudio`, `getAudioStats` (all no-ops when `enableAudio`
+was not set).

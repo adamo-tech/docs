@@ -5,7 +5,7 @@ description: "Complete reference for the adamo Python package — connect, Robot
 
 import { Aside } from "@astrojs/starlight/components";
 
-The `adamo` Python package is the full Adamo SDK — pub/sub, queries, liveliness, hardware-encoded video, and recorded-data access for training. Python 3.10+.
+The `adamo` Python package is the full Adamo SDK — pub/sub, queries, liveliness, hardware-encoded video, Opus [audio](/audio/), and recorded-data access for training. Python 3.10+.
 
 ## Install
 
@@ -407,6 +407,36 @@ robot.video(
 ```
 
 Create a track whose frames you push from Python. Returns a `VideoTrack`; call `.send(frame)` with a numpy array (or bytes-like). The encoder pipeline auto-starts on the first `send()` if you haven't called `robot.run()` yourself. `pixel_format` is required and raises `ValueError` when omitted. With `adaptive_bitrate` (the default) the encoder follows the congestion forecast between `min_bitrate_kbps` and `max_bitrate_kbps`; `bitrate_priority` weights this track's share when several tracks compete.
+
+### Audio attachments
+
+```python
+robot.attach_audio(
+    name: str,
+    *,
+    source_type: str = "auto",   # "auto" | "alsa" | "pipeline" | "test"
+    device: str | None = None,   # ALSA device, e.g. "plughw:1,0"
+    pipeline: str | None = None, # GStreamer source string (source_type="pipeline")
+    codec: str = "opus",
+    bitrate_kbps: int = 64,
+    sample_rate: int = 48000,
+    channels: int = 2,           # ceiling, not a target — a mono source stays mono
+    frame_ms: int = 20,          # 2 (=2.5 ms), 5, 10, 20, 40, 60
+    inband_fec: bool = False,
+    dtx: bool = False,
+    allow_missing: bool = False, # keep the robot running if the source is absent
+) -> None
+```
+
+Attach a microphone track, captured and Opus-encoded by the SDK and published on
+`{robot.name}/audio/{name}`. Audio is **send-only** in the Python SDK (consume it
+from the browser or the C/C++ SDK, matching video). See [Streaming Audio](/audio/)
+for source types and hardware notes.
+
+`source_type="pipeline"` requires `pipeline=` and raises `ValueError` otherwise.
+An audio-only robot (no video tracks) still drives the capture pipeline from
+`run()`. Requires `adamo` 0.4.48+; the Linux x86_64 wheel supports
+`source_type="alsa"` only, while the aarch64 wheel supports every source type.
 
 ### Pub/sub
 
