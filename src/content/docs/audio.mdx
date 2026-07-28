@@ -7,10 +7,9 @@ import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
 
 Adamo streams audio the same way it streams cameras: you attach a named audio
 track on the robot, and it shows up for operators next to the video tracks. A
-robot can carry a microphone track and any number of camera tracks at once —
-they run on independent transports and stay loosely in sync through a shared
-capture clock, so speech lines up with the picture without you wiring anything
-together.
+robot can carry a microphone track and any number of camera tracks at once, and
+they stay loosely in sync so speech lines up with the picture without you wiring
+anything together.
 
 Audio is a **robot-to-operator downlink**. The robot SDKs (Python, Rust, C/C++)
 *send* audio; the browser and the C/C++ SDK *receive* it. This mirrors video: an
@@ -19,10 +18,8 @@ release.
 
 <Aside type="tip">
 Audio is encoded with **Opus at 64 kbps stereo, 48 kHz, 20 ms frames** by
-default — about 1–2% of a typical video track. Unlike video, it is **not**
-adaptively downscaled under congestion: the bitrate allocator reserves audio's
-share off the top and adapts video into what remains, so speech stays
-intelligible when the link tightens.
+default — about 1–2% of a typical video track. Unlike video, audio is **not**
+downscaled under congestion, so speech stays intelligible when the link tightens.
 </Aside>
 
 ## Attaching a microphone
@@ -105,11 +102,10 @@ Every SDK accepts the same set of sources, selected by `source_type`:
 
 | `source_type` | What it captures | Notes |
 |---|---|---|
-| `test` | A synthetic tone | No hardware. CI and loopback checks. |
-| `auto` (default) | The platform's default input | GStreamer `autoaudiosrc` — ALSA on the robot, the OS input on a dev box. |
-| `alsa` | A specific ALSA device | Pass `device` (e.g. `"plughw:1,0"`). Prefer a `plughw:` device so ALSA resamples and reformats to Opus input for you. |
-| `pulse` | A PulseAudio / PipeWire device | Pass `device`. For workstation-robots where a sound daemon owns the device. |
-| `pipeline` | An arbitrary GStreamer source | Pass `pipeline=` — a launch string ending in raw audio. The SDK appends `audioconvert → audioresample → opusenc`. |
+| `test` | A synthetic tone | No hardware. Useful for confirming the path. |
+| `auto` (default) | The platform's default input | Picks the system input automatically. |
+| `alsa` | A specific ALSA device | Pass `device` (e.g. `"plughw:1,0"`). Prefer a `plughw:` device so it resamples for you. |
+| `pipeline` | A custom GStreamer source | Pass `pipeline=` — a launch string ending in raw audio. An escape hatch for unusual devices. |
 
 The Rust convenience methods map to these directly:
 `attach_audio_test`, `attach_audio_alsa`, `attach_audio_gst` (a `pipeline`
@@ -121,7 +117,6 @@ mirrors them one to one.
 `channels` is the **maximum** number of channels, not a demand. A mono
 microphone stays mono rather than being upmixed into a wasteful duplicated
 stereo pair — so the default `channels=2` is safe to leave on a mono lapel mic.
-The direct-ALSA capture path opens the device at its native channel count.
 
 ## Tuning options
 
@@ -135,7 +130,7 @@ Every knob has a working default; you rarely need more than `source_type` and
 | `sample_rate` | `48000` | Capture/encode sample rate in Hz. |
 | `channels` | `2` | Channel ceiling (see above). |
 | `frame_ms` | `20` | Opus frame duration. Valid values: `2` (= 2.5 ms), `5`, `10`, `20`, `40`, `60`. Smaller is lower latency, larger is more efficient. |
-| `inband_fec` | `false` | Opus in-band FEC (LBRR). Only native consumers can decode it — browsers cannot, so it is off by default. Enable it for C-SDK-only deployments. |
+| `inband_fec` | `false` | Opus in-band forward error correction, for lossy links. Off by default. |
 | `dtx` | `false` | Discontinuous transmission — stop sending during silence, dropping to ~1 kbps. |
 | `allow_missing` | `false` | Keep the robot running if this audio source is absent, instead of failing the attach. |
 
@@ -218,8 +213,7 @@ import { AudioStream } from "@adamo/react";
 ### In a native app (C / C++)
 
 The C SDK decodes an audio track to signed-16-bit PCM with `adamo_audio_receiver_*`,
-mirroring the video receiver. Native consumers get real packet-loss concealment
-(libopus PLC) that the browser cannot do. See the
+mirroring the video receiver. See the
 [C SDK audio reference](/c-sdk/#audio--adamo_build_audioon).
 
 ```c
@@ -238,28 +232,12 @@ they capture and publish but do not decode. Consume audio from the browser or
 the C/C++ SDK.
 </Aside>
 
-## How loss is handled
-
-Audio recovers from packet loss in layers, so a dropout has to defeat several
-mechanisms before you hear it:
-
-1. **RLNC forward error correction** — repairs lost packets sub-round-trip, with
-   no retransmission request. This does the heavy lifting; audio ships with a
-   generous 50% repair rate because that overhead is trivial next to a video
-   track.
-2. **Opus in-band FEC** — a degraded copy of the previous frame, recoverable by
-   native (libopus) consumers only. Off by default because browsers can't use it.
-3. **Concealment** — when both fail, native consumers get libopus packet-loss
-   concealment (a plausibly-extrapolated frame); the browser gets silence, which
-   is an audible click. These gaps are counted in the receiver's `concealed`
-   stat so you can measure them.
-
 ## Microphone hardware notes
 
-- **On a Jetson, use a USB microphone.** The onboard audio is a Tegra APE I2S
-  mesh that needs DAPM routing; a USB mic or USB audio interface is the reliable
-  path. Confirm the OS sees a capture device with `arecord -l`, and find its
-  ALSA address (the `plughw:CARD,DEVICE` string) with `arecord -L`.
+- **On a Jetson, use a USB microphone.** The onboard audio path is not reliably
+  usable for capture; a USB mic or USB audio interface is the dependable choice.
+  Confirm the OS sees a capture device with `arecord -l`, and find its ALSA
+  address (the `plughw:CARD,DEVICE` string) with `arecord -L`.
 - **Verify the adapter actually has an input.** Many cheap USB "audio adapters"
   are output-only. Check that it enumerates a microphone, not just headphones.
 - **A charge-only USB cable** will silently prevent the device from enumerating —
@@ -283,8 +261,7 @@ you pick a build:
 | **C / C++** | Build the library with CMake `-DADAMO_BUILD_AUDIO=ON` (implies `ADAMO_BUILD_VIDEO`). Guards the C++ types behind `ADAMO_HAS_AUDIO`. |
 | **TypeScript** | `@adamo/react` (`<AudioStream>`) and `@adamo/media` (`createAudioStream`, XR players). |
 
-Robots built from the standard release binary capture audio directly (no
-GStreamer runtime) from the ALSA path.
+Robots built from the standard release binary capture audio out of the box.
 
 ## Topics
 
@@ -293,9 +270,6 @@ An audio track uses the same key-expression convention as video, under an
 
 | Topic | Description |
 |---|---|
-| `adamo/{org}/{robot}/audio/{track}` | Opus frames plus FEC repair packets. |
+| `adamo/{org}/{robot}/audio/{track}` | Opus audio frames. |
 | `adamo/{org}/{robot}/audio/{track}/caps` | Queryable JSON: codec, sample rate, channels, frame duration, bitrate. A late-joining consumer queries this to configure its decoder. |
 | `adamo/{org}/{robot}/audio/{track}/alive` | Liveliness token — present while the track is streaming. Powers track discovery. |
-
-Robots also list their audio tracks in a separate `audio_tracks` array in the
-heartbeat payload, kept apart from the video `tracks` list.

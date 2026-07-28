@@ -616,8 +616,8 @@ publishes; decode audio from the browser or the C/C++ SDK. See
 
 ```rust
 pub struct AudioOptions {
-    pub source_type: String,   // "auto" | "alsa" | "pulse" | "pipeline" | "test"
-    pub device: Option<String>,   // ALSA/Pulse device, e.g. "plughw:1,0"
+    pub source_type: String,   // "auto" | "alsa" | "pipeline" | "test"
+    pub device: Option<String>,   // ALSA device, e.g. "plughw:1,0"
     pub pipeline: Option<String>, // GStreamer source (source_type = "pipeline")
     pub codec: String,            // "opus"
     pub bitrate_kbps: u32,        // 64

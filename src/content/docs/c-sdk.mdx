@@ -757,15 +757,15 @@ samples never cross back into C. The configured variant takes:
 
 ```c
 typedef struct adamo_audio_options_t {
-    const char *source_type;    // NULL = "auto"; "alsa"|"pulse"|"pipeline"|"test"
-    const char *device;         // ALSA/Pulse device; NULL = default
+    const char *source_type;    // NULL = "auto"; "alsa"|"pipeline"|"test"
+    const char *device;         // ALSA device; NULL = default
     const char *pipeline;       // GStreamer source; required for "pipeline"
     const char *codec;          // NULL = "opus" (the only codec today)
     uint32_t    bitrate_kbps;   // 64
     uint32_t    sample_rate;    // 48000
     uint8_t     channels;       // 2 — ceiling, not a target
     uint32_t    frame_ms;       // 20
-    bool        inband_fec;     // false — only native consumers decode LBRR
+    bool        inband_fec;     // false — Opus in-band FEC for lossy links
     bool        dtx;            // false — discontinuous transmission
     bool        allow_missing;  // false
 } adamo_audio_options_t;
@@ -789,9 +789,8 @@ adamo_robot_run(robot);
 ### Receiving a track (decode to PCM)
 
 `adamo_audio_receiver_*` mirrors `adamo_video_receiver_*`, delivering interleaved
-signed-16-bit PCM. Everything between the wire and your callback — depacketize,
-RLNC recovery, reorder, Opus decode, and **real packet-loss concealment** (libopus
-PLC, which the browser cannot do) — happens inside the receiver.
+signed-16-bit PCM. Loss recovery, reordering, Opus decode, and packet-loss
+concealment all happen inside the receiver — you get clean PCM frames out.
 
 ```c
 adamo_audio_receive_options_t adamo_audio_receive_options_default(void);
@@ -830,7 +829,7 @@ typedef struct adamo_audio_frame_t {
 
 typedef struct adamo_audio_receive_options_t {
     uint32_t max_queued_frames;   // 0 = default (8)
-    uint32_t reorder_deadline_ms; // 0 = default (120) — head-gap hold before conceal
+    uint32_t reorder_deadline_ms; // 0 = default (120) — how long a gap is held before it's conceded
 } adamo_audio_receive_options_t;
 ```
 
@@ -858,10 +857,10 @@ for (;;) {
 
 ```c
 typedef struct adamo_audio_receiver_stats_t {
-    uint64_t packets;    // source (0x0F) packets received
-    uint64_t repairs;    // RLNC repair (0x10) packets received
-    uint64_t recovered;  // packets recovered by RLNC, no retransmission
-    uint64_t concealed;  // frames filled by libopus PLC (RLNC couldn't recover)
+    uint64_t packets;    // audio packets received
+    uint64_t repairs;    // recovery packets received
+    uint64_t recovered;  // packets recovered from loss
+    uint64_t concealed;  // frames concealed after unrecoverable loss
     uint64_t decoded;    // frames decoded and delivered (real + concealed)
     uint64_t dropped;    // decoded frames dropped because the consumer lagged
 } adamo_audio_receiver_stats_t;
@@ -879,7 +878,7 @@ All under `#ifdef ADAMO_HAS_AUDIO`, following the C++ video shape.
 
 ```cpp
 struct AudioOptions {
-    std::string source_type = "auto";      // auto | alsa | pulse | pipeline | test
+    std::string source_type = "auto";      // auto | alsa | pipeline | test
     std::optional<std::string> device;     // "plughw:1,0"
     std::optional<std::string> pipeline;   // GStreamer source for `pipeline`
     std::string codec = "opus";

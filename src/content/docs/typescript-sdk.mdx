@@ -1039,8 +1039,8 @@ All topics follow the pattern `adamo/{org}/{robot}/...`. The `{org}` segment is 
 
 | Topic | Direction | Description |
 |---|---|---|
-| `adamo/{org}/{robot}/audio/{track}` | Robot → Cloud | Opus audio frames plus RLNC repair packets. Binary; byte 0 = `0x0F` (source) or `0x10` (FEC repair). |
-| `adamo/{org}/{robot}/audio/{track}/caps` | Robot → Cloud | Queryable JSON caps: `{ codec, sample_rate, channels, frame_ms, bitrate_bps }`. Decoders query this to configure WebCodecs before the first frame. |
+| `adamo/{org}/{robot}/audio/{track}` | Robot → Cloud | Opus audio stream data. Binary. Decoded for you by `<AudioStream>` / `createAudioStream`. |
+| `adamo/{org}/{robot}/audio/{track}/caps` | Robot → Cloud | Queryable JSON caps: `{ codec, sample_rate, channels, frame_ms, bitrate_bps }`. Read to configure the decoder before the first frame. |
 | `adamo/{org}/{robot}/audio/{track}/alive` | Robot → Cloud | Liveliness token for this audio track. Present while streaming. |
 
 ### Control Topics
@@ -1322,11 +1322,11 @@ type AudioStats = {
   codec: string;            // negotiated codec, e.g. "opus"
   sampleRate: number;       // from the track's caps document
   channels: number;
-  packetsReceived: number;  // source Opus packets on the wire (pre-recovery)
-  rlncRecovered: number;    // packets recovered by RLNC
-  repairsReceived: number;  // RLNC repair packets received
-  concealed: number;        // gaps the reorder buffer couldn't fill — audible breaks
-  decoded: number;          // frames decoded by WebCodecs
+  packetsReceived: number;  // audio packets received
+  rlncRecovered: number;    // packets recovered from loss
+  repairsReceived: number;  // recovery packets received
+  concealed: number;        // gaps that couldn't be filled in time — audible breaks
+  decoded: number;          // frames decoded
   played: number;           // frames handed to the audio device
   decodeQueueSize: number;  // live decoder queue depth
   g2gMs: number | null;     // glass-to-glass ms when a time sync is available
@@ -1336,8 +1336,7 @@ type AudioStats = {
 ### `createAudioStream(options)` (`@adamo/media`)
 
 The low-level entry point behind `<AudioStream>`, for non-React apps or custom
-pipelines. Owns the whole chain: subscription, RLNC recovery, reorder, WebCodecs
-Opus decode, and capture-anchored playout scheduling.
+pipelines. It owns the whole receive-and-play chain and returns a handle.
 
 ```ts
 import { createAudioStream } from "@adamo/media";

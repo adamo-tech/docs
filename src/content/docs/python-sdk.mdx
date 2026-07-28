@@ -414,8 +414,8 @@ Create a track whose frames you push from Python. Returns a `VideoTrack`; call `
 robot.attach_audio(
     name: str,
     *,
-    source_type: str = "auto",   # "auto" | "alsa" | "pulse" | "pipeline" | "test"
-    device: str | None = None,   # ALSA/Pulse device, e.g. "plughw:1,0"
+    source_type: str = "auto",   # "auto" | "alsa" | "pipeline" | "test"
+    device: str | None = None,   # ALSA device, e.g. "plughw:1,0"
     pipeline: str | None = None, # GStreamer source string (source_type="pipeline")
     codec: str = "opus",
     bitrate_kbps: int = 64,
