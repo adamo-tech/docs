@@ -55,6 +55,21 @@ with a `· N gaps` count when packets are lost, and the latency breakdown (the
 bar-chart hover) includes an Audio section with format, recovered packets, gaps,
 and decode queue depth.
 
+### Explicit control ownership
+
+Organization owners and admins can enable **Settings → Operator Control →
+Require explicit Take Control**. The setting applies to every operator in the
+organization and is stored with the organization rather than in one browser.
+
+When enabled, opening a robot starts in view-only mode. Press **Take Control**
+before operating the robot. The current holder is shown in the teleoperation
+header; the holder can press **Release Control** to return to view-only mode.
+Taking control from another operator uses the same ownership mechanism.
+
+The web app also publishes an ownership lease for robot-side gating. See
+[Explicit control ownership](/control/#explicit-control-ownership) for the
+topic, payload, heartbeat, and receiver requirements.
+
 ### Adding Tracks
 
 Click "Add Track" to dynamically start a new video track on the robot without editing the config file. You can configure the source type, encoder, bitrate, and FPS from the dialog.
@@ -131,6 +146,7 @@ The Stats page (`/stats`) shows fleet-wide performance metrics: CPU, memory, lat
 The Settings page includes:
 
 - **API Keys** — view and copy your organization's API keys
+- **Operator Control** — require operators to explicitly take and release control
 - **Team Members** — invite members by email with role assignment (owner, admin, developer, operator)
 - **Pending Invitations** — manage sent invites
 - **Voice Commands** — enable/disable voice control for layout and robot switching

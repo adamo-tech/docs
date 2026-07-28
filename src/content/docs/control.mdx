@@ -19,6 +19,92 @@ For both, the SDK primitive is the same: subscribe to a key expression and react
   `/controller/...`).
 </Aside>
 
+## Explicit control ownership
+
+The hosted web operator can require a deliberate ownership step before
+teleoperation. An organization owner or admin enables **Settings → Operator
+Control → Require explicit Take Control**. Operators then enter robot pages in
+view-only mode and use **Take Control** and **Release Control** in the
+teleoperation header.
+
+The policy is stored on the organization, so it follows users across browsers
+and applies to every operator in that organization.
+
+### Robot-facing ownership lease
+
+While an operator holds explicit control, the web app publishes JSON on:
+
+```text
+{robot}/control/json/operator_control
+```
+
+The SDK automatically adds the organization prefix. On the wire, the full key
+is `adamo/{org}/{robot}/control/json/operator_control`.
+
+An acquisition looks like:
+
+```json
+{
+  "version": 1,
+  "active": true,
+  "event": "acquired",
+  "operator": {
+    "userId": "2b1d…",
+    "sessionId": "b9f1…",
+    "displayName": "Sam Considine"
+  },
+  "timestampMs": 1785270488243
+}
+```
+
+The `event` field is one of:
+
+| Event | Meaning |
+|---|---|
+| `acquired` | This operator session has taken control |
+| `heartbeat` | The same session still holds control; sent once per second |
+| `released` | The session deliberately released control or left the robot page |
+
+Track ownership by `operator.sessionId`, not display name. A `released` event
+should only clear the matching session: during a takeover, the old holder's
+release can race with the new holder's acquisition.
+
+Treat the stream as a lease. Stop accepting motion when either:
+
+- the matching `released` event arrives; or
+- no matching `heartbeat` arrives for your chosen timeout (three seconds is a
+  reasonable starting point for the current one-second heartbeat).
+
+The timeout is required because a crashed browser or broken network cannot
+reliably send `released`.
+
+<Aside type="caution" title="Enforce ownership on the robot">
+  The ownership topic is a signal, not a network access-control boundary.
+  Custom publishers and integrations can write control topics directly. A
+  robot that requires a hard guarantee must gate every actuator command against
+  the current, unexpired ownership lease. Do not treat the presence of a
+  frontend button as robot-side enforcement.
+</Aside>
+
+### Inspecting the lifecycle with Python
+
+The `adamo-network` repository includes
+`adamo-py/examples/operator_control_listener.py`. It listens to the ownership
+lease and browser keyboard topic together, printing `acquired`, heartbeats,
+keyboard edges, and `released`. Keyboard samples received without an active
+lease are labelled `UNEXPECTED_WHILE_RELEASED`.
+
+Run it with:
+
+```bash
+ADAMO_API_KEY=ak_... \
+python adamo-py/examples/operator_control_listener.py --robot my-arm
+```
+
+Use this listener while testing **Take Control → input → Release Control**. It
+is a diagnostic tool; the production receiver still needs to enforce the lease
+before applying commands.
+
 ## Gamepad from operate.adamohq.com
 
 The web app publishes a Joy message to `{robot}/control/joy` whenever the gamepad changes. The payload is a ROS envelope whose inner payload is a CDR-encoded `sensor_msgs/msg/Joy`.
