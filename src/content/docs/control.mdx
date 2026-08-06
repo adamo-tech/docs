@@ -112,91 +112,50 @@ The web app publishes a Joy message to `{robot}/control/joy` whenever the gamepa
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
+Requires `adamo>=0.4.54`.
+
 ```python
-import struct
+import time
 
 import adamo
+from adamo.xr import XRJoy, subscribe_xr_control
 
 
-def decode_ros_envelope(payload: bytes):
-    offset = 0
-    topic_len = struct.unpack_from(">I", payload, offset)[0]
-    offset += 4
-    topic = payload[offset : offset + topic_len].decode("utf-8")
-    offset += topic_len
-
-    type_len = struct.unpack_from(">I", payload, offset)[0]
-    offset += 4
-    type_name = payload[offset : offset + type_len].decode("utf-8")
-    offset += type_len
-
-    return topic, type_name, payload[offset:]
+session = adamo.connect(api_key="ak_...")
 
 
-class MinimalCdrReader:
-    def __init__(self, payload: bytes):
-        if len(payload) < 4 or payload[:2] != b"\x00\x01":
-            raise ValueError("expected little-endian CDR payload")
-        self.payload = payload
-        self.offset = 4
-        self.payload_start = 4
-
-    def align(self, size: int):
-        relative = self.offset - self.payload_start
-        self.offset += (size - (relative % size)) % size
-
-    def read_i32(self) -> int:
-        self.align(4)
-        value = struct.unpack_from("<i", self.payload, self.offset)[0]
-        self.offset += 4
-        return value
-
-    def read_u32(self) -> int:
-        self.align(4)
-        value = struct.unpack_from("<I", self.payload, self.offset)[0]
-        self.offset += 4
-        return value
-
-    def read_f32(self) -> float:
-        self.align(4)
-        value = struct.unpack_from("<f", self.payload, self.offset)[0]
-        self.offset += 4
-        return value
-
-    def read_string(self) -> str:
-        length = self.read_u32()  # includes null terminator
-        value = self.payload[self.offset : self.offset + length - 1].decode("utf-8")
-        self.offset += length
-        return value
-
-
-def decode_joy(cdr_payload: bytes):
-    reader = MinimalCdrReader(cdr_payload)
-    reader.read_i32()      # header.stamp.sec
-    reader.read_u32()      # header.stamp.nanosec
-    reader.read_string()   # header.frame_id
-
-    axes = [reader.read_f32() for _ in range(reader.read_u32())]
-    buttons = [reader.read_i32() for _ in range(reader.read_u32())]
-    return axes, buttons
-
-robot = adamo.Robot(api_key="ak_...", name="my-arm")
-
-@robot.on("my-arm", "control/joy", decode=None)
-def on_joy(payload: bytes):
-    topic, type_name, cdr_payload = decode_ros_envelope(payload)
-    if topic != "/joy" or type_name != "sensor_msgs/msg/Joy":
+def on_joy(sample):
+    if sample.topic != "/joy" or not isinstance(sample.message, XRJoy):
         return
-
-    axes, buttons = decode_joy(cdr_payload)
+    axes = sample.message.axes
+    buttons = sample.message.buttons
     # axes[0..1] = left stick X/Y, axes[2..3] = right stick X/Y, etc.
     drive(axes[0], axes[1])
 
-robot.run()
+# The ROS Header timestamp is preserved. Missing timestamps and samples that
+# were already buffered for more than one second are dropped before on_joy.
+sub = subscribe_xr_control(
+    session,
+    "my-arm",
+    on_joy,
+    channel="joy",
+    max_age_seconds=1.0,
+)
+
+try:
+    while True:
+        time.sleep(1)
+finally:
+    sub.close()
+    session.close()
 ```
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
+
+The Rust SDK does not yet expose the typed ROS-envelope/CDR decoder. Decode the
+envelope and CDR manually (or with a ROS/CDR crate), and preserve the Header
+timestamp so delayed input can be rejected before it reaches the robot.
 
 ```rust
 use adamo::Session;
@@ -214,6 +173,12 @@ fn main() -> adamo::Result<()> {
 
         // The helper below decodes the Joy fields used here.
         if let Ok(joy) = decode_joy_cdr(cdr_payload) {
+            let Some(source_us) = joy.source_timestamp_us() else {
+                return; // an unset timestamp is unsafe for robot commands
+            };
+            if adamo::fabric_now_us().saturating_sub(source_us) > 1_000_000 {
+                return; // buffered for more than one second
+            }
             drive(joy.axes[0], joy.axes[1]);
         }
     })?;
@@ -247,8 +212,22 @@ fn decode_ros_envelope(data: &[u8]) -> Result<(&str, &str, &[u8]), &'static str>
 }
 
 struct JoyMsg {
+    stamp_sec: i32,
+    stamp_nanosec: u32,
     axes: Vec<f32>,
     buttons: Vec<i32>,
+}
+
+impl JoyMsg {
+    fn source_timestamp_us(&self) -> Option<u64> {
+        if self.stamp_sec < 0
+            || (self.stamp_sec == 0 && self.stamp_nanosec == 0)
+            || self.stamp_nanosec >= 1_000_000_000
+        {
+            return None;
+        }
+        Some(self.stamp_sec as u64 * 1_000_000 + self.stamp_nanosec as u64 / 1_000)
+    }
 }
 
 struct MinimalCdrReader<'a> {
@@ -310,8 +289,11 @@ impl<'a> MinimalCdrReader<'a> {
 
 fn decode_joy_cdr(data: &[u8]) -> Result<JoyMsg, &'static str> {
     let mut reader = MinimalCdrReader::new(data)?;
-    let _stamp_sec = reader.read_i32()?;
-    let _stamp_nsec = reader.read_u32()?;
+    let stamp_sec = reader.read_i32()?;
+    let stamp_nanosec = reader.read_u32()?;
+    if stamp_nanosec >= 1_000_000_000 {
+        return Err("invalid ROS timestamp");
+    }
     let _frame_id = reader.read_string()?;
 
     let axes_len = reader.read_u32()? as usize;
@@ -326,12 +308,16 @@ fn decode_joy_cdr(data: &[u8]) -> Result<JoyMsg, &'static str> {
         buttons.push(reader.read_i32()?);
     }
 
-    Ok(JoyMsg { axes, buttons })
+    Ok(JoyMsg { stamp_sec, stamp_nanosec, axes, buttons })
 }
 ```
 
 </TabItem>
 <TabItem label="C" icon="seti:c">
+
+The plain C API does not expose a typed ROS-envelope/CDR decoder. Parse the
+outer envelope, then use a CDR library and retain `header.stamp` for freshness
+checks.
 
 ```c
 adamo_session_t *sess = adamo_open_default("ak_...");
@@ -341,7 +327,9 @@ void on_joy(const adamo_sample_t *s, void *user) {
      * s->payload is a ROS envelope:
      *   u32be topic_len, topic bytes, u32be type_len, type bytes, CDR payload.
      * Strip the envelope, verify topic="/joy" and type="sensor_msgs/msg/Joy",
-     * then decode the remaining CDR bytes as sensor_msgs/msg/Joy.
+     * then decode the remaining CDR bytes as sensor_msgs/msg/Joy. Preserve
+     * Header.stamp and reject unset or old source timestamps against
+     * adamo_fabric_now_us() before issuing a robot command.
      */
 }
 
@@ -376,10 +364,10 @@ Save this as `adamo_xr_to_ros.py`:
 #!/usr/bin/env python3
 import argparse
 from functools import partial
-import struct
 
 import adamo
 import rclpy
+from adamo.xr import XRDecodeError, decode_ros_envelope
 from geometry_msgs.msg import PoseStamped
 from rclpy.serialization import deserialize_message
 from sensor_msgs.msg import Joy
@@ -391,34 +379,24 @@ ROS_TYPES = {
 }
 
 
-def decode_ros_envelope(payload: bytes):
-    offset = 0
-    topic_len = struct.unpack_from(">I", payload, offset)[0]
-    offset += 4
-    topic = payload[offset : offset + topic_len].decode("utf-8")
-    offset += topic_len
-
-    type_len = struct.unpack_from(">I", payload, offset)[0]
-    offset += 4
-    type_name = payload[offset : offset + type_len].decode("utf-8")
-    offset += type_len
-
-    return topic, type_name, payload[offset:]
-
-
 def publish_xr_sample(sample, *, node, publishers):
-    inner_topic, type_name, cdr_payload = decode_ros_envelope(sample.payload)
-    msg_type = ROS_TYPES.get(type_name)
-    if msg_type is None:
-        node.get_logger().warn(f"Ignoring unsupported XR type: {type_name}")
+    try:
+        envelope = decode_ros_envelope(bytes(sample.payload))
+    except XRDecodeError as error:
+        node.get_logger().warn(f"Ignoring malformed XR payload: {error}")
         return
 
-    ros_topic = f"/adamo/xr{inner_topic}"
+    msg_type = ROS_TYPES.get(envelope.type_name)
+    if msg_type is None:
+        node.get_logger().warn(f"Ignoring unsupported XR type: {envelope.type_name}")
+        return
+
+    ros_topic = f"/adamo/xr{envelope.topic}"
     if ros_topic not in publishers:
         publishers[ros_topic] = node.create_publisher(msg_type, ros_topic, 10)
-        node.get_logger().info(f"Publishing XR {inner_topic} -> {ros_topic}")
+        node.get_logger().info(f"Publishing XR {envelope.topic} -> {ros_topic}")
 
-    publishers[ros_topic].publish(deserialize_message(cdr_payload, msg_type))
+    publishers[ros_topic].publish(deserialize_message(envelope.cdr, msg_type))
 
 
 def main():
@@ -458,7 +436,10 @@ python3 adamo_xr_to_ros.py --api-key ak_... --robot my-arm
 ```
 
 It republishes to ROS topics such as `/adamo/xr/head_pose`, `/adamo/xr/controller/left`, and `/adamo/xr/controller/left/joy`.
-If you do not run ROS, subscribe to `{robot}/control/cdr/xr_tracking`, strip the ROS envelope with `decode_ros_envelope`, then dispatch by the inner `topic` and decode the remaining `cdr_payload` with your CDR decoder.
+If you do not run ROS, use `subscribe_xr_control` from `adamo.xr`. It returns a
+typed `PoseStamped` or `XRJoy`, preserves the source Header timestamp and frame,
+and can reject stale source input before your callback runs. Quaternion order
+is always ROS/WebXR scalar-last: `x, y, z, w`.
 
 ## Custom Control Topics
 
@@ -1175,6 +1156,13 @@ bytes cdr_payload
 
 The `topic` and `type` fields describe the inner ROS message. The `cdr_payload` is the serialized message named by `type`.
 
+Python applications should normally use `decode_ros_envelope`,
+`decode_xr_control`, or `subscribe_xr_control` from `adamo.xr` instead of
+unpacking these fields manually. The SDK validates name lengths, UTF-8, CDR
+alignment and endianness, string bounds, sequence bounds, and ROS timestamps.
+The wire layout remains documented here for non-Python SDKs and protocol
+debugging.
+
 ### Browser gamepad / Xbox controller
 
 Gamepad input is published on:
@@ -1268,6 +1256,13 @@ Each publish contains one ROS envelope. Consumers should decode the envelope and
 | `/hand/{handedness}` | `geometry_msgs/msg/PoseArray` | 25 hand joint poses when hand tracking is enabled |
 
 `{handedness}` is normally `left` or `right`. Pose headers use `frame_id = "xr_origin"`. Positions are in meters in the WebXR `local-floor` reference space. Orientations are published as ROS quaternions `{x, y, z, w}`; the frontend converts from WebXR's internal `[w, x, y, z]` order before encoding the ROS message.
+
+In Python, `adamo.xr` decodes `PoseStamped` and `Joy` into immutable typed
+objects and retains the complete ROS Header. Compare
+`XRControlSample.source_timestamp` with fabric time via `is_stale(...)`, or pass
+`max_age_seconds` to `subscribe_xr_control`, before using controller input to
+issue commands. `PoseArray` hand-joint payloads are not currently part of the
+typed helper and still require ROS deserialization or a general CDR decoder.
 
 XR controller Joy messages use:
 

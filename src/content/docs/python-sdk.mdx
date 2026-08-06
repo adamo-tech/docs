@@ -483,6 +483,9 @@ Decorator. `decode` controls payload transformation before the handler runs:
 - `None` — pass the raw `bytes`.
 - Any callable — called with raw bytes; its return value is passed in.
 
+`"control"` is for the JSON control models below. For the browser's ROS
+envelope/CDR Joy and XR streams, use the typed `adamo.xr` API.
+
 ### Messaging (back-channel)
 
 ```python
@@ -614,6 +617,73 @@ decode_control(payload: bytes) -> JointState | Joy | JoystickCommand | dict
 ```
 
 Decodes a JSON payload by inspecting its `type` field. Unknown types come back as a raw `dict`.
+
+## Typed ROS / XR control
+
+Available in `adamo>=0.4.54`.
+
+```python
+from adamo.xr import (
+    PoseStamped,
+    XRControlSample,
+    XRDecodeError,
+    XRJoy,
+    decode_ros_envelope,
+    decode_xr_control,
+    subscribe_xr_control,
+)
+```
+
+The browser gamepad and XR streams use an Adamo ROS envelope containing CDR,
+not the JSON format handled by `decode_control`. `adamo.xr` validates and
+decodes the envelope plus `geometry_msgs/msg/PoseStamped` and
+`sensor_msgs/msg/Joy` without requiring ROS or NumPy.
+
+```python
+sample = decode_xr_control(payload)
+
+sample.topic                 # e.g. "/controller/left"
+sample.type_name             # "geometry_msgs/msg/PoseStamped"
+sample.source_timestamp      # ROS Header time in fabric/epoch seconds
+sample.transport_timestamp   # Zenoh metadata time, when supplied
+sample.is_stale(0.5)         # missing timestamps are stale
+
+if isinstance(sample.message, PoseStamped):
+    sample.message.header.frame_id
+    sample.message.position.as_tuple()       # (x, y, z)
+    sample.message.orientation.as_tuple()    # (x, y, z, w)
+elif isinstance(sample.message, XRJoy):
+    sample.message.axes
+    sample.message.buttons
+```
+
+`RosTimestamp` retains integer `sec` and `nanosec` fields, so the exact source
+timestamp is not lost. `Quaternion` always uses the ROS/WebXR scalar-last
+`x, y, z, w` convention. The decoder accepts little- and big-endian CDR and
+raises `XRDecodeError` for malformed envelopes, invalid alignment/bounds,
+invalid strings, oversized sequences, or invalid ROS nanoseconds.
+
+```python
+subscribe_xr_control(
+    session,
+    robot_name: str,
+    callback: Callable[[XRControlSample], None],
+    *,
+    channel: str = "cdr/xr_tracking",
+    max_age_seconds: float | None = None,
+    on_decode_error: Callable[[XRDecodeError], None] | None = None,
+)
+```
+
+This wraps `Session.subscribe` and returns the same lifecycle handle. When
+`max_age_seconds` is set, messages with an unset or old ROS source timestamp
+are dropped before the callback. Use `channel="joy"` for the browser gamepad
+key; the default subscribes to XR tracking.
+
+`decode_ros_envelope(payload)` is the lower-level validated helper for callers
+that need the untouched CDR bytes, such as a bridge passing them to ROS
+`deserialize_message`. `PoseArray` hand-joint messages are not yet decoded by
+`decode_xr_control`; use the envelope helper plus ROS or a general CDR decoder.
 
 ---
 
