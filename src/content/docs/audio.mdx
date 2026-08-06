@@ -204,7 +204,7 @@ the lower-level `createAudioStream`, and the `enableAudio` option on the XR
 players.
 
 ```tsx
-import { AudioStream } from "@adamo/react";
+import { AudioStream } from "adamo-react";
 
 // Headless — plays audio, renders nothing. Resumes on the first page gesture.
 <AudioStream robot="my-robot" track="mic" />
@@ -259,7 +259,7 @@ you pick a build:
 | **Python** | `attach_audio` in `adamo` 0.4.48+. The Linux aarch64 wheel (Jetson) supports every source type; the Linux x86_64 wheel supports `source_type="alsa"` (direct capture) only; the macOS wheel has no audio capture. |
 | **Rust** | The `adamo` crate 0.1.98+ with `--features audio` (implies `video`). Needs an audio-enabled `libadamo` — the published prebuilt from 0.1.98 onward carries it. |
 | **C / C++** | Build the library with CMake `-DADAMO_BUILD_AUDIO=ON` (implies `ADAMO_BUILD_VIDEO`). Guards the C++ types behind `ADAMO_HAS_AUDIO`. |
-| **TypeScript** | `@adamo/react` (`<AudioStream>`) and `@adamo/media` (`createAudioStream`, XR players). |
+| **TypeScript** | `adamo-react` (`<AudioStream>`) and `adamo/media` (`createAudioStream`, XR players). |
 
 Robots built from the standard release binary capture audio out of the box.
 

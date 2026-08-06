@@ -1101,7 +1101,7 @@ if time.monotonic() - last_beat > 2.5:
 ```
 
 ```ts
-import { watchLatest } from "@adamo/fleet";
+import { watchLatest } from "adamo/fleet";
 
 let lastBeat = performance.now();
 const hb = await watchLatest(session, `adamo/${org}/my-arm/heartbeat`);
