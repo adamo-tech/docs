@@ -363,16 +363,25 @@ robot.attach_video(
     codec: str = "h264",
     encoder: str | None = None,
     bitrate_kbps: int = 2000,
+    adaptive_bitrate: bool = True,
+    min_bitrate_kbps: int | None = None,
+    max_bitrate_kbps: int | None = None,
+    bitrate_priority: float = 1.0,
     fps: int = 30,
     width: int = 1280,
     height: int = 720,
     pixel_format: str | None = None,
+    backend: str | None = None,          # "gstreamer" or "hw_pipeline"
     keyframe_distance: float = 2.0,
     stereo: bool = False,
+    reliability: str | None = None,
+    shm_publish: str | None = None,
+    passthrough: bool = False,
+    allow_missing: bool = False,
 ) -> None
 ```
 
-Attach a track driven by the SDK pipeline. Pass exactly one of `device=` (V4L2 device path or index), `shm=` (iceoryx2 service name produced by another process), `ros=` (ROS 2 topic — see [ROS 2](/ros/)), or `pipeline=` (legacy GStreamer string — deprecated).
+Attach a track driven by the SDK pipeline. Pass exactly one of `device=` (V4L2 device path or index), `shm=` (iceoryx2 service name produced by another process), `ros=` (ROS 2 topic — see [ROS 2](/ros/)), or `pipeline=` (legacy GStreamer string — deprecated). See [GStreamer pipelines](/cameras/#gstreamer-pipelines) for backend selection and encoded-pipeline passthrough.
 
 ```python
 robot.enable_ros_control(
