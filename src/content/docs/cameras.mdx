@@ -3,7 +3,7 @@ title: "Adding Cameras"
 description: "V4L2 devices and raw or encoded shared-memory video"
 ---
 
-import { Tabs, TabItem } from "@astrojs/starlight/components";
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 Adamo encodes camera frames with a hardware H.264 encoder and publishes them as named tracks. You attach as many tracks as you want — one per camera — and they run in parallel.
 
@@ -608,6 +608,91 @@ robot.attach_video(
 )
 robot.run()
 ```
+
+### Low-latency Intel VA-API encoding
+
+Some Qualcomm Android and VR hardware decoders hold approximately one frame
+when decoding H.264 produced by GStreamer's Intel `vah264enc`. At 30 fps this
+often appears as about 38–42 ms of decode latency. On eligible non-Jetson x86
+Linux systems with Intel VA-API, including Anvil workcells, retain GStreamer
+capture and preprocessing but select Adamo's native encoder:
+
+```python
+# Low-latency Intel VA-API encoding while retaining GStreamer capture
+robot.attach_video(
+    "main",
+    pipeline="zedsrc ! ... ! videoconvert",
+    encoder="vah264enc",
+    backend="hw_pipeline",
+)
+```
+
+<Aside type="tip" title="SDK version">
+Requires Python SDK 0.4.55+ or Rust/C SDK 0.1.103+. Python users can check the
+installed version with
+`python -c "import importlib.metadata; print(importlib.metadata.version('adamo'))"`.
+</Aside>
+
+This configuration uses:
+
+**GStreamer capture/preprocessing → bounded raw NV12 boundary → native Intel
+VA-API H.264 encoder → Adamo transport**
+
+The `pipeline=` remains active: `backend="hw_pipeline"` changes the encoder,
+not the camera or preprocessing stages. The pipeline must expose raw video and
+may capture, crop, scale, stitch, or convert it. Do not include `vah264enc`,
+`h264parse`, or another encoded-output tail. Although `encoder="vah264enc"` is
+the public configuration token, the hardware backend uses Adamo's native
+Intel VA-API encoder. Its H.264 Main stream uses CABAC, POC type 2, one
+reference frame, no B-frames, and standalone recovery IDRs to avoid the
+one-frame decoder delay seen on affected devices.
+
+On eligible hosts, omitting `backend` also selects this route for a GStreamer
+source with `encoder="vah264enc"`. Keep the explicit form above while
+troubleshooting because it makes the intended route clear. Other capture
+paths need no configuration change. AV1, non-VA-API encoders, Jetson, NVIDIA,
+macOS, and unsupported hardware retain their existing behavior.
+
+Raw frames cross an in-process, bounded, dropping boundary; there is no added
+shared memory, IPC, FFmpeg, or helper process. Adamo validates the negotiated
+raw-buffer layout and the VA-API capabilities required for the low-latency
+stream. If validation fails, startup reports the incompatible caps or
+capability instead of silently using a known high-latency configuration.
+
+Use these alternatives only when compatibility or an intentionally encoded
+pipeline requires them:
+
+```python
+# Full legacy GStreamer capture and encoding
+robot.attach_video(
+    "main",
+    pipeline="zedsrc ! ... ! videoconvert",
+    encoder="vah264enc",
+    backend="gstreamer",
+)
+
+# User-owned encoded GStreamer pipeline; no native re-encoding
+robot.attach_video(
+    "main",
+    pipeline="zedsrc ! ... ! vah264enc ! h264parse",
+    codec="h264",
+    passthrough=True,
+    backend="gstreamer",
+)
+```
+
+`backend="gstreamer"` preserves the full legacy GStreamer capture and encoding
+path. With `passthrough=True`, Adamo publishes the pipeline's encoded bytes
+unchanged, so that stream does not gain the native POC type 2 encoding.
+
+#### Troubleshoot one-frame H.264 decode latency
+
+1. Verify the publisher uses Python SDK 0.4.55+ or Rust/C SDK 0.1.103+ and runs on an eligible Intel VA-API Linux host.
+2. Confirm the GStreamer source ends in raw video, not encoded H.264.
+3. Select `encoder="vah264enc"` and `backend="hw_pipeline"`.
+4. Restart the publisher and confirm its logs report `GStreamer -> native VA-API`.
+5. Confirm the operator reports hardware decoding and that decode latency is no longer in the one-frame-delay class.
+6. If startup fails, preserve the reported caps or capability error and correct it; do not silently switch back as the primary fix.
 
 The pipeline string should describe a **source bin**, not a full Adamo output
 pipeline. It should end in raw video frames, or `image/jpeg` frames if you set

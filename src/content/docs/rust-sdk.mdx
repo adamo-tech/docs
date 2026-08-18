@@ -10,9 +10,9 @@ The `adamo` crate is a safe, idiomatic Rust wrapper over the Adamo SDK shared li
 ## Install
 
 ```sh
-cargo add adamo
-cargo add adamo --features video    # video capture + caller-fed tracks
-cargo add adamo --features audio    # Opus microphone streaming (implies video)
+cargo add adamo@^0.1.103
+cargo add adamo@^0.1.103 --features video    # video capture + caller-fed tracks
+cargo add adamo@^0.1.103 --features audio    # Opus microphone streaming (implies video)
 ```
 
 Prebuilt `libadamo` is available for `aarch64-unknown-linux-gnu` (Jetson / Ubuntu 22.04 arm64 — bundled in the crate, offline-friendly), `x86_64-unknown-linux-gnu`, and `aarch64-apple-darwin` (fetched at build time, pinned by version and sha256; requires `curl`). All prebuilts include video. Other targets can point at a local build via `ADAMO_LIB_DIR=/path/to/dir/with/libadamo.{so,dylib}`.
