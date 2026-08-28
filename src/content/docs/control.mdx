@@ -105,6 +105,104 @@ Use this listener while testing **Take Control → input → Release Control**. 
 is a diagnostic tool; the production receiver still needs to enforce the lease
 before applying commands.
 
+## Operator presence
+
+The hosted web operator publishes a presence signal while a browser tab is
+viewing a robot. This is separate from [explicit control
+ownership](#explicit-control-ownership): a viewer can be present without
+holding control, and multiple viewers can be present at once.
+
+Presence is a Zenoh liveliness token at:
+
+```text
+{robot}/operator/presence/{userId}/{sessionId}/{displayNameBase64Url}
+```
+
+The SDK adds the organization prefix. On the wire, the full key is:
+
+```text
+adamo/{org}/{robot}/operator/presence/{userId}/{sessionId}/{displayNameBase64Url}
+```
+
+Each browser tab gets its own `sessionId`. The last segment is the operator's
+UTF-8 display name encoded as unpadded base64url. Use `userId` and `sessionId`
+as identity; display names are labels and are not unique.
+
+Subscribe with history enabled so the callback first receives everyone already
+present and then receives changes:
+
+```python
+import base64
+
+import adamo
+
+
+session = adamo.connect(api_key="ak_...")
+
+
+def decode_display_name(segment: str) -> str:
+    padding = "=" * (-len(segment) % 4)
+    return base64.urlsafe_b64decode(segment + padding).decode("utf-8")
+
+
+def on_operator_presence(key: str, is_present: bool) -> None:
+    # SDK callbacks receive the org-prefix-stripped key:
+    # robot/operator/presence/user/session/display
+    robot, marker, presence, user_id, session_id, display = key.split("/", 5)
+    if marker != "operator" or presence != "presence":
+        return
+    state = "joined" if is_present else "left"
+    print(
+        f"{decode_display_name(display)} {state} {robot} "
+        f"(user={user_id}, session={session_id})"
+    )
+
+
+presence_sub = session.on_liveliness(
+    "*/operator/presence/**",
+    callback=on_operator_presence,
+    history=True,
+)
+```
+
+Keep `presence_sub` alive for as long as you want to receive events. The same
+primitive is available as Rust `Session::on_liveliness`, C
+`adamo_liveliness_subscribe`, and the TypeScript session's
+`liveliness().declareSubscriber`. See [Robot Discovery](/discovery/#watching-for-changes)
+for cross-language examples.
+
+A token appearing means that tab joined the robot view. It disappears when the
+tab leaves normally or when Zenoh detects that its session disconnected, so an
+unexpected browser or network failure does not depend on a final application
+message. Detection after an unclean disconnect is asynchronous and should not
+be used as a hard real-time actuator stop; use the short ownership lease above
+for control gating.
+
+### Viewing heartbeat
+
+The web operator also publishes best-effort JSON every two seconds on:
+
+```text
+{robot}/operator/viewing/{userId}/{sessionId}
+```
+
+```json
+{
+  "displayName": "Sam Considine",
+  "visible": true,
+  "sentAt": 1785270488243
+}
+```
+
+A clean exit publishes `visible: false`. If you consume this data topic instead
+of liveliness, expire a viewer after six seconds without a heartbeat because a
+crashed tab cannot reliably publish its final message. Prefer the liveliness
+token when you only need join/leave events.
+
+There is currently no typed `OperatorConnected` / `OperatorDisconnected` SDK
+helper. These signals are readable through the public pub/sub and liveliness
+primitives, but applications must parse the key or JSON payload themselves.
+
 ## Gamepad from operate.adamohq.com
 
 The web app publishes a Joy message to `{robot}/control/joy` whenever the gamepad changes. The payload is a ROS envelope whose inner payload is a CDR-encoded `sensor_msgs/msg/Joy`.
