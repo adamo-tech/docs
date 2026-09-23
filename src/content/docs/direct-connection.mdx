@@ -4,6 +4,7 @@ description: "Lower-latency video by connecting the browser straight to the robo
 ---
 
 import { Tabs, TabItem } from "@astrojs/starlight/components";
+import LegacyPython from "../../components/LegacyPython.astro";
 
 By default, video travels **browser → Adamo router → robot**. A direct connection (peer-to-peer) sends it **straight between the browser and the robot** over WebTransport, cutting out the router hop for lower latency.
 
@@ -23,6 +24,8 @@ The robot has to opt in. Add one call to the robot you already have (see [Quicks
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
+
+<LegacyPython feature="browser P2P (p2p=True)">Its <a href="/python-sdk/#video-routes"><code>route=</code></a> option is a different feature: it sends video straight to a LAN QUIC receiver, not to the browser.</LegacyPython>
 
 ```python
 import adamo

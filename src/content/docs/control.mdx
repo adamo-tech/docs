@@ -4,6 +4,7 @@ description: "Subscribe to gamepad and VR input from operate.adamohq.com, plus y
 ---
 
 import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
+import LegacyPython from "../../components/LegacyPython.astro";
 
 A robot becomes useful when it does something with the input it receives. There are two sources of control:
 
@@ -11,6 +12,15 @@ A robot becomes useful when it does something with the input it receives. There 
 2. **Your own custom operator** — a teleop program you wrote yourself, publishing whatever topics and payload format you like (typically JSON). See [Building Your Own Operator](/operator/).
 
 For both, the SDK primitive is the same: subscribe to a key expression and react to incoming samples.
+
+<Aside type="note" title="Python SDK 0.1">
+  The [Rust-core Python SDK](/python-sdk/) receives control with
+  [`robot.on(channel)`](/python-sdk/#roboton), which listens below the robot's
+  own `{robot}/control/` and decodes JSON or MessagePack. It does not decode
+  CDR: switch the hosted operator's **Joystick Serialization** to **JSON** for
+  the gamepad, and use the [legacy 0.4 SDK](/python-sdk/v0-4/) for the hosted
+  VR stream and for the session-based examples on this page.
+</Aside>
 
 <Aside>
   On a ROS 2 robot you can skip the decoding below entirely: enable the [ROS 2
@@ -131,6 +141,8 @@ as identity; display names are labels and are not unique.
 Subscribe with history enabled so the callback first receives everyone already
 present and then receives changes:
 
+<LegacyPython feature="liveliness subscriptions" />
+
 ```python
 import base64
 
@@ -210,7 +222,33 @@ The web app publishes a Joy message to `{robot}/control/joy` whenever the gamepa
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-Requires `adamo>=0.4.54`.
+With the Rust-core SDK (0.1), open the robot page's track sidebar and set
+**Joystick Serialization** to **JSON**. The gamepad then arrives as a
+`JoystickCommand`:
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+
+
+@robot.on("joy", max_age=1.0)   # drop input older than one second
+def on_joy(sample: adamo.ControlSample) -> None:
+    axes = sample.message["axes"]
+    buttons = sample.message["buttons"]
+    # axes[0..1] = left stick X/Y, axes[2..3] = right stick X/Y, etc.
+    drive(axes[0], axes[1])
+
+
+robot.attach_video("main", device="/dev/video0")
+robot.run()
+```
+
+In the default CDR mode, samples are counted as undecodable in
+`robot.control_stats()` and never reach the callback.
+
+With the legacy SDK (`adamo>=0.4.54`, `<0.5`), decode the default CDR stream
+with `adamo.xr`:
 
 ```python
 import time
@@ -456,6 +494,8 @@ When a viewer enters immersive VR mode on a stereo track, the headset publishes 
 
 The hosted UI sends XR data on `{robot}/control/cdr/xr_tracking`. Each payload is a ROS envelope whose inner topic is `/head_pose`, `/controller/{handedness}`, `/controller/{handedness}/tip`, or `/controller/{handedness}/joy`.
 
+<LegacyPython feature="CDR envelopes, so it cannot receive the hosted VR stream" />
+
 Save this as `adamo_xr_to_ros.py`:
 
 ```python
@@ -548,7 +588,7 @@ The example below is the robot-side receiver that pairs with the bimanual XR ope
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-The `@robot.on(...)` decorator subscribes and decodes JSON in one step. Brace-wrapped path segments capture the matched value as a keyword argument.
+`robot.on(channel)` subscribes below the robot's own `{robot}/control/` and decodes JSON or MessagePack in one step. A `*` matches one segment; read it back from `sample.channel`.
 
 ```python
 import adamo
@@ -558,23 +598,30 @@ robot = adamo.Robot(api_key="ak_...", name="my-arm")
 # Cameras streamed back to the operator
 robot.attach_video("wrist_left",  device="/dev/video0")
 robot.attach_video("wrist_right", device="/dev/video1")
-robot.attach_video("head",        shm="head_cam")
+robot.attach_video("head",        device="/dev/video2")
 
-# Bimanual hand controllers — {side} captures "left" or "right"
-@robot.on("xr-operator", "control/xr/hand/{side}", priority=250)
-def hand(msg, side):
+
+# Bimanual hand controllers on my-arm/control/xr/hand/left and .../right
+@robot.on("xr/hand/*", max_age=0.25)
+def hand(sample: adamo.ControlSample) -> None:
+    side = sample.channel.rsplit("/", 1)[1]
+    msg = sample.message
     move_arm(side, msg["pos"], msg["quat"])
     set_gripper(side, msg["trigger"])
 
+
 # Head pose — separate handler
-@robot.on("xr-operator", "control/xr/head", priority=250)
-def on_head(msg):
-    update_head_tracking(msg["pos"], msg["quat"])
+@robot.on("xr/head", max_age=0.25)
+def on_head(sample: adamo.ControlSample) -> None:
+    update_head_tracking(sample.message["pos"], sample.message["quat"])
+
 
 robot.run()
 ```
 
-The first argument to `@robot.on(...)` is the *broadcaster* name — the operator publishing those topics. The decorator subscribes to `{broadcaster}/{track}` under the hood.
+The operator publishes into the robot's control namespace — `my-arm/control/xr/hand/left` rather than its own `xr-operator/...` keys. The robot only listens below `{robot}/control/`.
+
+With the legacy 0.4 SDK, `@robot.on("xr-operator", "control/xr/hand/{side}")` subscribes to another participant's `{broadcaster}/{track}` keys instead, and brace-wrapped segments arrive as keyword arguments.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -652,6 +699,8 @@ reliably (`DATA` priority), as UTF-8 JSON:
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
+
+<LegacyPython feature="subscriptions outside the robot's control namespace" />
 
 ```python
 import adamo, json
@@ -753,6 +802,8 @@ The example below isolates the feedback path. Replace the two hardware-driver fu
 The payload is eight big-endian `f64` values: `[timestamp_seconds, effort_0, ..., effort_6]`.
 
 <Aside>Force feedback writes actuator efforts. Clamp torques in your driver, reject stale samples, and always clear effort commands before leaving external-effort mode.</Aside>
+
+<LegacyPython feature="publishers, subscriptions or fabric time" />
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
@@ -1148,6 +1199,8 @@ Control topics should be published with **REAL_TIME** priority and dropped on co
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
+<LegacyPython feature="publishing" />
+
 ```python
 robot.publish("control/joy", priority=250, express=True)
 # 0–255 mapped to 8 priority classes; ≥240 is REAL_TIME.
@@ -1178,6 +1231,8 @@ adamo_publisher(sess, "control/joy",
 ## Link Safety Gate
 
 Robots publish a 1 Hz heartbeat on `{robot}/heartbeat` carrying latency stats — the network regime classified by the robot's congestion forecaster, jitter, loss rate, and queuing delay. Use it as a safety gate before applying teleop commands: stop the robot when heartbeats go stale or the regime degrades.
+
+<LegacyPython feature="watch_latency" />
 
 ```python
 import time
@@ -1254,7 +1309,7 @@ bytes cdr_payload
 
 The `topic` and `type` fields describe the inner ROS message. The `cdr_payload` is the serialized message named by `type`.
 
-Python applications should normally use `decode_ros_envelope`,
+Python applications on the legacy 0.4 SDK should normally use `decode_ros_envelope`,
 `decode_xr_control`, or `subscribe_xr_control` from `adamo.xr` instead of
 unpacking these fields manually. The SDK validates name lengths, UTF-8, CDR
 alignment and endianness, string bounds, sequence bounds, and ROS timestamps.
@@ -1308,7 +1363,7 @@ The Joy message uses `header.frame_id = "joy"` and contains six axes plus 21 but
 | `buttons[15]` | D-pad right |
 | `buttons[16]` | Guide / Xbox |
 
-If joystick serialization is switched to JSON in the UI, the same key carries:
+If joystick serialization is switched to JSON in the UI — required for the Python SDK 0.1 — the same key carries:
 
 ```json
 {

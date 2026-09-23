@@ -127,7 +127,7 @@ robot.attach_video(
     height: int = 720,
     fps: int = 30,
     bitrate_kbps: int = 2000,
-    pixel_format: str | None = None, # capture format, e.g. "MJPEG"
+    pixel_format: str | None = None, # device= capture: "NV12" or "MJPEG"
     encoder: str | None = None,      # None = hardware only
     adaptive_bitrate: bool = True,
     min_bitrate_kbps: int | None = None,
@@ -136,8 +136,8 @@ robot.attach_video(
     keyframe_distance: float = 2.0,  # seconds
     stereo: bool = False,
     backend: str | None = None,      # "auto" or "hw_pipeline"
-    passthrough: bool = False,
-    allow_missing: bool = False,
+    passthrough: bool = False,       # not supported yet; True raises ValueError
+    allow_missing: bool = False,     # accepted, no effect yet
     route: str | None = None,        # "auto" | "relay" | "local"
     direct_target: str | None = None,
     direct_credentials: str | None = None,
@@ -155,7 +155,9 @@ Pass at most one source; passing both `device=` and `pipeline=` raises `ValueErr
                      width=3840, height=2160, fps=30, bitrate_kbps=20000)
   ```
 
-- **`pipeline=`** — a raw GStreamer source fragment, without an encoder or `appsink`. The SDK appends conversion, encoding, adaptive bitrate and publication. Requires a wheel built with the `gstreamer` feature; other builds raise `ValueError`. `width` and `height` describe the encoded output; the SDK scales the source to fit.
+  `pixel_format` accepts `NV12` or `MJPEG`; other values raise `ValueError`.
+
+- **`pipeline=`** — a raw GStreamer source fragment, without an encoder or `appsink`. The SDK appends conversion, encoding, adaptive bitrate and publication. Requires a wheel built with the `gstreamer` feature; other builds raise `ValueError`. The fragment must end in raw video — add a decoder such as `jpegdec` after an MJPEG source, because the SDK cannot link `image/jpeg` output. `width` and `height` describe the encoded output; the SDK scales the source to fit.
 
   To pick a specific sensor mode, add caps with a `capsfilter` element. A fragment cannot end in bare caps such as `! video/x-raw,width=...`: GStreamer parses trailing caps as an element name and the track fails with `no element "video"`.
 
@@ -189,7 +191,7 @@ robot.attach_video(
 
 A finite source — a file, or `num-buffers=` — ends the track normally, and `run()` returns. A fragment that fails to parse or start raises `RuntimeError` from `run()` naming the track.
 
-`allow_missing=True` keeps the robot running when the device is absent. Tracks cannot be attached while the video runtime is running; doing so raises `RuntimeError`.
+A missing or unopenable device raises `RuntimeError` from `run()` naming the track. `allow_missing=True` is accepted for compatibility but does not keep the robot running yet, and `passthrough=True` raises `ValueError` on every source. Tracks cannot be attached while the video runtime is running; doing so raises `RuntimeError`.
 
 See [Encoder selection](#encoder-selection), [Adaptive bitrate](#adaptive-bitrate) and [Video routes](#video-routes) for the remaining options.
 
@@ -284,8 +286,12 @@ The browser publishes on these channels:
 | `json/operator_control` | `OperatorControl` | The operator's claim on the robot. |
 | `json/safety` | `Safety` | The operator's safety state. |
 | `json/operator/layout` | `OperatorLayout` | The layout the operator is viewing. |
-| `joy` | `Joy` | Gamepad frames: `axes`, `buttons`. |
+| `joy` | `JoystickCommand` | Gamepad frames: `sequence_id`, `axes`, `buttons` (JSON mode — see below). |
 | `json/xr/frame` | `XrFrame` | One XR tracking frame per headset frame (below). |
+
+<Aside type="caution" title="operate.adamohq.com input formats">
+  The hosted operator currently sends the gamepad on `joy` as a CDR ROS envelope by default, and VR tracking on `cdr/xr_tracking` as CDR. This SDK decodes JSON and MessagePack only, so CDR samples are counted as undecodable and never delivered. For the gamepad, switch **Joystick Serialization** to **JSON** in the robot page's track sidebar; the payload then arrives as a `JoystickCommand`. VR tracking from the hosted operator is not receivable with this version until the web app publishes `json/xr/frame`; use the [legacy SDK's `adamo.xr`](/python-sdk/v0-4/#typed-ros--xr-control) meanwhile.
+</Aside>
 
 Typed messages carry a `type` entry; the SDK also recognises `JoystickCommand`, `JointState`, `PoseStamped`, `PoseArray` and `Bool`. Anything else is delivered as decoded.
 
@@ -532,7 +538,11 @@ These parts of the [legacy 0.4 SDK](/python-sdk/v0-4/) are not in this version y
 | `Robot.attach_audio` | Not exposed. |
 | `Robot.enable_ros_control`, `attach_video(ros=...)` | Not exposed. |
 | `attach_video(shm=..., shm_publish=..., reliability=...)`, `backend="gstreamer"` | Not accepted. Use `device=` or `pipeline=`. |
-| `Robot(relay=...)` | Not accepted. |
+| `attach_video(passthrough=True)` | Raises `ValueError`; encoded pipelines cannot be forwarded unchanged. |
+| `attach_video(allow_missing=True)` | Accepted, but a missing camera still fails the run. |
+| `attach_video(pipeline=...)` ending in `image/jpeg` | Not linkable; decode to raw video inside the fragment. |
+| `Robot(relay=...)`, `Robot(p2p=True)` | Not accepted. Browser P2P (WebTransport) is not served; `route=` covers LAN QUIC receivers only. |
+| CDR control payloads (`joy` in CDR mode, `cdr/xr_tracking`) | Counted as undecodable. Use JSON / MessagePack. |
 | `StateStore`, `TaskRunner` | Not exposed. |
 | `adamo.operate.control` (`JointState`, `Joy`, …), `adamo.xr` | Not included; control messages arrive decoded as dicts. |
 | `adamo.data` (recorded sessions, datasets) | Not included. |

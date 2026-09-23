@@ -4,6 +4,7 @@ description: "Write a robot program in Python, Rust, or C and operate it from op
 ---
 
 import { Tabs, TabItem, Steps, LinkCard, CardGrid } from "@astrojs/starlight/components";
+import LegacyPython from "../../components/LegacyPython.astro";
 
 Get a robot streaming video to [operate.adamohq.com](https://operate.adamohq.com) in under five minutes. Pick the language you want to write your robot in — Python, Rust, or C — install the SDK, write a short program that opens a camera, run it.
 
@@ -14,15 +15,13 @@ You don't need to write an operator — operate.adamohq.com provides a gamepad, 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```sh
-pip install adamo
-```
-
-Requires Python 3.10+. On the robot host you'll also want the video extras:
+Install the Rust-core `adamo` wheel for your platform:
 
 ```sh
-pip install 'adamo[video]'
+pip install adamo-0.1.0-cp38-abi3-manylinux_2_38_x86_64.whl
 ```
+
+Requires Python 3.8+. Video encoding is built in; no extras are needed. See the [Python SDK](/python-sdk/#install) page for other platforms and GStreamer builds.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -133,7 +132,7 @@ int main(void) {
 python -m adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
 ```
 
-It checks API key validity, QUIC reachability (including whether this network blocks UDP), encoder availability, and the video extras — and prints output you can paste straight into a support request.
+It checks API key validity, QUIC reachability (including whether this network blocks UDP), encoder availability, and the video extras — and prints output you can paste straight into a support request. The doctor ships with the [legacy 0.4 Python SDK](/python-sdk/v0-4/#doctor); run it from a separate environment with `pip install "adamo>=0.4,<0.5"`.
 
 ### The robot starts but never connects
 
@@ -174,13 +173,15 @@ Treat TCP as a diagnostic or telemetry-only fallback. **Do not teleoperate over 
 
 ## Run It
 
-Run your program. On startup the SDK fetches your router endpoint and opens a session.
+Run your program. On startup the SDK exchanges your API key for a router endpoint and opens a session; the Python `Robot()` constructor raises `ConnectionError` if the key is rejected or the network is unreachable.
+
+Once connected, the SDK reports each track's route, for example:
 
 ```
-[adamo] connecting to router as my-arm…
-[adamo] connected (org: my-org)
-[adamo] streaming main: 1280x720 @ 30 fps, 4000 kbps (nvh264enc)
+adamo video route for my-arm/main: no compatible authenticated LAN candidate was available; continuing through the relay
 ```
+
+That line is normal: no direct LAN receiver was found, so the video goes through the relay.
 
 ## See Your Robot
 
@@ -200,6 +201,8 @@ To make the robot *respond* to gamepad or VR input, see [Receiving Control](/con
 ## Inspect Live Topics
 
 When you are not sure what is flowing through the network, subscribe to a wildcard and print the keys that arrive. This is the live equivalent of "list topics": it observes traffic, so quiet topics appear only after they publish a sample.
+
+<LegacyPython feature="topic taps" />
 
 ```python
 import adamo
@@ -229,7 +232,7 @@ import adamo
 robot = adamo.Robot(api_key="ak_...", name="my-arm")
 robot.attach_video("wrist_left",  device="/dev/video0")
 robot.attach_video("wrist_right", device="/dev/video1")
-robot.attach_video("head",        shm="head_cam")     # iceoryx2 SHM
+robot.attach_video("head",        device="/dev/video2")
 robot.run()
 ```
 
@@ -262,7 +265,7 @@ adamo_robot_run(robot);
 </TabItem>
 </Tabs>
 
-For the full set of input methods (V4L2 and shared memory), see [Adding Cameras](/cameras/).
+For the full set of input methods (V4L2, GStreamer, frames pushed from your code, and shared memory), see [Adding Cameras](/cameras/).
 
 ## What's Next
 

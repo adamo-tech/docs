@@ -1,0 +1,18 @@
+---
+// Marks Python examples that need the legacy adamo 0.4 SDK because the
+// Rust-core 0.1 SDK does not expose the feature yet.
+import { Aside } from "@astrojs/starlight/components";
+
+interface Props {
+  feature: string;
+}
+
+const { feature } = Astro.props;
+---
+
+<Aside type="caution" title="Legacy Python SDK">
+  The Python examples here use the <a href="/python-sdk/v0-4/">adamo 0.4 SDK</a>.
+  The default <a href="/python-sdk/">Rust-core Python SDK (0.1)</a> does not
+  support {feature} yet; install 0.4 with <code>pip install "adamo&gt;=0.4,&lt;0.5"</code>
+  to run them. <slot />
+</Aside>

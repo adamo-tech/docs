@@ -4,6 +4,7 @@ description: "V4L2 devices and raw or encoded shared-memory video"
 ---
 
 import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
+import LegacyPython from "../../components/LegacyPython.astro";
 
 Adamo encodes camera frames with a hardware H.264 encoder and publishes them as named tracks. You attach as many tracks as you want — one per camera — and they run in parallel.
 
@@ -16,6 +17,14 @@ Those sources can carry raw pixels such as `BGRA`, `NV12`, or `I420`. They can
 also carry MJPEG frames or complete H.264/H.265 access units. Encoded H.264 and
 H.265 inputs can either be transcoded to the configured output codec or passed
 through unchanged.
+
+<Aside type="note" title="Python SDK 0.1">
+  The [Rust-core Python SDK](/python-sdk/) supports V4L2 devices,
+  [GStreamer pipelines](#gstreamer-pipelines), and frames you
+  [push from your own code](#publish-frames-yourself). Shared-memory sources
+  (`shm=`), encoded input and passthrough still need the
+  [legacy 0.4 SDK](/python-sdk/v0-4/).
+</Aside>
 
 ## USB / V4L2 Cameras
 
@@ -144,6 +153,8 @@ each sample must contain exactly `1280 * 720 * 4 = 3,686,400` bytes.
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
+
+<LegacyPython feature="shared-memory sources (shm=)" />
 
 Run the publisher and Adamo bridge as separate processes on the same host:
 
@@ -513,7 +524,7 @@ finally:
 
 ### Publish frames yourself
 
-The SDK gives you a track handle; you push raw pixel buffers into it. Adamo allocates a private iceoryx2 service for the track and routes the frames into the encoder.
+The SDK gives you a track handle; you push raw pixel buffers into it. In Python the frames go straight to the encoder in-process; the Rust and C SDKs allocate a private iceoryx2 service for the track and route the frames through it.
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
@@ -523,19 +534,23 @@ import cv2
 import adamo
 
 robot = adamo.Robot(api_key="ak_...", name="my-arm")
-track = robot.video("overlay", width=1280, height=720, pixel_format="BGRA",
+track = robot.video("overlay", width=1280, height=720, pixel_format="BGR",
                     fps=30, bitrate_kbps=4000)
 
 cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 while True:
-    ok, frame = cap.read()
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
+    ok, frame = cap.read()      # BGR uint8, shape (720, 1280, 3)
+    if not ok:
+        break
     track.send(frame)
+robot.close()
 ```
 
-The encoder pipeline auto-starts on the first `track.send()`.
+The encoder pipeline auto-starts on the first `track.send()`. Each frame must be exactly `track.frame_len` bytes and C-contiguous; wrap sliced or transposed arrays in `numpy.ascontiguousarray()`.
 
-`track.send()` is for fixed-size raw pixel buffers. For variable-size MJPEG frames, publish complete JPEG frames to an iceoryx2 service and consume that service with `attach_video(..., shm=..., pixel_format="mjpeg")`.
+`track.send()` is for fixed-size raw pixel buffers. For MJPEG, capture with `attach_video(device=..., pixel_format="mjpeg")`, or decode it in a GStreamer fragment ending in `jpegdec`.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -577,7 +592,8 @@ adamo_video_track_send(t, frame_bytes, frame_len);
 | `RGB`, `BGR`                   | 3 bytes per pixel | |
 | `YUY2`, `UYVY`                 | 2 bytes per pixel | |
 | `I420`, `NV12`                 | 1.5 bytes per pixel | Most efficient raw formats for the encoder. |
-| `MJPEG`, `MJPG`, `JPEG`, `image/jpeg` | Variable | Compressed Motion JPEG. Each source sample must contain one complete JPEG frame. Supported for V4L2, GStreamer, and consume-side SHM sources. |
+| `NV21`, `GRAY8`, `GRAY16_LE`   | 1.5 / 1 / 2 bytes per pixel | Python SDK 0.1 `video()` only. `GRAY16_LE` takes a `uint16` array. |
+| `MJPEG`, `MJPG`, `JPEG`, `image/jpeg` | Variable | Compressed Motion JPEG. Each source sample must contain one complete JPEG frame. Supported for V4L2, GStreamer, and consume-side SHM sources; Python SDK 0.1 supports it for V4L2 only. |
 | `H264`, `AVC`, `video/h264` | Variable | One complete Annex-B H.264 access unit per SHM sample. Transcoded unless passthrough is enabled. |
 | `H265`, `HEVC`, `video/h265` | Variable | One complete Annex-B H.265 access unit per SHM sample. Transcoded unless passthrough is enabled. |
 
@@ -587,7 +603,9 @@ MJPEG sources are decoded and re-encoded into the configured output codec. On Je
 
 Use a GStreamer pipeline when the camera is best accessed through a GStreamer
 element, such as `zedsrc`, `nvarguscamerasrc`, a hardware decoder, or another
-custom source. In Python, pass a source pipeline string with `pipeline=`:
+custom source. In Python, pass a source pipeline string with `pipeline=`. The
+Python SDK 0.1 needs a wheel built with the `gstreamer` feature; see
+[Python SDK install](/python-sdk/#install).
 
 ```python
 import adamo
@@ -602,12 +620,15 @@ robot.attach_video(
     width=1280,
     height=720,
     fps=30,
-    pixel_format="BGRA",
-    encoder="nvv4l2h264enc",
     bitrate_kbps=4000,
 )
 robot.run()
 ```
+
+The SDK selects a hardware encoder for the host; pass `encoder=` to pin one
+(see [Encoder selection](#encoder-selection)). In Python 0.1, `width`, `height`
+and `fps` describe the encoded output and the SDK scales the source to fit;
+`pixel_format` applies only to `device=` capture.
 
 ### Troubleshooting high H.264 decode latency on Intel Linux publishers
 
@@ -628,7 +649,7 @@ robot.attach_video(
 ```
 
 <Aside type="tip" title="SDK version">
-Requires Python SDK 0.4.55+ or Rust/C SDK 0.1.103+. Python users can check the
+Requires Python SDK 0.4.55+, the Python SDK 0.1 GStreamer build, or Rust/C SDK 0.1.103+. Python users can check the
 installed version with
 `python -c "import importlib.metadata; print(importlib.metadata.version('adamo'))"`.
 </Aside>
@@ -656,7 +677,8 @@ validation fails, startup reports the incompatible format or capability
 instead of silently using a known high-latency configuration.
 
 Use these alternatives only when compatibility or an intentionally encoded
-pipeline requires them:
+pipeline requires them. Both need the [legacy 0.4 Python SDK](/python-sdk/v0-4/):
+Python 0.1 rejects `backend="gstreamer"` and `passthrough=True`.
 
 ```python
 # Full legacy GStreamer capture and encoding
@@ -683,7 +705,7 @@ unchanged, so that stream does not gain Adamo's low-latency encoding behavior.
 
 #### Apply and verify the fix
 
-1. Verify the publisher uses Python SDK 0.4.55+ or Rust/C SDK 0.1.103+ and runs on an eligible Intel VA-API Linux host.
+1. Verify the publisher uses Python SDK 0.4.55+, the Python SDK 0.1 GStreamer build, or Rust/C SDK 0.1.103+ and runs on an eligible Intel VA-API Linux host.
 2. Confirm the GStreamer source ends in raw video, not encoded H.264.
 3. Select `encoder="vah264enc"` and `backend="hw_pipeline"`.
 4. Restart the publisher and confirm its logs report `GStreamer -> native VA-API`.
@@ -692,7 +714,7 @@ unchanged, so that stream does not gain Adamo's low-latency encoding behavior.
 
 The pipeline string should describe a **source bin**, not a full Adamo output
 pipeline. It should end in raw video frames, or `image/jpeg` frames if you set
-`pixel_format="mjpeg"`. Do not include Adamo's encoder, parser, network sink,
+`pixel_format="mjpeg"` (legacy 0.4 SDK only; in Python 0.1, end with `jpegdec`). Do not include Adamo's encoder, parser, network sink,
 or final `appsink`; the SDK adds its own queue, hardware encoder, parser, and
 transport publisher.
 
@@ -709,10 +731,12 @@ not this:
 zedsrc stream-type=2 camera-resolution=3 camera-fps=60 ! video/x-raw,format=BGRA,framerate=60/1
 ```
 
-The caps should match the frame layout you pass to `attach_video`: pixel format,
-width, height, and frame rate. If the GStreamer source negotiates `BGRA`
-`1280x720@30`, pass `pixel_format="BGRA"`, `width=1280`, `height=720`, and
-`fps=30`.
+With the legacy 0.4 SDK, the caps should match the frame layout you pass to
+`attach_video`: pixel format, width, height, and frame rate. If the GStreamer
+source negotiates `BGRA` `1280x720@30`, pass `pixel_format="BGRA"`,
+`width=1280`, `height=720`, and `fps=30`. Python 0.1 converts and scales the
+source to `width`/`height` itself and rejects `pixel_format` values other than
+`NV12` and `MJPEG`, so omit `pixel_format` for pipelines.
 
 ### Reading from another pipeline's tee
 
@@ -740,6 +764,8 @@ target/release/shm-publisher --source gstreamer \
 ```
 
 Then publish that service through Adamo:
+
+<LegacyPython feature="shared-memory sources (shm=)" />
 
 ```python
 import adamo
@@ -792,3 +818,7 @@ Adamo picks the best available hardware H.264 encoder for the host at startup:
 | Anything else                  | CPU (x264) |
 
 To see what the SDK picked, check the log line printed at connect.
+
+The Python SDK 0.1 never falls back to software: with no usable hardware
+encoder the track fails with `EncoderSelectionError`. Pass `encoder="x264"` to
+opt into CPU encoding. See [Encoder selection](/python-sdk/#encoder-selection).

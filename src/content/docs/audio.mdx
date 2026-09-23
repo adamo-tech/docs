@@ -4,6 +4,7 @@ description: "Capture a robot microphone and stream it to operators alongside vi
 ---
 
 import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
+import LegacyPython from "../../components/LegacyPython.astro";
 
 Adamo streams audio the same way it streams cameras: you attach a named audio
 track on the robot, and it shows up for operators next to the video tracks. A
@@ -21,6 +22,9 @@ Audio is encoded with **Opus at 64 kbps stereo, 48 kHz, 20 ms frames** by
 default — about 1–2% of a typical video track. Unlike video, audio is **not**
 downscaled under congestion, so speech stays intelligible when the link tightens.
 </Aside>
+
+
+<LegacyPython feature="audio tracks (attach_audio)" />
 
 ## Attaching a microphone
 

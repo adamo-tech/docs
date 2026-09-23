@@ -4,6 +4,7 @@ description: "Publish robot state that operators read on demand or live, and run
 ---
 
 import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
+import LegacyPython from "../../components/LegacyPython.astro";
 
 A robot can publish named state that operators read — on demand or live. The robot owns the value; operators read it. State is held in memory by the robot process, so it resets when the robot restarts.
 
@@ -11,6 +12,9 @@ Two APIs build on this:
 
 - **Shared state** — a key/value store the robot updates and operators read.
 - **Task runs** — a pedal-driven sequence of subtasks with progress and rep counting, shown in the web **Tasks** widget.
+
+
+<LegacyPython feature="state stores or task runners" />
 
 ## Shared State
 

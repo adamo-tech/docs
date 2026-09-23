@@ -4,12 +4,16 @@ description: "List online robots, watch joins/leaves, and tap live topics"
 ---
 
 import { Tabs, TabItem } from "@astrojs/starlight/components";
+import LegacyPython from "../../components/LegacyPython.astro";
 
 Adamo uses **liveliness tokens** to track which participants are online. A robot declares a token; the token disappears when the connection drops; everyone else watches the token namespace and reacts.
 
 This is what powers the robot list on operate.adamohq.com. You can also use it directly from your own programs to build dashboards, fleet-management tools, or operators that automatically connect to the first available robot.
 
 For live topic inspection, subscribe to a wildcard and print the keys that arrive. Adamo does not keep a global registry of every possible pub/sub key; a topic is visible when it publishes traffic. Use liveliness for "who is online?" and a wildcard topic tap for "what is flowing right now?".
+
+
+<LegacyPython feature="sessions, liveliness queries, or topic taps">Robots running 0.1 still declare <code>{"{robot}"}/alive</code> and <code>{"{robot}"}/video/{"{track}"}/alive</code> tokens, so they appear in discovery from any SDK.</LegacyPython>
 
 ## Declaring Yourself Alive
 

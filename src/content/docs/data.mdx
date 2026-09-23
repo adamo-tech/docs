@@ -4,10 +4,14 @@ description: "Pub/sub primitives — publish telemetry, subscribe to other robot
 ---
 
 import { Tabs, TabItem } from "@astrojs/starlight/components";
+import LegacyPython from "../../components/LegacyPython.astro";
 
 Beyond video, every Adamo participant can publish, subscribe, and query arbitrary key expressions. This page covers those primitives: publish, subscribe, one-shot get, and the priority / reliability knobs that decide how a message travels.
 
 For control specifically, see [Receiving Control](/control/).
+
+
+<LegacyPython feature="sessions or generic pub/sub, queries, and publishers">The 0.1 SDK only receives operator control on <code>{"{robot}"}/control/**</code> with <a href="/python-sdk/#roboton"><code>Robot.on</code></a>.</LegacyPython>
 
 ## Publishing
 

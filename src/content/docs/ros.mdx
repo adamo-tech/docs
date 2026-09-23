@@ -4,6 +4,7 @@ description: "Stream ROS camera topics as video tracks and receive operator cont
 ---
 
 import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
+import LegacyPython from "../../components/LegacyPython.astro";
 
 <Aside type="danger" title="ROS adds latency and reduces stream reliability">
   Every ROS video frame crosses the DDS transport as raw pixels and is
@@ -23,6 +24,9 @@ Adamo connects to a robot's ROS 2 graph directly. Two things come out of that:
 2. **Control** — operator input (gamepad, VR) arrives as native ROS 2 topics that any local node can subscribe to, with no Adamo code in your control stack.
 
 The bridge runs inside the robot process and speaks DDS to the local graph, so it works with stock ROS 2 (Humble, Jazzy, Kilted) using the default middleware. It needs no `rclpy`, no changes to your ROS installation, and no extra process. Nothing ROS-formatted leaves the robot: camera frames are encoded before they are published, and operator input arrives already in ROS wire format.
+
+
+<LegacyPython feature="ROS 2 camera topics or control fan-out (attach_video(ros=...), enable_ros_control)" />
 
 ## Requirements
 
