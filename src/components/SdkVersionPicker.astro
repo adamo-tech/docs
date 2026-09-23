@@ -1,0 +1,102 @@
+---
+// Switches between the versions of an SDK reference page.
+interface Version {
+  label: string;
+  detail: string;
+  href: string;
+}
+
+interface Props {
+  versions: Version[];
+  current: string;
+}
+
+const { versions, current } = Astro.props;
+---
+
+<nav class="sdk-version-picker not-content" aria-label="SDK version">
+  <span class="sdk-version-picker__label">Version</span>
+  <div class="sdk-version-picker__options">
+    {
+      versions.map((version) => (
+        <a
+          class="sdk-version-picker__option"
+          href={version.href}
+          aria-current={version.href === current ? "page" : undefined}
+        >
+          <span class="sdk-version-picker__name">{version.label}</span>
+          <span class="sdk-version-picker__detail">{version.detail}</span>
+        </a>
+      ))
+    }
+  </div>
+</nav>
+
+<style>
+  .sdk-version-picker {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-block: 0 1.5rem;
+  }
+
+  .sdk-version-picker__label {
+    font-family: var(--font-inter);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+  }
+
+  .sdk-version-picker__options {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    padding: 0.25rem;
+    border: 1px solid var(--color-border-light);
+    border-radius: 0.625rem;
+    background: var(--color-bg-card);
+  }
+
+  .sdk-version-picker__option {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    padding: 0.375rem 0.75rem;
+    border: 1px solid transparent;
+    border-radius: 0.4375rem;
+    color: var(--sl-color-gray-2);
+    text-decoration: none;
+    transition:
+      background-color var(--duration-fast) var(--ease-default),
+      color var(--duration-fast) var(--ease-default);
+  }
+
+  .sdk-version-picker__option:hover {
+    background: var(--color-bg-card-hover);
+    color: var(--color-text-primary);
+  }
+
+  .sdk-version-picker__option[aria-current="page"] {
+    border-color: var(--color-accent-blue-line);
+    background: var(--color-accent-blue-soft);
+    color: var(--color-text-primary);
+  }
+
+  .sdk-version-picker__name {
+    font-size: 0.875rem;
+    font-weight: 500;
+  }
+
+  .sdk-version-picker__detail {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    color: var(--color-text-muted);
+  }
+
+  .sdk-version-picker__option[aria-current="page"] .sdk-version-picker__detail {
+    color: var(--color-accent-blue);
+  }
+</style>
