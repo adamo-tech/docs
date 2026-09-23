@@ -155,7 +155,15 @@ Pass at most one source; passing both `device=` and `pipeline=` raises `ValueErr
                      width=3840, height=2160, fps=30, bitrate_kbps=20000)
   ```
 
-- **`pipeline=`** — a raw GStreamer source fragment, without an encoder or `appsink`. The SDK appends conversion, encoding, adaptive bitrate and publication. Requires a wheel built with the `gstreamer` feature; other builds raise `ValueError`. `width` and `height` describe the encoded output; add source caps in the fragment to pick a specific sensor mode.
+- **`pipeline=`** — a raw GStreamer source fragment, without an encoder or `appsink`. The SDK appends conversion, encoding, adaptive bitrate and publication. Requires a wheel built with the `gstreamer` feature; other builds raise `ValueError`. `width` and `height` describe the encoded output; the SDK scales the source to fit.
+
+  To pick a specific sensor mode, add caps with a `capsfilter` element. A fragment cannot end in bare caps such as `! video/x-raw,width=...`: GStreamer parses trailing caps as an element name and the track fails with `no element "video"`.
+
+  ```python
+  robot.attach_video("main",
+                     pipeline="v4l2src device=/dev/video0 ! capsfilter caps=video/x-raw,width=1920,height=1080,framerate=30/1",
+                     width=1280, height=720)
+  ```
 
   ```python
   robot.attach_video("left", pipeline="nvarguscamerasrc sensor-id=0",
@@ -165,7 +173,21 @@ Pass at most one source; passing both `device=` and `pipeline=` raises `ValueErr
 
   On Jetson, the pipeline stays in NVMM memory from capture to the hardware encoder — raw pixels never cross into Python or through CPU buffers.
 
-`stereo=True` labels an already-packed side-by-side or top/bottom frame as stereo; it does not open a second camera. `width` and `height` describe the whole packed frame.
+`stereo=True` labels an already-packed side-by-side or top/bottom frame as stereo; it does not open a second camera. `width` and `height` describe the whole packed frame. To pack two cameras into one track, build the frame with a `compositor` in the fragment:
+
+```python
+robot.attach_video(
+    "stereo",
+    pipeline=(
+        "compositor name=mix sink_1::ypos=1080 ! capsfilter caps=video/x-raw,width=1920,height=2160 "
+        "v4l2src device=/dev/video0 ! videoconvert ! mix.sink_0 "
+        "v4l2src device=/dev/video2 ! videoconvert ! mix.sink_1"
+    ),
+    width=1920, height=2160, stereo=True,
+)
+```
+
+A finite source — a file, or `num-buffers=` — ends the track normally, and `run()` returns. A fragment that fails to parse or start raises `RuntimeError` from `run()` naming the track.
 
 `allow_missing=True` keeps the robot running when the device is absent. Tracks cannot be attached while the video runtime is running; doing so raises `RuntimeError`.
 
