@@ -14,7 +14,7 @@ You build your own operator when you outgrow the hosted UI:
 - A leader/follower rig (GELLO, Aloha) where one robot's joint state drives another.
 - A browser app for an end customer that should never see operate.adamohq.com.
 
-The pattern is symmetric: an operator is just another `adamo.Robot` (Python) or `Session` (Rust/C) participant. It publishes; the robot subscribes. Same SDK, same wire format, same priority knobs.
+The pattern is symmetric: an operator is just another `Session` (Rust/C) or TypeScript session participant. The Python SDK 1.0 is robot-side only. It publishes; the robot subscribes. Same SDK, same wire format, same priority knobs.
 
 ## The Operator / Robot Pattern
 
@@ -31,30 +31,7 @@ This is the sender side. Pair it with the robot-side receiver on the [Receiving 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-import json
-import adamo
-
-op = adamo.Robot(api_key="ak_...", name="xr-operator")
-
-left  = op.publish("control/xr/hand/left",  priority=250, express=True)
-right = op.publish("control/xr/hand/right", priority=250, express=True)
-head  = op.publish("control/xr/head",       priority=250, express=True)
-
-# your OpenXR / WebXR / Quest loop
-for frame in xr_stream():
-    left.put(json.dumps(frame.left))
-    right.put(json.dumps(frame.right))
-    head.put(json.dumps(frame.head))
-```
-
-What's happening:
-
-- `op = adamo.Robot(name="xr-operator")` — open a participant called `xr-operator`. No video tracks; this side just publishes.
-- `op.publish(track, priority=250, express=True)` — declare a publisher under `{xr-operator}/{track}` with REAL_TIME priority, drop-on-congestion, best-effort reliability, and express sends. The robot subscribes to `xr-operator/control/xr/hand/{side}` to receive these.
-- The XR loop runs at the headset's frame rate (72 / 90 / 120 Hz). Each frame becomes one `put` per channel — small JSON payloads, no batching.
-
-You can substitute any input source — Quest controllers, Leap Motion, Apple Vision Pro, an Aloha leader rig — as long as it produces frames you can serialise.
+The Python SDK 1.0 is robot-side only and cannot publish operator topics. Write operators with the Rust, C, or [TypeScript](/typescript-sdk/) SDK; the robot side receives them as shown on [Receiving Control](/control/#custom-control-topics).
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -145,9 +122,13 @@ The full surface — `useRobots`, `useTracks`, `useSubscription`, `usePublisher`
 
 If your operator should attach to whichever robot is online, use [Robot Discovery](/discovery/) to enumerate or watch the live set:
 
-```python
-robots = [k.removesuffix("/alive") for k in op.session.live_tokens()]
-print("online:", robots)
+```rust
+let robots: Vec<String> = session
+    .live_tokens("**/alive")?
+    .into_iter()
+    .map(|key| key.trim_end_matches("/alive").to_owned())
+    .collect();
+println!("online: {robots:?}");
 ```
 
 Then pick one and start publishing to its control topics.

@@ -1,22 +1,31 @@
 ---
 title: "Python SDK"
-description: "Complete reference for the adamo Python package — connect, Robot, pub/sub, queries, liveliness, video, and recorded data"
+description: "Complete reference for the adamo Python package — Robot, video tracks, operator control, subscriptions, state, and recordings"
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-The `adamo` Python package is the full Adamo SDK — pub/sub, queries, liveliness, hardware-encoded video, Opus [audio](/audio/), and recorded-data access for training. Python 3.10+.
+The `adamo` Python package runs a robot: it streams hardware-encoded video, delivers operator control to callbacks, subscribes to other keys in your organization, keeps robot state, and lists and downloads recordings. It is the canonical Rust SDK compiled as a Python extension, so the Rust and Python SDKs share one implementation. Python 3.8+.
+
+<Aside type="caution" title="Changed in adamo 1.0">
+The 1.0 package is robot-side only. `adamo.connect()` and the standalone session (`put`, `publisher`, `get`, liveliness), `Robot.publish` / `subscribe` / `send` / `recv` / `log`, `attach_audio`, the ROS options, `adamo.operate`, and `adamo.data` are no longer part of the Python SDK. Use the [Rust](/rust-sdk/), [C](/c-sdk/), or [TypeScript](/typescript-sdk/) SDK for operators and publish-side tools.
+</Aside>
 
 ## Install
 
 ```sh
-pip install adamo               # core: pub/sub, queries, liveliness
-pip install 'adamo[video]'      # adds iceoryx2 + numpy for video tracks
-pip install 'adamo[data]'       # adds pandas for DataFrame loading
-pip install 'adamo[ml]'         # adds torch + av for PyTorch datasets
+pip install adamo
 ```
 
-The package builds from a Rust extension via maturin. Pre-built wheels are published for the supported platforms; on others, `pip` will compile from source (requires Rust toolchain).
+Pre-built wheels are published for Linux x86_64, Linux aarch64 (Jetson), and macOS arm64. There are no extras: video support is built in.
+
+Shared-memory **producers** written in Python (see [Adding Cameras](/cameras/#shared-memory-iceoryx2)) also need the iceoryx2 Python package at the version the SDK links:
+
+```sh
+pip install 'iceoryx2==0.8.1' numpy
+```
+
+The consumer side (`attach_video(shm=...)`) needs nothing extra.
 
 ## Top-Level API
 
@@ -24,301 +33,22 @@ The package builds from a Rust extension via maturin. Pre-built wheels are publi
 import adamo
 ```
 
-Re-exports:
-
-| Symbol | From | Description |
-|--------|------|-------------|
-| `connect` | `adamo.operate._config` | Open a `Session` from an API key. |
-| `connect_async` | `adamo.operate._config` | Async variant of `connect`. |
-| `Session` | `adamo.operate.session` | The pub/sub / query / liveliness session. |
-| `Sample` | `adamo.operate.session` | A received message. |
-| `Publisher` | `adamo.operate.session` | A persistent publisher. |
-| `Subscriber` | `adamo.operate.session` | An iterator over received samples. |
-| `Robot` | `adamo.session` | A participant — combines pub/sub with hardware video. |
-| `Participant` | `adamo.session` | Alias for `Robot`. |
-| `VideoTrack` | `adamo._video` | Python-fed video track (lazy import). |
-| `data` | `adamo.data` | Recorded-session client (lazy import). |
-| `operate` | `adamo.operate` | The pub/sub submodule (lazy import). |
-
-`adamo.JointState`, `adamo.Joy`, `adamo.JoystickCommand` are exposed via `from adamo import …` (re-exports of `adamo.operate.control`).
-
----
-
-## `connect`
-
-```python
-adamo.connect(
-    *,
-    api_key: str | None = None,
-    token: str | None = None,
-    org_id: str | None = None,
-    api_url: str = "https://api.adamohq.com",
-    protocol: str = "quic",
-    mtls: bool = False,
-) -> Session
-```
-
-Open an authenticated session. Provide an `api_key` for live SDK sessions.
-Token auth is still used by browser/user flows, but token-based Python live sessions are not wired in the native transport yet.
-
-| Arg | Description |
-|-----|-------------|
-| `api_key` | An API key starting with `ak_`. Used for robots and scripts. |
-| `token` | A Supabase JWT. Used for user-authenticated sessions. |
-| `org_id` | Required only with `token` if the user belongs to multiple orgs. |
-| `api_url` | Override the Adamo API base URL. |
-| `protocol` | Transport — `"quic"` (default; use it in all cases), `"udp"`, or `"tcp"` (telemetry/diagnostic fallback — don't teleoperate over TCP). |
-| `mtls` | Use the mTLS QUIC path when routers require client certificates. |
-
-Raises `ValueError` if both `api_key` and `token` are passed, or if neither is. Raises `NotImplementedError` for token-based native sessions.
-
-```python
-adamo.connect_async(*, api_key=..., token=..., org_id=..., api_url=..., protocol="quic", mtls=False) -> Session
-```
-
-Async variant — does the API config fetch asynchronously, then opens a synchronous session. Returns a `Session`, not a coroutine of one (the underlying transport is sync).
-
----
-
-## `Session`
-
-```python
-class adamo.operate.Session
-```
-
-Every key you pass is automatically scoped to your organisation; you write `{robot}/{topic}` (e.g. `my-arm/sensors/imu`).
-
-### `Session.org`
-
-```python
-@property
-session.org -> str
-```
-
-The organisation slug resolved from the API key.
-
-### `Session.put`
-
-```python
-session.put(
-    key_expr: str,
-    payload: bytes | str,
-    *,
-    raw: bool = False,
-    priority: Priority = Priority.DATA,
-    express: bool = False,
-    reliable: bool = False,
-) -> None
-```
-
-One-shot publish. `payload` is encoded as UTF-8 if a `str` is passed. `raw=True` skips the org-scope prefix (useful for router-side endpoints).
-
-### `Session.publisher`
-
-```python
-session.publisher(
-    key_expr: str,
-    *,
-    raw: bool = False,
-    priority: Priority = Priority.DATA,
-    express: bool = False,
-    reliable: bool = False,
-) -> Publisher
-```
-
-Declare a persistent `Publisher` for repeated puts on the same key. The publisher is undeclared on `.close()` or context exit.
-
-### `Session.subscribe`
-
-```python
-session.subscribe(
-    key_expr: str,
-    *,
-    raw: bool = False,
-    callback: Callable[[Sample], None] | None = None,
-) -> Subscriber
-```
-
-Declare a subscriber. Without `callback`, the returned `Subscriber` is iterable and supports non-blocking `try_recv()`. With `callback`, samples are delivered to it on the receive thread; the returned handle is used for lifecycle (`close()`).
-
-Wildcards in `key_expr`:
-
-| Pattern | Matches |
-|---------|---------|
-| `my-arm/sensors/**` | Everything under `sensors/`. |
-| `my-arm/sensors/*`  | One level under `sensors/`. |
-| `*/sensors/imu`     | IMU from any robot. |
-
-### `Session.get`
-
-```python
-session.get(
-    key_expr: str,
-    *,
-    raw: bool = False,
-    timeout_ms: int = 5000,
-) -> list[Sample]
-```
-
-One-shot query. Collects every reply that arrives within `timeout_ms`. Returns an empty list if nothing replies.
-
-### `Session.alive`
-
-```python
-session.alive(token_key: str) -> LivelinessToken
-```
-
-Declare this client as alive at `{token_key}/alive`. The token stays active until you call `.close()` on it (or the process exits).
-
-### `Session.live_tokens`
-
-```python
-session.live_tokens(pattern: str = "**/alive") -> list[str]
-```
-
-Query currently-live tokens matching `pattern`. Returns prefix-stripped keys. Default returns every live token in the org.
-
-### `Session.on_liveliness`
-
-```python
-session.on_liveliness(
-    pattern: str = "**/alive",
-    *,
-    callback: Callable[[str, bool], None] | None = None,
-    history: bool = True,
-) -> Subscriber
-```
-
-Watch for liveliness changes. The callback fires with `(key, is_alive)` whenever a token appears or disappears. `history=True` delivers the current set of live tokens up front so the handler sees them on subscribe.
-
-### `Session.state_store`
-
-```python
-session.state_store(robot: str) -> StateStore
-```
-
-Declare a robot-owned [key/value store](/state/) on `{robot}/state/**`. The robot updates it; operators read with `get` / `subscribe`.
-
-### `Session.task_runner`
-
-```python
-session.task_runner(robot: str) -> TaskRunner
-```
-
-Declare a [task runner](/state/#task-runs) — a looping subtask sequence with an idle gap between reps — published on `{robot}/state/task_run`.
-
-### `Session.fabric_now_us`
-
-```python
-session.fabric_now_us() -> int
-```
-
-Microseconds since the Unix epoch on the Adamo fabric clock. Until the first time sync completes, this falls back to the local wall clock.
-
-### `Session.fabric_synced`
-
-```python
-session.fabric_synced() -> bool
-```
-
-`True` once the first fabric time sync has completed (typically under 100 ms after connect).
-
-### `Session.close`
-
-```python
-session.close() -> None
-```
-
-Close the underlying connection. Also reachable via `with adamo.connect(…) as session:`.
-
----
-
-## `Sample`
-
-```python
-class adamo.Sample
-```
-
-A received message.
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `key` | `str` | Topic key with the org scope stripped. |
-| `payload` | `bytes` | Raw payload. |
-| `timestamp` | `Timestamp \| None` | Sender timestamp, if the publisher set one. |
-
-`__repr__` shows key + payload size.
-
----
-
-## `Publisher`
-
-```python
-class adamo.Publisher
-```
-
-A persistent publisher tied to a single key.
-
-```python
-publisher.put(payload: bytes | str) -> None
-publisher.close() -> None
-```
-
-`str` payloads are encoded as UTF-8. Supports the context-manager protocol — exit closes (undeclares) the publisher.
-
----
-
-## `Subscriber`
-
-```python
-class adamo.Subscriber
-```
-
-An iterator over received samples.
-
-```python
-for sample in subscriber:
-    ...
-
-sample = subscriber.try_recv()  # Sample | None — non-blocking
-subscriber.close()              # undeclares the subscription
-```
-
-Supports the context-manager protocol.
-
----
-
-## `StateStore`
-
-```python
-class adamo.StateStore
-```
-
-A robot-owned retained key/value store — see [Robot State](/state/).
-
-```python
-store.set(key: str, value) -> None    # dict/list/str -> JSON; bytes sent as-is
-store.get(key: str) -> bytes | None
-store.get_json(key: str)              # parsed JSON, or None
-store.delete(key: str) -> None
-```
-
----
-
-## `TaskRunner`
-
-```python
-class adamo.TaskRunner
-```
-
-A looping subtask sequence with an idle gap between reps; publishes `{robot}/state/task_run`. See [Task Runs](/state/#task-runs).
-
-```python
-# subtasks: list of {"id", "name"} dicts or (id, name) tuples
-runner.select(task_set_id: str, name: str, subtasks) -> None
-runner.advance() -> None    # one pedal press
-runner.reset() -> None      # back to idle without counting a rep
-```
+| Symbol | Description |
+|--------|-------------|
+| `Robot` | A robot: video tracks, operator control, subscriptions, state, recording. |
+| `VideoTrack` | Push handle returned by `Robot.video`. |
+| `Session` | The robot's connection, from `robot.session`. |
+| `Sample` | One sample received on a subscribed key. |
+| `Subscriber` / `CallbackSubscriber` | Pull and callback subscription handles. |
+| `ControlSample` | One operator control message delivered to `Robot.on`. |
+| `StateStore` / `TaskRunner` | Robot state and task runs, from `Robot.state_store()` / `Robot.task_runner()`. |
+| `state_topic(robot, key)` / `state_topic_all(robot)` | `{robot}/state/{key}` and `{robot}/state/**`. |
+| `Recording` / `ControllerMask` | What the Adamo data service records for this robot. |
+| `Recordings` / `RecordingInfo` | List and download your organization's recordings. |
+| `Inference` | A cloud policy run started by `Robot.inference`. |
+| `FaceBlur` | Face masking settings for a video track. |
+| `EncoderSelectionError` / `EncoderLibraryError` | No requested encoder could start. |
+| `xr` | Typed XR tracking messages and `subscribe_xr_control`. |
 
 ---
 
@@ -328,216 +58,157 @@ runner.reset() -> None      # back to idle without counting a rep
 class adamo.Robot:
     def __init__(
         self,
-        api_key: str | None = None,
+        api_key: str | None = None,   # defaults to the ADAMO_API_KEY environment variable
         name: str | None = None,
-        relay: str | None = None,
-        protocol: str = "quic",
+        protocol: str = "quic",       # "quic", "tcp", or "udp"
+        record: bool | Recording = False,
     ): ...
 ```
 
-A participant — combines pub/sub messaging with hardware-encoded video. The same class covers three roles, defined by which methods you call:
+Connects to your organization's router. `protocol="quic"` is the right choice in every case; `"tcp"` is a diagnostic or telemetry-only fallback for networks that block UDP — don't teleoperate over it. A rejected API key raises `ConnectionError`.
 
-- **Leader / viewer** (no camera): use `publish` / `subscribe` / `send` / `recv`.
-- **Follower robot** (one or more cameras): use `attach_video` for each camera + `subscribe` for control.
-- **Perception pipeline** (Python frame loop): use `video()` to get a `VideoTrack`, then `track.send(frame)` in a loop.
-
-`Participant` is exposed as an alias of `Robot` for the leader / viewer case.
+Every key the robot uses is scoped to your organization; you write `{robot}/{topic}` (for example `my-arm/sensors/imu`).
 
 ### Properties
 
 ```python
-robot.session -> Session   # opens the underlying Session lazily
+robot.name -> str
+robot.session -> Session   # the robot's connection, for subscribing to keys
 ```
 
-### Video attachments
+### `Robot.attach_video`
 
 ```python
 robot.attach_video(
     name: str,
     *,
-    device: str | int | None = None,
-    shm: str | None = None,
-    pipeline: str | None = None,         # legacy GStreamer path; deprecated
-    ros: str | None = None,              # ROS 2 topic (see the ROS 2 guide)
-    ros_format: str | None = None,       # override inferred handling, e.g. "ros_h264"
-    codec: str = "h264",
-    encoder: str | None = None,
+    device: str | None = None,          # V4L2 device path, e.g. "/dev/video0"
+    pipeline: str | None = None,        # GStreamer source fragment ending in raw video
+    shm: str | None = None,             # iceoryx2 service name produced by another process
+    codec: str = "h264",                # "h264" or "av1"
+    width: int = 1280,
+    height: int = 720,
+    fps: int = 30,
     bitrate_kbps: int = 2000,
+    pixel_format: str | None = None,
+    encoder: str | None = None,
     adaptive_bitrate: bool = True,
     min_bitrate_kbps: int | None = None,
     max_bitrate_kbps: int | None = None,
     bitrate_priority: float = 1.0,
-    fps: int = 30,
-    width: int = 1280,
-    height: int = 720,
-    pixel_format: str | None = None,
-    backend: str | None = None,          # "gstreamer" or "hw_pipeline"
     keyframe_distance: float = 2.0,
     stereo: bool = False,
-    reliability: str | None = None,
-    shm_publish: str | None = None,
-    passthrough: bool = False,
+    backend: str | None = None,         # "auto" or "hw_pipeline"
     allow_missing: bool = False,
+    route: str | None = None,           # "auto", "relay", or "local"
+    direct_target: str | None = None,
+    direct_credentials: str | None = None,
+    face_blur: bool | FaceBlur | None = None,
 ) -> None
 ```
 
-Attach a track driven by the SDK pipeline. Pass exactly one of `device=` (V4L2 device path or index), `shm=` (iceoryx2 service name produced by another process), `ros=` (ROS 2 topic — see [ROS 2](/ros/)), or `pipeline=` (legacy GStreamer string — deprecated). See [GStreamer pipelines](/cameras/#gstreamer-pipelines) for backend selection and encoded-pipeline passthrough.
+Attach a camera track that the SDK captures, encodes, and publishes. Pass exactly one of `device=`, `pipeline=`, or `shm=`; passing more than one raises `ValueError`. See [Adding Cameras](/cameras/) for each source.
 
-```python
-robot.enable_ros_control(
-    *,
-    domain_id: int = 0,                       # 0 honors ROS_DOMAIN_ID
-    control_channels: list[str] | None = None,
-    control_topics: list[str] | None = None,  # allowlist; None = unrestricted
-) -> None
-```
+| Source | `pixel_format` |
+|--------|----------------|
+| `device=` | Optional. Omit it to capture the driver's preferred uncompressed format, or pass `"MJPEG"` to capture MJPEG (decoded on the CPU before encoding). |
+| `pipeline=` | Optional. Omit it to accept the pipeline's raw output, or pass `"NV12"`, `"YUY2"`, `"UYVY"`, or `"MJPEG"`. |
+| `shm=` | Required, together with `width` and `height`, matching the producer exactly. Raw formats only: `NV12`, `NV21`, `I420`, `YUY2`, `UYVY`, `BGRA`, `RGBA`, `BGRX`, `RGBX`, `RGB`, `BGR`, `GRAY8`, `GRAY16_LE`. |
 
-Fan operator control out to the local ROS 2 graph as native topics — see [ROS 2](/ros/#operator-control-as-ros-topics). Requires a ROS-enabled build.
+Omitting `encoder` selects a hardware encoder for `codec`; there is no automatic software fallback. Explicit choices on Linux are `"nvenc"`, `"vaapi"`, `"x264"` (software), and `"jetson"` (aarch64 builds with Jetson support); `"vtenc_h264"` on macOS. GStreamer element names such as `"nvh264enc"`, `"vah264enc"`, and `"nvv4l2h264enc"` are accepted as aliases.
+
+With `allow_missing=True` a track waits for a late or idle source until `close()`; otherwise it fails after ten seconds without a frame.
+
+`route` selects relay or direct delivery for the track: `"auto"` (default) races a LAN candidate against the relay, `"relay"` never dials one, and `"local"` requires the direct link named by `direct_target`.
+
+Encoded shared-memory input (MJPEG, H.264, H.265) and `passthrough` are not supported by the Python `Robot` in this release.
+
+### `Robot.video`
 
 ```python
 robot.video(
     name: str,
     *,
+    pixel_format: str,            # required: a raw buffer carries no layout
     width: int = 1280,
     height: int = 720,
-    pixel_format: str,            # required — raw buffers carry no layout
+    fps: int = 30,
+    bitrate_kbps: int = 2000,
     codec: str = "h264",
     encoder: str | None = None,
-    bitrate_kbps: int = 2000,
     adaptive_bitrate: bool = True,
     min_bitrate_kbps: int | None = None,
     max_bitrate_kbps: int | None = None,
     bitrate_priority: float = 1.0,
-    fps: int = 30,
-    backend: str | None = None,   # "gstreamer" or "hw_pipeline"
     keyframe_distance: float = 2.0,
     stereo: bool = False,
+    backend: str | None = None,   # "auto" or "hw_pipeline"
+    allow_missing: bool = False,
+    route: str | None = None,
+    direct_target: str | None = None,
+    direct_credentials: str | None = None,
+    face_blur: bool | FaceBlur | None = None,
 ) -> VideoTrack
 ```
 
-Create a track whose frames you push from Python. Returns a `VideoTrack`; call `.send(frame)` with a numpy array (or bytes-like). The encoder pipeline auto-starts on the first `send()` if you haven't called `robot.run()` yourself. `pixel_format` is required and raises `ValueError` when omitted. With `adaptive_bitrate` (the default) the encoder follows the congestion forecast between `min_bitrate_kbps` and `max_bitrate_kbps`; `bitrate_priority` weights this track's share when several tracks compete.
+Create a track whose frames you push from Python with `track.send(frame)`. The first `send()` starts the robot's runtime on a background thread if you haven't called `robot.run()`. With `adaptive_bitrate` (the default) the encoder follows the congestion forecast between `min_bitrate_kbps` and `max_bitrate_kbps`; `bitrate_priority` weights this track's share when several tracks compete.
 
-### Audio attachments
+### `Robot.on`
 
 ```python
-robot.attach_audio(
-    name: str,
-    *,
-    source_type: str = "auto",   # "auto" | "alsa" | "pipeline" | "test"
-    device: str | None = None,   # ALSA device, e.g. "plughw:1,0"
-    pipeline: str | None = None, # GStreamer source string (source_type="pipeline")
-    codec: str = "opus",
-    bitrate_kbps: int = 64,
-    sample_rate: int = 48000,
-    channels: int = 2,           # ceiling, not a target — a mono source stays mono
-    frame_ms: int = 20,          # 2 (=2.5 ms), 5, 10, 20, 40, 60
-    inband_fec: bool = False,
-    dtx: bool = False,
-    allow_missing: bool = False, # keep the robot running if the source is absent
-) -> None
+robot.on(channel: str, callback: Callable[[ControlSample], object], *, max_age: float | None = 1.0) -> None
+
+@robot.on(channel: str, *, max_age: float | None = 1.0)
+def handler(sample: ControlSample): ...
 ```
 
-Attach a microphone track, captured and Opus-encoded by the SDK and published on
-`{robot.name}/audio/{name}`. Audio is **send-only** in the Python SDK (consume it
-from the browser or the C/C++ SDK, matching video). See [Streaming Audio](/audio/)
-for source types and hardware notes.
+Receive operator control sent to this robot on `{robot}/control/{channel}`. `channel` may use `*` and `**` wildcards (for example `json/xr/**`). Payloads are JSON or MessagePack; the SDK tells them apart and hands the callback plain Python values in `sample.message`. Typed messages carry a `type` entry (`Keyboard`, `OperatorControl`, `Safety`, `Joy`, `JoystickCommand`, `JointState`, `PoseStamped`, `PoseArray`, `Bool`, `XrFrame`, …). The browser's XR tracking in ROS-envelope CDR is also accepted and normalized to the `json/xr/...` channels. See [Receiving Control](/control/).
 
-`source_type="pipeline"` requires `pipeline=` and raises `ValueError` otherwise.
-An audio-only robot (no video tracks) still drives the capture pipeline from
-`run()`. Requires `adamo` 0.4.48+; the Linux x86_64 wheel supports
-`source_type="alsa"` only, while the aarch64 wheel supports every source type.
-
-### Pub/sub
+`max_age` (seconds) drops samples whose fabric timestamp is older than the limit once the clock is synchronized; pass `None` to deliver every sample. Callbacks run on an SDK thread, one per subscription; an exception in a callback is printed and the subscription keeps running.
 
 ```python
-robot.publish(
+robot.control_stats() -> tuple[int, int, int, int]   # received, delivered, dropped stale, undecodable
+```
+
+### State and task runs
+
+```python
+robot.state_store() -> StateStore    # this robot's state on {robot}/state/**
+robot.task_runner() -> TaskRunner    # this robot's task run on {robot}/state/task_run
+```
+
+See [Robot State](/state/).
+
+### Recording
+
+```python
+robot.start_recording() -> None   # record until stop_recording(), whether or not anyone is in control
+robot.stop_recording() -> None
+```
+
+Pass `record=True` (or a `Recording`) to the constructor to have the Adamo data service record this robot automatically. See [`Recording`](#recording-1).
+
+### Cloud inference
+
+```python
+robot.inference(
+    prompt: str,
     track: str,
     *,
-    priority: int = 200,    # 0–255; ≥240 maps to REAL_TIME
-    express: bool = False,
-    reliable: bool = False,
-) -> Publisher
+    wrist_track: str | None = None,
+    control_channel: str | None = None,
+    hz: float | None = None,
+    replan_steps: int | None = None,
+    seconds: float | None = None,
+    stereo: str | None = None,
+    layout: str | None = None,
+    flip: str | None = None,
+    max_frame_age: float | None = None,
+    dry_run: bool | None = None,
+) -> Inference
 ```
 
-Declare a publisher on `{robot.name}/{track}`. The numeric `priority` is mapped to one of 8 transport priority classes (see [`_to_zenoh_priority`](#priority-mapping)).
-
-```python
-robot.subscribe(
-    broadcast: str,
-    track: str | list[str],
-    callback: Callable[..., None],
-    *,
-    priority: int = 200,
-) -> Callable
-```
-
-Subscribe to one or more tracks on another participant's broadcast. `broadcast` is the participant name (e.g. `"xr-operator"`); `track` can include `*` / `**` wildcards or `{name}` capture groups. Named captures are passed to the callback as keyword arguments matching the parameter names.
-
-Returns the callback unchanged so it works as a decorator too.
-
-```python
-@robot.on(
-    broadcast: str,
-    track: str | list[str],
-    *,
-    priority: int = 200,
-    decode: Callable[[bytes], object] | str | None = "json",
-) -> Callable
-```
-
-Decorator. `decode` controls payload transformation before the handler runs:
-
-- `"json"` (default) — `json.loads(payload)`.
-- `"control"` — `decode_control(payload)` (returns `JointState` / `Joy` / `JoystickCommand` / dict).
-- `None` — pass the raw `bytes`.
-- Any callable — called with raw bytes; its return value is passed in.
-
-`"control"` is for the JSON control models below. For the browser's ROS
-envelope/CDR Joy and XR streams, use the typed `adamo.xr` API.
-
-### Messaging (back-channel)
-
-```python
-robot.send(channel: str, data: bytes | str) -> None
-```
-
-Publish a message on `{robot.name}/msg/{channel}`. `str` data is encoded as UTF-8.
-
-```python
-robot.recv(timeout: float | None = None) -> tuple[str, bytes]
-```
-
-Block until a message arrives on any `msg/*` channel from another participant. Returns `(channel, data)`. Raises `TimeoutError` if `timeout` elapses.
-
-```python
-robot.on_message(callback: Callable[[str, bytes], None]) -> Callable
-```
-
-Register a callback for incoming messages. Can be used as a decorator. Multiple callbacks can be registered.
-
-### Logging
-
-```python
-robot.log(message: str, *, level: str = "info") -> None
-```
-
-Publish a log line from this robot. The web operator console subscribes to this stream and renders the log lines in real time.
-
-`level` is a free-form string; the standard values `"info"`, `"warn"`, `"error"`, `"debug"` are rendered with colour by the built-in UI. Messages are truncated at 10,000 characters.
-
-```python
-import adamo
-
-robot = adamo.Robot(api_key="ak_...", name="my-robot")
-robot.log("booted and attached camera")
-robot.log("encoder dropped a frame", level="warn")
-try:
-    do_stuff()
-except Exception as e:
-    robot.log(f"pipeline failed: {e}", level="error")
-```
-
-Each log entry is stamped with the fabric clock so lines from multiple robots stay ordered in the operator view.
+Start a cloud policy that watches one of this robot's video tracks and publishes actions on its control channel. It returns as soon as the run is enqueued; a cold start takes about a minute. `Inference.status()` returns a dict with `done`, `progress`, `result`, and `error` (`done` means the run ended, never that the task succeeded); `Inference.stop()` ends it. Unset options use the service's defaults.
 
 ### Lifecycle
 
@@ -545,444 +216,213 @@ Each log entry is stamped with the fabric clock so lines from multiple robots st
 robot.run() -> None
 ```
 
-Block until the session ends. If video tracks are attached, drives the encoder pipeline. Otherwise sleeps until Ctrl+C.
+Block driving the attached video tracks. `run()` requires at least one track from `attach_video` or `video`, and raises `ValueError` otherwise. Control callbacks and subscriptions are delivered without `run()`.
 
 ```python
 robot.close() -> None
 ```
 
-Tear down all subscribers, publishers, video tracks, and the session. Supports the context-manager protocol.
+Stop subscriptions, tracks, and the connection. `Robot` supports the context-manager protocol.
+
+```python
+adamo.Robot.local(name: str, port: int = 17447, pairing_key: str | None = None) -> Robot
+```
+
+Start a robot locally without cloud login; the SDK manages its certificates. `robot.local_port` and `robot.local_pairing_key` report what it listens on.
 
 ---
 
 ## `VideoTrack`
 
+Returned from `robot.video()`.
+
 ```python
-from adamo import VideoTrack
+track.name, track.width, track.height, track.pixel_format
+track.frame_len -> int    # exact bytes per frame
+track.send(frame) -> None
+track.close() -> None
 ```
 
-Returned from `robot.video()`. Push frames to feed the encoder.
+`send` takes `bytes`, `bytearray`, a memoryview, or a C-contiguous NumPy `uint8` array (`uint16` for `GRAY16_LE`) of exactly `frame_len` bytes; a wrong size or a non-contiguous array raises `ValueError` (use `numpy.ascontiguousarray(frame)`). A newer frame replaces one the encoder has not read yet. If the encoder or transport fails, the next `send` raises `RuntimeError`.
 
-| Attribute / method | Type | Description |
-|--------------------|------|-------------|
-| `name` | `str` | Track name. |
-| `width`, `height` | `int` | Frame dimensions. |
-| `pixel_format` | `str` | Uppercased format string. |
-| `service_name` | `str` | iceoryx2 service backing the track. |
-| `send(frame)` | `None` | Push one frame (numpy array or bytes-like). Length must match `width × height × bytes-per-pixel` for the format. |
-| `close()` | `None` | Mark the track closed; subsequent `send()` raises `RuntimeError`. |
-
-Supported `pixel_format` values:
-
-| Format | Bytes per pixel |
-|--------|------------------|
-| `BGRA`, `RGBA`, `BGRX`, `RGBX` | 4 |
-| `RGB`, `BGR` | 3 |
-| `YUY2`, `UYVY` | 2 |
-| `I420`, `NV12` | 1.5 |
-
-Non-contiguous numpy arrays are copied to contiguous before sending.
+Supported `pixel_format` values: `NV12`, `NV21`, `I420`, `YUY2`, `UYVY`, `BGRA`, `RGBA`, `BGRX`, `RGBX`, `RGB`, `BGR`, `GRAY8`, `GRAY16_LE`.
 
 ---
 
-## Control message types
+## `Session`
 
 ```python
-from adamo.operate.control import JointState, Joy, JoystickCommand, decode_control
+robot.session.org -> str   # the organization slug resolved from the API key
+
+robot.session.subscribe(key: str) -> Subscriber
+robot.session.subscribe(key: str, *, callback: Callable[[Sample], object]) -> CallbackSubscriber
 ```
 
-JSON-serialisable dataclasses for the most common control payloads. Each has a `.to_json() -> bytes` method that fills `stamp` with `time.time()` if it's zero.
+Subscribe to any organization-relative key expression, such as another robot's telemetry. Wildcards:
+
+| Pattern | Matches |
+|---------|---------|
+| `my-arm/sensors/*` | one level under `sensors/` |
+| `my-arm/sensors/**` | everything under `sensors/` |
+| `*/tasks/signal` | that key on every robot |
+
+With `callback`, samples are delivered on an SDK thread and a `CallbackSubscriber` is returned; the subscription keeps delivering after the handle is dropped, until `close()` on the handle or on the robot.
+
+### `Sample`
 
 ```python
-@dataclass
-class JointState:
-    names: list[str]      = []
-    positions: list[float] = []
-    velocity: list[float]  = []
-    effort: list[float]    = []
-    stamp: float = 0.0
-    frame_id: str = ""
+sample.key -> str                  # organization-relative key
+sample.payload -> bytes
+sample.is_delete -> bool
+sample.timestamp_us -> int | None  # publisher's fabric timestamp
+sample.timestamp -> float | None   # the same, in seconds
 ```
 
-```python
-@dataclass
-class Joy:
-    axes: list[float] = []
-    buttons: list[int] = []
-    stamp: float = 0.0
-```
+### `Subscriber`
 
 ```python
-@dataclass
-class JoystickCommand:
-    sequence_id: int = 0
-    axes: list[float] = []
-    buttons: list[int] = []
-    stamp: float = 0.0
-```
+for sample in subscriber:          # blocks per sample; ends on close()
+    ...
 
-```python
-decode_control(payload: bytes) -> JointState | Joy | JoystickCommand | dict
-```
-
-Decodes a JSON payload by inspecting its `type` field. Unknown types come back as a raw `dict`.
-
-## Typed ROS / XR control
-
-Available in `adamo>=0.4.54`.
-
-```python
-from adamo.xr import (
-    PoseStamped,
-    XRControlSample,
-    XRDecodeError,
-    XRJoy,
-    decode_ros_envelope,
-    decode_xr_control,
-    subscribe_xr_control,
-)
-```
-
-The browser gamepad and XR streams use an Adamo ROS envelope containing CDR,
-not the JSON format handled by `decode_control`. `adamo.xr` validates and
-decodes the envelope plus `geometry_msgs/msg/PoseStamped` and
-`sensor_msgs/msg/Joy` without requiring ROS or NumPy.
-
-```python
-sample = decode_xr_control(payload)
-
-sample.topic                 # e.g. "/controller/left"
-sample.type_name             # "geometry_msgs/msg/PoseStamped"
-sample.source_timestamp      # ROS Header time in fabric/epoch seconds
-sample.transport_timestamp   # Zenoh metadata time, when supplied
-sample.is_stale(0.5)         # missing timestamps are stale
-
-if isinstance(sample.message, PoseStamped):
-    sample.message.header.frame_id
-    sample.message.position.as_tuple()       # (x, y, z)
-    sample.message.orientation.as_tuple()    # (x, y, z, w)
-elif isinstance(sample.message, XRJoy):
-    sample.message.axes
-    sample.message.buttons
-```
-
-`RosTimestamp` retains integer `sec` and `nanosec` fields, so the exact source
-timestamp is not lost. `Quaternion` always uses the ROS/WebXR scalar-last
-`x, y, z, w` convention. The decoder accepts little- and big-endian CDR and
-raises `XRDecodeError` for malformed envelopes, invalid alignment/bounds,
-invalid strings, oversized sequences, or invalid ROS nanoseconds.
-
-```python
-subscribe_xr_control(
-    session,
-    robot_name: str,
-    callback: Callable[[XRControlSample], None],
-    *,
-    channel: str = "cdr/xr_tracking",
-    max_age_seconds: float | None = None,
-    on_decode_error: Callable[[XRDecodeError], None] | None = None,
-)
-```
-
-This wraps `Session.subscribe` and returns the same lifecycle handle. When
-`max_age_seconds` is set, messages with an unset or old ROS source timestamp
-are dropped before the callback. Use `channel="joy"` for the browser gamepad
-key; the default subscribes to XR tracking.
-
-`decode_ros_envelope(payload)` is the lower-level validated helper for callers
-that need the untouched CDR bytes, such as a bridge passing them to ROS
-`deserialize_message`. `PoseArray` hand-joint messages are not yet decoded by
-`decode_xr_control`; use the envelope helper plus ROS or a general CDR decoder.
-
----
-
-## Priority mapping
-
-`Robot.publish(priority=…)` accepts a 0–255 integer that's mapped to the 8-class priority enum:
-
-| Range | Class |
-|-------|-------|
-| 240–255 | `REAL_TIME` |
-| 210–239 | `INTERACTIVE_HIGH` |
-| 180–209 | `INTERACTIVE_LOW` |
-| 140–179 | `DATA_HIGH` |
-| 100–139 | `DATA` |
-| 60–99   | `DATA_LOW` |
-| 0–59    | `BACKGROUND` |
-
-Higher numeric values drain ahead of lower ones under congestion.
-
----
-
-## Downloading Data
-
-The `adamo.data` submodule connects to the recorded-data store rather than the live network. Use it to download recorded sessions, browse topics, decode video, build temporally-aligned tables, and produce PyTorch datasets for training.
-
-This module is **Python only** — there is no equivalent in the Rust or C SDKs.
-
-```python
-from adamo.data import connect, DataClient, AdamoDataset, SessionMetadata, Record, VideoIndex, Frame
-```
-
-### `connect`
-
-```python
-adamo.data.connect(
-    *,
-    api_key: str,
-    api_url: str = "...",
-    store_url: str = "https://store.adamohq.com",
-) -> DataClient
-```
-
-Open a `DataClient`. Exchanges the API key for a short-lived JWT internally and refreshes when it expires.
-
-### `DataClient`
-
-```python
-class adamo.data.DataClient
-```
-
-#### Sessions
-
-```python
-client.list_sessions(
-    *,
-    after: str | float | datetime | None = None,
-    before: str | float | datetime | None = None,
-    name_contains: str | None = None,
-) -> list[SessionMetadata]
-
-client.get_session(session_id: str) -> SessionMetadata
-client.get_topics(session_id: str) -> list[str]
-client.match_topics(session_id: str, pattern: str) -> list[str]
-client.message_count(session_id: str) -> int
-```
-
-`pattern` in `match_topics` supports `*` (single segment) and `**` (any depth).
-
-#### Records
-
-```python
-client.query_records(
-    session_id: str,
-    *topics: str,
-    start: str | float | datetime | None = None,
-    end:   str | float | datetime | None = None,
-) -> list[Record]
-
-client.iter_records(...) -> Iterator[Record]    # streaming
-client.export_records(..., chunk_size: int = 1000) -> Iterator[list[Record]]
-```
-
-`*topics` supports wildcards. Without arguments, returns every topic in the session.
-
-#### Aligned queries
-
-```python
-client.aligned(
-    session_id: str,
-    *topics: str,
-    start: ... = None,
-    end: ... = None,
-    window_ms: int = 50,
-    hz: float | None = None,
-) -> list[dict[str, Record]]
-```
-
-Temporally aligns records across two or more topic patterns. Returns one dict per timestep, mapping topic name to the matched `Record`. If `hz` is set, resamples to that frequency; otherwise aligns to the first topic's timestamps.
-
-#### Video
-
-```python
-client.video_index(session_id: str, topic: str) -> VideoIndex
-client.download_video(session_id: str, topic: str, output_path: str | Path) -> Path
-client.iter_frames(
-    session_id: str,
-    topic: str,
-    *,
-    start: ... = None,
-    end:   ... = None,
-    size:  tuple[int, int] | None = None,
-) -> Iterator[Frame]
-```
-
-`iter_frames` requires `pip install av numpy`. Each `Frame.image` is a `(H, W, 3)` uint8 RGB numpy array; `size=(w, h)` resizes.
-
-#### Episodes
-
-```python
-client.episodes(
-    *topics: str,
-    sessions: list[str] | None = None,
-    window_ms: int = 50,
-) -> Iterator[dict[str, list[Record]]]
-```
-
-Iterate sessions as trajectory-level episodes. Each yielded dict maps topic name to a time-ordered list of `Record`s.
-
-#### DataFrame
-
-```python
-client.to_dataframe(
-    session_id: str,
-    *topics: str,
-    start: ... = None,
-    end: ... = None,
-)
-```
-
-Returns a pandas `DataFrame` with columns `session_id`, `topic`, `timestamp`, `payload`. Requires `pip install adamo[data]`.
-
-#### Dataset
-
-```python
-client.dataset(
-    sessions: list,
-    observation: dict[str, str | tuple[str, str]],
-    action: str | tuple[str, str],
-    obs_steps: int = 1,
-    action_steps: int = 1,
-    hz: float = 30.0,
-    image_size: tuple[int, int] | None = None,
-) -> AdamoDataset
-```
-
-Build a PyTorch-compatible dataset. `observation` maps user keys to topic specs:
-
-- `"topic/path"` — auto-detects video vs. raw bytes.
-- `("topic/pattern", "field_name")` — JSON-decode payload, extract that field as a float array.
-
-`action` takes the same form. Wildcards resolve automatically; if a pattern matches multiple topics the first is used and a warning is emitted.
-
-#### Lifecycle
-
-```python
-client.close() -> None
+subscriber.recv(timeout=None)      # Sample; TimeoutError after timeout seconds
+subscriber.try_recv()              # Sample | None, non-blocking
+subscriber.close()
 ```
 
 Supports the context-manager protocol.
 
-### `AdamoDataset`
+---
+
+## `StateStore`
 
 ```python
-class adamo.data.AdamoDataset
+store = robot.state_store()
+store.set(key: str, value) -> None    # bytes as given, str as UTF-8, anything else as JSON
+store.get(key: str) -> bytes | None
+store.get_json(key: str)              # decoded JSON, or None
+store.delete(key: str) -> None
 ```
 
-A PyTorch-compatible dataset. All download / decode happens at construction; `__getitem__` is O(1).
+## `TaskRunner`
 
 ```python
-dataset[i] -> dict[str, torch.Tensor]
+runner = robot.task_runner()
+# subtasks: list of {"id", "name"} dicts or (id, name) tuples
+runner.select(task_set_id: str, name: str, subtasks) -> None
+runner.advance() -> None    # one pedal press; ValueError before any set is selected
+runner.reset() -> None      # back to idle without counting a rep
 ```
 
-Each sample has dot-separated keys:
+---
 
-- `"observation.<key>"` for each entry in `observation`, shape `(obs_steps, …)`.
-- `"action"`, shape `(action_steps, …)`.
-
-Video observations are float32 in `[0, 1]` with shape `(obs_steps, 3, H, W)`. Numeric observations are `(obs_steps, D)`.
+## Typed XR control
 
 ```python
-dataset.stats: dict[str, dict[str, np.ndarray]]
-# dataset.stats["observation.state"] = {"mean": …, "std": …}
+from adamo.xr import XrFrame, XrController, PoseStamped, Joy, subscribe_xr_control
+
+@subscribe_xr_control(robot, max_age=0.25)
+def on_xr(sample: adamo.xr.XrControlSample) -> None:
+    if isinstance(sample.message, XrFrame) and sample.message.left:
+        print(sample.message.left.pose.position.as_tuple())   # (x, y, z)
 ```
 
-Per-key mean and std for all non-video keys (plus the action key).
+`subscribe_xr_control(robot, callback=None, *, channel=None, max_age=1.0)` listens on every XR stream unless given a `channel`, skips anything that is not XR tracking, and delivers read-only typed messages: `XrFrame` (`head`, `left`, `right`, `resumed`, `stamp`), `XrController` (`pose`, `tip`, `axes`, `buttons`), `Pose`, `PoseStamped`, `PoseArray`, `Joy`, and `Bool`, built from `Vector3` and `Quaternion`. Used without a callback it is a decorator. The browser's default ROS-envelope CDR tracking is accepted and normalized, so `/head_pose` arrives as a `PoseStamped` on `json/xr/head/pose`.
 
-### Data models
+Quaternions are always scalar-last `x, y, z, w`. `XrControlSample.is_stale(max_age_seconds)` judges freshness by the sender's own stamp and treats an unstamped message as stale. From a `robot.on` callback, `adamo.xr.message(sample)` returns the typed message, or `None` when the sample is not XR tracking.
+
+---
+
+## Recordings
+
+### `Recording`
 
 ```python
-@dataclass
-class SessionMetadata:
-    id: str
-    name: str
-    status: str
-    topics: list[str]
-    started_at: float | None  # epoch seconds
-    stopped_at: float | None
-    message_count: int
-    org_id: str
+adamo.Recording(
+    controller_mask: ControllerMask = ControllerMask.HUMAN | ControllerMask.POLICY,
+    *,
+    pre_roll: float = ...,
+    post_roll: float = ...,
+    split_on_takeover: bool = ...,
+    max_duration: float = ...,
+    max_size: int = ...,
+    on_sample: Callable[[int], dict | None] | None = None,
+    sample_rate: float = ...,
+)
 ```
+
+What the Adamo data service records for a robot; pass it as `adamo.Robot(record=...)`. `controller_mask` selects sessions where a person (`HUMAN`) or a policy (`POLICY`) is in control, and time when nobody is (`UNATTENDED`). `on_sample(capture_time_us)` is called `sample_rate` times a second while the robot is recorded; the dict it returns (joint states, actions, anything JSON) is recorded on `recording/data` with that capture time, aligned with the video frames.
+
+### `Recordings`
 
 ```python
-@dataclass
-class Record:
-    session_id: str
-    topic: str
-    payload: bytes
-    timestamp: float          # epoch seconds
+recordings = adamo.Recordings(api_key=None)   # defaults to ADAMO_API_KEY
+
+recordings.list(
+    *,
+    start=None, end=None,          # datetimes or Unix seconds
+    sessions=None, controllers=None, devices=None, tasks=None,
+    tags=None,                     # all of them
+    search=None,                   # every word in name, description, or session ID
+) -> list[RecordingInfo]
+
+recordings.download(recordings: list[RecordingInfo], directory=".") -> list[Path]
 ```
+
+`list` returns recordings that overlap `start`..`end`, oldest first. `download` writes each recording to `{directory}/{device}/{name}.rrd` with its `.json` entry beside it, skipping files already there. Each `RecordingInfo` carries `id`, `device`, `session_id`, `display_name`, `description`, `tags`, `controller`, `started_at`, `ended_at`, `frame_count`, `cameras`, `tasks`, `size_bytes`, and `complete`.
+
+---
+
+## Face masking
 
 ```python
-@dataclass
-class VideoIndex:
-    session_id: str
-    topic: str
-    frame_count: int
-    keyframe_count: int
-    duration_ms: int
-    avg_fps: float
-    segments: list[dict]
+robot.attach_video("front", device="/dev/video0", face_blur=True)
+robot.attach_video("front", device="/dev/video0", face_blur=adamo.FaceBlur(padding=0.3, border=0.05))
 ```
 
-```python
-@dataclass
-class Frame:
-    topic: str
-    timestamp: float
-    image: object             # (H, W, 3) uint8 RGB numpy array
-
-    @property
-    def height(self) -> int
-    @property
-    def width(self) -> int
-```
+Masks faces on the robot before encoding, so unmasked faces never reach the network. Requires a wheel built with face masking and ONNX Runtime (`pip install onnxruntime`, or `onnxruntime-gpu` on NVIDIA and Jetson).
 
 ---
 
 ## Concurrency model
 
-- **Session methods are synchronous.** `connect_async` is the only async surface and only the API config fetch is async — the returned `Session` is the same sync object as `connect`.
-- **Subscribe callbacks run on a background receive thread.** Keep them short. For heavy work, push to a queue and process from your main thread.
-- **The video pipeline runs in its own threads.** `Robot.run()` blocks the calling thread driving it; `track.send()` is thread-safe.
-- **`Robot.recv()` blocks** the calling thread until a `msg/*` message arrives.
+All methods are synchronous. Control callbacks and subscription callbacks run on SDK threads, one per subscription — keep them short and hand state to your control loop under a lock. `robot.run()` blocks the calling thread driving the video pipeline; `track.send()` is thread-safe.
 
 ## Errors
 
-SDK-specific failures derive from `adamo.AdamoError`, so one handler catches everything Adamo-related while unrelated bugs surface normally:
-
-| Exception | Raised when |
-|---|---|
-| `adamo.AuthError` | The Adamo API rejected the API key or token. |
-| `adamo.NetworkError` | The Adamo API or a relay could not be reached. Also subclasses builtin `ConnectionError`, so existing generic handlers keep working. |
+| Exception | When |
+|-----------|------|
+| `ValueError` | Invalid arguments: mutually exclusive sources, an unknown pixel format or encoder, a wrong frame size, `run()` with no video track. |
+| `TypeError` | A missing required argument, such as `pixel_format` for `video()`. |
+| `ConnectionError` | The API rejected the key, or the router could not be reached. |
+| `EncoderSelectionError` | No requested encoder could start. Carries `track`, `stage`, `backend`, `code`, and `attempts`. |
+| `EncoderLibraryError` | Subclass of `EncoderSelectionError`: every attempted encoder failed to load its libraries; `attempts` includes library names and setup guidance. |
+| `RuntimeError` | A stream failed after startup, or a track was used after its run ended. |
+| `TimeoutError` | `Subscriber.recv(timeout=...)` received nothing in time. |
 
 ```python
 try:
-    session = adamo.connect(api_key="ak_...")
-except adamo.AuthError:
-    ...  # bad or inactive key — check operate.adamohq.com → Settings → API Keys
-except adamo.AdamoError:
-    ...  # any other SDK failure
+    robot.run()
+except adamo.EncoderLibraryError as error:
+    print(error)                          # library names, loader errors, installation guidance
+except adamo.EncoderSelectionError as error:
+    print(error.track, error.attempts)
 ```
-
-The SDK also raises `ValueError` for bad arguments (mutually exclusive options, malformed specs), `RuntimeError` for state errors (closed track), `TimeoutError` from `Robot.recv(timeout=…)` and `measure_rtt`, and `ImportError` from optional features when their extras aren't installed.
 
 ## Doctor
 
-`python -m adamo doctor` diagnoses the local setup: API key validity, QUIC reachability (including whether the network blocks UDP), encoder availability, glibc version, and the video extras. Run it first when anything misbehaves — the output is designed to be copy-pasted into a support request.
+`adamo doctor` diagnoses the local setup: Python and SDK versions, platform and glibc, API key validity, QUIC reachability (with a TCP probe that detects networks that block UDP), and hardware encoder availability. Run it first when anything misbehaves — the output is designed to be pasted into a support request. It exits non-zero when it finds a problem.
 
 ```text
-$ python -m adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
+$ adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
 adamo doctor
 
-  ✓ python 3.11.9
-  ✓ adamo 0.4.32
-  ✓ linux aarch64
-  ✓ glibc 2.35
+  ✓ python 3.12.3
+  ✓ adamo SDK 1.0.3
+  ✓ linux x86_64
+  ✓ glibc 2.39
   ✓ API key valid (org: my-org)
-  ✓ QUIC transport connected, relay RTT 12.4ms
-  ✓ H.264 encoder: nvv4l2h264enc
-  ✓ iceoryx2 0.8.1 (shared-memory video ready)
+  ✓ QUIC transport connected, relay RTT 6.0ms
+  ✓ H.264 hardware encoder: nvenc
   ✓ numpy available
 
 No problems found.

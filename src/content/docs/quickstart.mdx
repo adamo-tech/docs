@@ -18,11 +18,7 @@ You don't need to write an operator — operate.adamohq.com provides a gamepad, 
 pip install adamo
 ```
 
-Requires Python 3.10+. On the robot host you'll also want the video extras:
-
-```sh
-pip install 'adamo[video]'
-```
+Requires Python 3.8+. Video support is built in; there are no extras to install.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -130,7 +126,7 @@ int main(void) {
 ### First step: run the doctor
 
 ```sh
-python -m adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
+adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
 ```
 
 It checks API key validity, QUIC reachability (including whether this network blocks UDP), encoder availability, and the video extras — and prints output you can paste straight into a support request.
@@ -204,10 +200,10 @@ When you are not sure what is flowing through the network, subscribe to a wildca
 ```python
 import adamo
 
-session = adamo.connect(api_key="ak_...")
+robot = adamo.Robot(api_key="ak_...", name="topic-tap")
 seen = set()
 
-with session.subscribe("my-arm/**") as sub:
+with robot.session.subscribe("my-arm/**") as sub:
     for sample in sub:
         if sample.key not in seen:
             seen.add(sample.key)
@@ -229,7 +225,8 @@ import adamo
 robot = adamo.Robot(api_key="ak_...", name="my-arm")
 robot.attach_video("wrist_left",  device="/dev/video0")
 robot.attach_video("wrist_right", device="/dev/video1")
-robot.attach_video("head",        shm="head_cam")     # iceoryx2 SHM
+robot.attach_video("head",        shm="head_cam",     # iceoryx2 SHM
+                   pixel_format="BGRA", width=1280, height=720)
 robot.run()
 ```
 
