@@ -18,11 +18,7 @@ For occasional values — config, single events, "I'm done" notifications.
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-import adamo
-session = adamo.connect(api_key="ak_...")
-session.put("my-arm/sensors/temperature", b"22.5")
-```
+Publishing to arbitrary keys is not available in the Python SDK 1.0, which publishes only a robot's own video, [state](/state/), and control-facing topics. Use the Rust, C, or [TypeScript](/typescript-sdk/) SDK.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -54,12 +50,7 @@ To publish at a fixed rate, create a `Rate(hz)` and call `rate.sleep()` at the e
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-import json
-with session.publisher("my-arm/sensors/imu", express=True) as pub:
-    for _ in adamo.Rate(100):
-        pub.put(json.dumps({"x": 0.1, "y": 0.0, "z": 9.8}).encode())
-```
+Publishing to arbitrary keys is not available in the Python SDK 1.0, which publishes only a robot's own video, [state](/state/), and control-facing topics. Use the Rust, C, or [TypeScript](/typescript-sdk/) SDK.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -103,10 +94,15 @@ adamo_publisher_free(pub);
 <TabItem label="Python" icon="seti:python">
 
 ```python
-with session.subscribe("my-arm/sensors/**") as sub:
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="telemetry-reader")
+with robot.session.subscribe("my-arm/sensors/**") as sub:
     for sample in sub:
         print(sample.key, len(sample.payload))
 ```
+
+`sub.recv(timeout=5)` and `sub.try_recv()` poll instead of iterating.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -147,7 +143,7 @@ The callback fires on a background receive thread. Keep it short — offload hea
 def on_sample(sample):
     print(sample.key, sample.payload)
 
-sub = session.subscribe("my-arm/sensors/**", callback=on_sample)
+sub = robot.session.subscribe("my-arm/sensors/**", callback=on_sample)
 ```
 
 </TabItem>
@@ -195,10 +191,7 @@ A query is a request/reply on a key — useful for "what's the current value?" a
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-for sample in session.get("my-arm/config/**", timeout_ms=2000):
-    print(sample.key, sample.payload)
-```
+One-shot queries are not available in the Python SDK 1.0. Subscribe to the key instead, or use the Rust, C, or TypeScript SDK.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">

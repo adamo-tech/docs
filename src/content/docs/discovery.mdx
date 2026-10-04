@@ -18,16 +18,7 @@ Hold a liveliness token for as long as you want to be visible. Drop it (or let i
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-import adamo
-session = adamo.connect(api_key="ak_...")
-token = session.alive("my-arm")
-# now visible at my-arm/alive
-# ... do work ...
-token.close()
-```
-
-If you use `adamo.Robot(...)`, a liveliness token at `{name}/alive` is declared automatically when the first track or publisher comes up — no manual call needed.
+Liveliness tokens are not available in the Python SDK 1.0. A Python `adamo.Robot` declares `{name}/alive` automatically once its first video track starts.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -59,13 +50,7 @@ A one-shot query that returns every live token matching a pattern. The default `
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-for key in session.live_tokens():
-    print(key)
-# my-arm/alive
-# trainer-01/alive
-# xr-operator/alive
-```
+Listing live tokens is not available in the Python SDK 1.0. Use the Rust, C, or TypeScript SDK.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -112,17 +97,17 @@ Use patterns like:
 ```python
 import adamo
 
-session = adamo.connect(api_key="ak_...")
+robot = adamo.Robot(api_key="ak_...", name="topic-tap")
 seen = set()
 
-with session.subscribe("my-arm/**") as sub:
+with robot.session.subscribe("my-arm/**") as sub:
     for sample in sub:
         if sample.key not in seen:
             seen.add(sample.key)
             print(sample.key)
 ```
 
-Drive the robot from operate.adamohq.com while this runs. You should see keys such as `my-arm/control/joy`, `my-arm/control/cdr/xr_tracking`, `my-arm/video/main`, and `my-arm/stats/latency` as those streams publish.
+Drive the robot from operate.adamohq.com while this runs. You should see keys such as `my-arm/control/joy`, `my-arm/control/cdr/xr_tracking`, and `my-arm/video/main` as those streams publish.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -199,12 +184,7 @@ The interesting case is reacting in real time as robots come and go. Subscribe w
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-def on_change(key, alive):
-    print(f"{'UP' if alive else 'DOWN'}: {key}")
-
-session.on_liveliness("**/alive", callback=on_change, history=True)
-```
+Watching liveliness is not available in the Python SDK 1.0. Use the Rust, C, or TypeScript SDK.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">

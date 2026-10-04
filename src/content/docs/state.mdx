@@ -19,11 +19,13 @@ State values live under `{robot}/state/{key}`. The robot sets a value; operators
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
+In Python, a robot keeps its own state: call `state_store()` on the robot.
+
 ```python
 import adamo
 
-session = adamo.connect(api_key="ak_...")
-state = session.state_store("my-arm")
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+state = robot.state_store()
 
 state.set("fork_height", {"current": 1.4})   # dict / list -> JSON
 state.set("mode", "manual")
@@ -65,19 +67,18 @@ Read it from an operator program (or another robot):
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
+The Python SDK 1.0 reads state by subscribing for live updates; one-shot reads (`get`) are not available in Python.
+
 ```python
 import adamo
-from adamo.operate import state_topic, state_topic_all
 
-session = adamo.connect(api_key="ak_...")
-
-# one-shot read
-for s in session.get(state_topic("my-arm", "fork_height")):
-    print(s.payload)            # b'{"current": 1.4}'
+robot = adamo.Robot(api_key="ak_...", name="my-operator-tool")
 
 # live updates for every state key
-session.subscribe(state_topic_all("my-arm"), callback=lambda s: print(s.key, s.payload))
+robot.session.subscribe(adamo.state_topic_all("my-arm"), callback=lambda s: print(s.key, s.payload))
 ```
+
+`adamo.state_topic("my-arm", "fork_height")` names a single key.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -125,8 +126,8 @@ idle → subtask 1 → subtask 2 → … → subtask N → idle (rep++) → subt
 ```python
 import adamo
 
-session = adamo.connect(api_key="ak_...")
-runner = session.task_runner("my-arm")
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+runner = robot.task_runner()
 
 runner.select("fold-set", "Fold clothes", [
     {"id": "s1", "name": "Flatten"},

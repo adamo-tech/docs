@@ -24,11 +24,13 @@ The robot has to opt in. Add one call to the robot you already have (see [Quicks
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
+The Python SDK 1.0 has no `p2p=` option. Its video tracks take `route=` instead: `"auto"` (the default) races a LAN candidate against the relay, `"relay"` never dials one, and `"local"` requires the direct link named by `direct_target`.
+
 ```python
 import adamo
 
-robot = adamo.Robot(api_key="ak_...", name="my-arm", p2p=True)
-robot.attach_video("main", device="/dev/video0")
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+robot.attach_video("main", device="/dev/video0", route="auto")
 robot.run()
 ```
 

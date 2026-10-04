@@ -35,18 +35,7 @@ The bridge runs inside the robot process and speaks DDS to the local graph, so i
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-import adamo
-
-robot = adamo.Robot(api_key="ak_...", name="my-arm")
-robot.attach_video(
-    "front",
-    ros="/camera/color/image_raw",
-    bitrate_kbps=4000,
-    fps=30,
-)
-robot.run()
-```
+The ROS 2 options (`attach_video(ros=...)`, `enable_ros_control`) are not available in the Python SDK 1.0. Use the config file with `adamo-network`.
 
 </TabItem>
 <TabItem label="Config file">
@@ -86,11 +75,7 @@ Enable the control fan-out and operator input from [operate.adamohq.com](https:/
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-robot = adamo.Robot(api_key="ak_...", name="my-arm")
-robot.enable_ros_control()
-robot.run()
-```
+The ROS 2 options (`attach_video(ros=...)`, `enable_ros_control`) are not available in the Python SDK 1.0. Use the config file with `adamo-network`.
 
 </TabItem>
 <TabItem label="Config file">
