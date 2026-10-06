@@ -88,17 +88,37 @@ reliably send `released`.
 
 ### Inspecting the lifecycle with Python
 
-The `adamo-network` repository includes
-`adamo-py/examples/operator_control_listener.py`. It listens to the ownership
-lease and browser keyboard topic together, printing `acquired`, heartbeats,
-keyboard edges, and `released`. Keyboard samples received without an active
-lease are labelled `UNEXPECTED_WHILE_RELEASED`.
+This listener prints `acquired`, heartbeats, and `released` from the ownership
+lease together with browser keyboard edges, and labels keyboard samples received
+without an active lease `UNEXPECTED_WHILE_RELEASED`:
 
-Run it with:
+```python
+import threading
 
-```bash
-ADAMO_API_KEY=ak_... \
-python adamo-py/examples/operator_control_listener.py --robot my-arm
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+holder = {"session": None}
+
+
+@robot.on("json/operator_control", max_age=None)
+def on_ownership(sample):
+    msg = sample.message
+    session_id = msg.get("operator", {}).get("sessionId")
+    if msg["active"]:
+        holder["session"] = session_id
+    elif session_id == holder["session"]:
+        holder["session"] = None
+    print(msg["event"], msg.get("operator", {}).get("displayName"))
+
+
+@robot.on("json/keyboard")
+def on_key(sample):
+    label = "" if holder["session"] else "  UNEXPECTED_WHILE_RELEASED"
+    print(sample.message["action"], sample.message["key"] + label)
+
+
+threading.Event().wait()  # callbacks run on SDK threads
 ```
 
 Use this listener while testing **Take Control → input → Release Control**. It
@@ -129,47 +149,12 @@ UTF-8 display name encoded as unpadded base64url. Use `userId` and `sessionId`
 as identity; display names are labels and are not unique.
 
 Subscribe with history enabled so the callback first receives everyone already
-present and then receives changes:
-
-```python
-import base64
-
-import adamo
-
-
-session = adamo.connect(api_key="ak_...")
-
-
-def decode_display_name(segment: str) -> str:
-    padding = "=" * (-len(segment) % 4)
-    return base64.urlsafe_b64decode(segment + padding).decode("utf-8")
-
-
-def on_operator_presence(key: str, is_present: bool) -> None:
-    # SDK callbacks receive the org-prefix-stripped key:
-    # robot/operator/presence/user/session/display
-    robot, marker, presence, user_id, session_id, display = key.split("/", 5)
-    if marker != "operator" or presence != "presence":
-        return
-    state = "joined" if is_present else "left"
-    print(
-        f"{decode_display_name(display)} {state} {robot} "
-        f"(user={user_id}, session={session_id})"
-    )
-
-
-presence_sub = session.on_liveliness(
-    "*/operator/presence/**",
-    callback=on_operator_presence,
-    history=True,
-)
-```
-
-Keep `presence_sub` alive for as long as you want to receive events. The same
-primitive is available as Rust `Session::on_liveliness`, C
-`adamo_liveliness_subscribe`, and the TypeScript session's
-`liveliness().declareSubscriber`. See [Robot Discovery](/discovery/#watching-for-changes)
-for cross-language examples.
+present and then receives changes. Liveliness subscriptions are available as
+Rust `Session::on_liveliness`, C `adamo_liveliness_subscribe`, and the
+TypeScript session's `liveliness().declareSubscriber`; the Python SDK 1.0 has no
+liveliness API. See [Robot Discovery](/discovery/#watching-for-changes) for
+cross-language examples. To decode the last key segment in any language, add
+`=` padding to a multiple of four and base64url-decode it as UTF-8.
 
 A token appearing means that tab joined the robot view. It disappears when the
 tab leaves normally or when Zenoh detects that its session disconnected, so an
@@ -210,42 +195,29 @@ The web app publishes a Joy message to `{robot}/control/joy` whenever the gamepa
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-Requires `adamo>=0.4.54`.
+The Python SDK 1.0 decodes JSON and MessagePack control. In the web app's robot
+page, set the gamepad serialization to **JSON**; the default ROS-envelope CDR
+gamepad message is not decoded by the Python SDK 1.0. In JSON mode each message
+is a `JoystickCommand` with `axes`, `buttons`, `sequence_id`, and `stamp`.
 
 ```python
-import time
-
 import adamo
-from adamo.xr import XRJoy, subscribe_xr_control
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
 
 
-session = adamo.connect(api_key="ak_...")
-
-
+# Samples whose fabric timestamp is more than one second old are dropped
+# before on_joy runs.
+@robot.on("joy", max_age=1.0)
 def on_joy(sample):
-    if sample.topic != "/joy" or not isinstance(sample.message, XRJoy):
-        return
-    axes = sample.message.axes
-    buttons = sample.message.buttons
+    axes = sample.message["axes"]
+    buttons = sample.message["buttons"]
     # axes[0..1] = left stick X/Y, axes[2..3] = right stick X/Y, etc.
     drive(axes[0], axes[1])
 
-# The ROS Header timestamp is preserved. Missing timestamps and samples that
-# were already buffered for more than one second are dropped before on_joy.
-sub = subscribe_xr_control(
-    session,
-    "my-arm",
-    on_joy,
-    channel="joy",
-    max_age_seconds=1.0,
-)
 
-try:
-    while True:
-        time.sleep(1)
-finally:
-    sub.close()
-    session.close()
+robot.attach_video("main", device="/dev/video0")
+robot.run()  # callbacks run on an SDK thread
 ```
 
 </TabItem>
@@ -456,88 +428,33 @@ When a viewer enters immersive VR mode on a stereo track, the headset publishes 
 
 The hosted UI sends XR data on `{robot}/control/cdr/xr_tracking`. Each payload is a ROS envelope whose inner topic is `/head_pose`, `/controller/{handedness}`, `/controller/{handedness}/tip`, or `/controller/{handedness}/joy`.
 
-Save this as `adamo_xr_to_ros.py`:
+In Python, `subscribe_xr_control` from `adamo.xr` decodes these envelopes into
+typed messages. Each inner topic is normalized to a channel: `/head_pose`
+arrives on `json/xr/head/pose`, `/controller/left` on `json/xr/left/pose`, and
+`/controller/left/joy` on `json/xr/left/joy`. Quaternion order is always
+ROS/WebXR scalar-last: `x, y, z, w`.
 
 ```python
-#!/usr/bin/env python3
-import argparse
-from functools import partial
-
 import adamo
-import rclpy
-from adamo.xr import XRDecodeError, decode_ros_envelope
-from geometry_msgs.msg import PoseStamped
-from rclpy.serialization import deserialize_message
-from sensor_msgs.msg import Joy
+from adamo.xr import PoseStamped, XrFrame, subscribe_xr_control
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
 
 
-ROS_TYPES = {
-    "geometry_msgs/msg/PoseStamped": PoseStamped,
-    "sensor_msgs/msg/Joy": Joy,
-}
-
-
-def publish_xr_sample(sample, *, node, publishers):
-    try:
-        envelope = decode_ros_envelope(bytes(sample.payload))
-    except XRDecodeError as error:
-        node.get_logger().warn(f"Ignoring malformed XR payload: {error}")
-        return
-
-    msg_type = ROS_TYPES.get(envelope.type_name)
-    if msg_type is None:
-        node.get_logger().warn(f"Ignoring unsupported XR type: {envelope.type_name}")
-        return
-
-    ros_topic = f"/adamo/xr{envelope.topic}"
-    if ros_topic not in publishers:
-        publishers[ros_topic] = node.create_publisher(msg_type, ros_topic, 10)
-        node.get_logger().info(f"Publishing XR {envelope.topic} -> {ros_topic}")
-
-    publishers[ros_topic].publish(deserialize_message(envelope.cdr, msg_type))
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--api-key", required=True)
-    parser.add_argument("--robot", required=True)
-    args = parser.parse_args()
-
-    rclpy.init()
-    node = rclpy.create_node("adamo_xr_bridge")
-    publishers = {}
-    session = adamo.connect(api_key=args.api_key)
-
-    sub = session.subscribe(
-        f"{args.robot}/control/cdr/xr_tracking",
-        callback=partial(publish_xr_sample, node=node, publishers=publishers),
-    )
-    node.get_logger().info(f"Bridging {args.robot}/control/cdr/xr_tracking")
-
-    try:
-        rclpy.spin(node)
-    finally:
-        sub.close()
-        session.close()
-        node.destroy_node()
-        rclpy.shutdown()
-
-
-if __name__ == "__main__":
-    main()
+# max_age drops samples whose fabric timestamp is older than 0.5 s.
+@subscribe_xr_control(robot, max_age=0.5)
+def on_xr(sample):
+    if isinstance(sample.message, PoseStamped):
+        print(sample.channel, sample.message.position.as_tuple(), sample.message.orientation.as_tuple())
+    elif isinstance(sample.message, XrFrame) and sample.message.left:
+        print("left", sample.message.left.pose.position.as_tuple())
 ```
 
-Run it from a ROS-sourced shell:
-
-```bash
-python3 adamo_xr_to_ros.py --api-key ak_... --robot my-arm
-```
-
-It republishes to ROS topics such as `/adamo/xr/head_pose`, `/adamo/xr/controller/left`, and `/adamo/xr/controller/left/joy`.
-If you do not run ROS, use `subscribe_xr_control` from `adamo.xr`. It returns a
-typed `PoseStamped` or `XRJoy`, preserves the source Header timestamp and frame,
-and can reject stale source input before your callback runs. Quaternion order
-is always ROS/WebXR scalar-last: `x, y, z, w`.
+`sample.is_stale(max_age_seconds)` judges freshness by the sender's own stamp
+instead and treats an unstamped message as stale. The Python SDK 1.0 no longer
+exposes the raw envelope decoder (`decode_ros_envelope`), so republishing the
+CDR bytes into ROS 2 is done from the [ROS 2 control fan-out](/ros/#operator-control-as-ros-topics)
+of an `adamo-network` robot instead.
 
 ## Custom Control Topics
 
@@ -548,9 +465,11 @@ The example below is the robot-side receiver that pairs with the bimanual XR ope
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-The `@robot.on(...)` decorator subscribes and decodes JSON in one step. Brace-wrapped path segments capture the matched value as a keyword argument.
+`robot.session.subscribe(...)` follows the operator's topics; a `*` wildcard covers both hands, and the last key segment names the side.
 
 ```python
+import json
+
 import adamo
 
 robot = adamo.Robot(api_key="ak_...", name="my-arm")
@@ -558,23 +477,29 @@ robot = adamo.Robot(api_key="ak_...", name="my-arm")
 # Cameras streamed back to the operator
 robot.attach_video("wrist_left",  device="/dev/video0")
 robot.attach_video("wrist_right", device="/dev/video1")
-robot.attach_video("head",        shm="head_cam")
+robot.attach_video("head",        shm="head_cam", pixel_format="BGRA", width=1280, height=720)
 
-# Bimanual hand controllers — {side} captures "left" or "right"
-@robot.on("xr-operator", "control/xr/hand/{side}", priority=250)
-def hand(msg, side):
+
+# Bimanual hand controllers — the last key segment is "left" or "right"
+def hand(sample):
+    msg = json.loads(sample.payload)
+    side = sample.key.rsplit("/", 1)[-1]
     move_arm(side, msg["pos"], msg["quat"])
     set_gripper(side, msg["trigger"])
 
+
 # Head pose — separate handler
-@robot.on("xr-operator", "control/xr/head", priority=250)
-def on_head(msg):
+def on_head(sample):
+    msg = json.loads(sample.payload)
     update_head_tracking(msg["pos"], msg["quat"])
 
+
+robot.session.subscribe("xr-operator/control/xr/hand/*", callback=hand)
+robot.session.subscribe("xr-operator/control/xr/head", callback=on_head)
 robot.run()
 ```
 
-The first argument to `@robot.on(...)` is the *broadcaster* name — the operator publishing those topics. The decorator subscribes to `{broadcaster}/{track}` under the hood.
+The subscriptions follow `{operator}/{track}` — keys the operator publishes. Callbacks run on SDK threads. To receive commands an operator sends to *this* robot on `{robot}/control/{channel}` as JSON or MessagePack, use `@robot.on(channel)` instead, which decodes the payload for you.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -654,16 +579,18 @@ reliably (`DATA` priority), as UTF-8 JSON:
 <TabItem label="Python" icon="seti:python">
 
 ```python
-import adamo, json
+import json
 
-session = adamo.connect(api_key="ak_...")
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="task-listener")
 
 def on_task(sample):
     sig = json.loads(sample.payload)
-    robot = sample.key.split("/")[0]
-    print(robot, sig["action"], sig["task_id"], sig.get("task_name"))
+    robot_name = sample.key.split("/")[0]
+    print(robot_name, sig["action"], sig["task_id"], sig.get("task_name"))
 
-sub = session.subscribe("*/tasks/signal", callback=on_task)
+sub = robot.session.subscribe("*/tasks/signal", callback=on_task)
 ```
 
 </TabItem>
@@ -755,94 +682,6 @@ The payload is eight big-endian `f64` values: `[timestamp_seconds, effort_0, ...
 <Aside>Force feedback writes actuator efforts. Clamp torques in your driver, reject stale samples, and always clear effort commands before leaving external-effort mode.</Aside>
 
 <Tabs syncKey="lang">
-<TabItem label="Python" icon="seti:python">
-
-```python
-import os
-import struct
-import sys
-import time
-
-import adamo
-
-N_JOINTS = 7
-RATE_HZ = 100.0
-GAIN = 0.1
-ROBOT = os.getenv("ADAMO_ROBOT_NAME", "my-arm")
-EFFORT_TOPIC = f"{ROBOT}/control/force_feedback/follower_effort"
-
-
-def now_seconds(session):
-    return session.fabric_now_us() / 1_000_000.0
-
-
-def pack_efforts(timestamp, efforts):
-    if len(efforts) != N_JOINTS:
-        raise ValueError(f"expected {N_JOINTS} joint efforts")
-    return struct.pack("!" + "d" * (1 + N_JOINTS), timestamp, *efforts)
-
-
-def unpack_efforts(payload):
-    if len(payload) != 8 * (1 + N_JOINTS):
-        raise ValueError(f"bad effort payload size: {len(payload)}")
-    values = struct.unpack("!" + "d" * (1 + N_JOINTS), payload)
-    return values[0], list(values[1:])
-
-
-def read_follower_external_efforts():
-    raise NotImplementedError("read joint efforts from your follower driver")
-
-
-def apply_leader_external_efforts(efforts):
-    raise NotImplementedError("send joint efforts to your leader driver")
-
-
-def run_follower(session):
-    with session.publisher(
-        EFFORT_TOPIC,
-        priority=250,
-        express=True,
-        reliable=False,
-    ) as pub:
-        while True:
-            efforts = read_follower_external_efforts()
-            pub.put(pack_efforts(now_seconds(session), efforts))
-            time.sleep(1.0 / RATE_HZ)
-
-
-def run_leader(session):
-    teleop_started_at = now_seconds(session)
-
-    with session.subscribe(EFFORT_TOPIC) as sub:
-        while True:
-            latest = None
-            while True:
-                sample = sub.try_recv()
-                if sample is None:
-                    break
-                latest = sample
-
-            if latest is not None:
-                timestamp, measured = unpack_efforts(latest.payload)
-                if timestamp >= teleop_started_at:
-                    applied = [-GAIN * effort for effort in measured]
-                    apply_leader_external_efforts(applied)
-
-            time.sleep(1.0 / RATE_HZ)
-
-
-session = adamo.connect(
-    api_key=os.environ["ADAMO_API_KEY"],
-)
-
-mode = sys.argv[1] if len(sys.argv) > 1 else "leader"
-if mode == "follower":
-    run_follower(session)
-else:
-    run_leader(session)
-```
-
-</TabItem>
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
@@ -1146,14 +985,6 @@ int main(int argc, char **argv) {
 Control topics should be published with **REAL_TIME** priority and dropped on congestion — a command that arrives 200 ms late is worse than no command at all. The robot side doesn't choose priority on subscribe (the router uses the publisher's choice), but it's worth knowing the convention so your own operator programs follow it.
 
 <Tabs syncKey="lang">
-<TabItem label="Python" icon="seti:python">
-
-```python
-robot.publish("control/joy", priority=250, express=True)
-# 0–255 mapped to 8 priority classes; ≥240 is REAL_TIME.
-```
-
-</TabItem>
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
@@ -1179,24 +1010,7 @@ adamo_publisher(sess, "control/joy",
 
 Robots publish a 1 Hz heartbeat on `{robot}/heartbeat` carrying latency stats — the network regime classified by the robot's congestion forecaster, jitter, loss rate, and queuing delay. Use it as a safety gate before applying teleop commands: stop the robot when heartbeats go stale or the regime degrades.
 
-```python
-import time
-from adamo.stats import Regime
-
-last_beat = time.monotonic()
-
-def on_stats(stats):
-    global last_beat
-    last_beat = time.monotonic()
-    if stats.regime is not Regime.STABLE:
-        slow_down()
-
-sub = session.watch_latency("my-arm", on_stats)
-
-# In the control loop: two missed heartbeats = stale link
-if time.monotonic() - last_beat > 2.5:
-    stop_robot()
-```
+Robots built on the Python SDK 1.0 do not publish this heartbeat, and the Python SDK 1.0 has no `watch_latency` helper.
 
 ```ts
 import { watchLatest } from "adamo/fleet";
@@ -1254,10 +1068,10 @@ bytes cdr_payload
 
 The `topic` and `type` fields describe the inner ROS message. The `cdr_payload` is the serialized message named by `type`.
 
-Python applications should normally use `decode_ros_envelope`,
-`decode_xr_control`, or `subscribe_xr_control` from `adamo.xr` instead of
-unpacking these fields manually. The SDK validates name lengths, UTF-8, CDR
-alignment and endianness, string bounds, sequence bounds, and ROS timestamps.
+Python applications should use `subscribe_xr_control` from `adamo.xr` instead
+of unpacking XR tracking manually; it validates and decodes the envelope. The
+Python SDK 1.0 does not decode the gamepad's CDR `/joy` envelope — switch the
+web app's gamepad serialization to JSON and receive it with `robot.on("joy")`.
 The wire layout remains documented here for non-Python SDKs and protocol
 debugging.
 
@@ -1355,12 +1169,12 @@ Each publish contains one ROS envelope. Consumers should decode the envelope and
 
 `{handedness}` is normally `left` or `right`. Pose headers use `frame_id = "xr_origin"`. Positions are in meters in the WebXR `local-floor` reference space. Orientations are published as ROS quaternions `{x, y, z, w}`; the frontend converts from WebXR's internal `[w, x, y, z]` order before encoding the ROS message.
 
-In Python, `adamo.xr` decodes `PoseStamped` and `Joy` into immutable typed
-objects and retains the complete ROS Header. Compare
-`XRControlSample.source_timestamp` with fabric time via `is_stale(...)`, or pass
-`max_age_seconds` to `subscribe_xr_control`, before using controller input to
-issue commands. `PoseArray` hand-joint payloads are not currently part of the
-typed helper and still require ROS deserialization or a general CDR decoder.
+In Python, `adamo.xr.subscribe_xr_control` decodes `PoseStamped`, `Joy`,
+`PoseArray` (hand joints), and `Bool` into immutable typed objects, normalizing
+each inner topic to a `json/xr/...` channel (`/hand/left` arrives on
+`json/xr/left/hand`). Pass `max_age` to drop samples by transport time, or check
+`XrControlSample.is_stale(...)` against the sender's own stamp, before using
+controller input to issue commands.
 
 XR controller Joy messages use:
 

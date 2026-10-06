@@ -11,7 +11,7 @@ robot can carry a microphone track and any number of camera tracks at once, and
 they stay loosely in sync so speech lines up with the picture without you wiring
 anything together.
 
-Audio is a **robot-to-operator downlink**. The robot SDKs (Python, Rust, C/C++)
+Audio is a **robot-to-operator downlink**. The robot SDKs (Rust, C/C++, and Python before 1.0)
 *send* audio; the browser and the C/C++ SDK *receive* it. This mirrors video: an
 operator hears the robot, and a talk-back uplink is not part of the current
 release.
@@ -32,19 +32,7 @@ confirming the pipeline end to end. Swap it for a real microphone with the
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-import adamo
-
-robot = adamo.Robot(api_key="ak_...", name="my-robot")
-
-# Synthetic tone — no hardware, verifies the path:
-robot.attach_audio("mic", source_type="test")
-
-# A real ALSA microphone (prefer a plughw: device so it resamples for you):
-# robot.attach_audio("mic", source_type="alsa", device="plughw:1,0")
-
-robot.run()
-```
+Audio is not available in the Python SDK 1.0 (`attach_audio` was removed). Use the Rust or C/C++ SDK, or Python SDK 0.4.x.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -121,8 +109,8 @@ stereo pair — so the default `channels=2` is safe to leave on a mono lapel mic
 ## Tuning options
 
 Every knob has a working default; you rarely need more than `source_type` and
-`device`. The full option set (Python keywords shown; Rust `AudioOptions` and C
-`adamo_audio_options_t` carry the same fields):
+`device`. The full option set (Rust `AudioOptions` and C `adamo_audio_options_t` carry
+the same fields; Python 0.4.x used the same names as keywords):
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -137,19 +125,7 @@ Every knob has a working default; you rarely need more than `source_type` and
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-```python
-robot.attach_audio(
-    "mic",
-    source_type="alsa",
-    device="plughw:1,0",
-    bitrate_kbps=64,
-    channels=2,
-    sample_rate=48000,
-    frame_ms=20,
-    inband_fec=False,
-    dtx=False,
-)
-```
+Audio is not available in the Python SDK 1.0 (`attach_audio` was removed). Use the Rust or C/C++ SDK, or Python SDK 0.4.x.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -227,7 +203,7 @@ for (;;) {
 ```
 
 <Aside>
-Python and Rust are **send-only** for audio, matching how they handle video —
+Rust (and Python before 1.0) is **send-only** for audio, matching how they handle video —
 they capture and publish but do not decode. Consume audio from the browser or
 the C/C++ SDK.
 </Aside>
@@ -256,7 +232,7 @@ you pick a build:
 
 | SDK | Audio support |
 |---|---|
-| **Python** | `attach_audio` in `adamo` 0.4.48+. The Linux aarch64 wheel (Jetson) supports every source type; the Linux x86_64 wheel supports `source_type="alsa"` (direct capture) only; the macOS wheel has no audio capture. |
+| **Python** | Not available in `adamo` 1.0. `attach_audio` existed in 0.4.48–0.4.x: the Linux aarch64 wheel (Jetson) supports every source type; the Linux x86_64 wheel supports `source_type="alsa"` (direct capture) only; the macOS wheel has no audio capture. |
 | **Rust** | The `adamo` crate 0.1.98+ with `--features audio` (implies `video`). Needs an audio-enabled `libadamo` — the published prebuilt from 0.1.98 onward carries it. |
 | **C / C++** | Build the library with CMake `-DADAMO_BUILD_AUDIO=ON` (implies `ADAMO_BUILD_VIDEO`). Guards the C++ types behind `ADAMO_HAS_AUDIO`. |
 | **TypeScript** | `adamo-react` (`<AudioStream>`) and `adamo/media` (`createAudioStream`, XR players). |
