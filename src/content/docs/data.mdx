@@ -18,7 +18,14 @@ For occasional values — config, single events, "I'm done" notifications.
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-Publishing to arbitrary keys is not available in the Python SDK 1.0, which publishes only a robot's own video, [state](/state/), and control-facing topics. Use the Rust, C, or [TypeScript](/typescript-sdk/) SDK.
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+robot.session.put("my-arm/sensors/temperature", b"22.5")
+```
+
+`put` also takes `priority=` (0-255, default 100) and `express=True`. Requires `adamo` 1.0.6+.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -48,7 +55,20 @@ For repeated puts on the same key (telemetry, joint state, etc.). Avoids re-reso
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-Publishing to arbitrary keys is not available in the Python SDK 1.0, which publishes only a robot's own video, [state](/state/), and control-facing topics. Use the Rust, C, or [TypeScript](/typescript-sdk/) SDK.
+```python
+import json
+import time
+
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+with robot.session.publisher("my-arm/sensors/imu", express=True) as pub:
+    while True:
+        pub.put(json.dumps({"x": 0.1, "y": 0.0, "z": 9.8}).encode())
+        time.sleep(0.01)
+```
+
+`publisher` takes `priority=` (0-255, default 100), `express=` (skip batching for lower latency), and `reliable=` (retransmit on loss). The publisher stays declared until `close()`, the end of its `with` block, or garbage collection; a `put` after `close()` raises `ValueError`. Requires `adamo` 1.0.6+.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">

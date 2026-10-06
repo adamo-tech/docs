@@ -5,10 +5,10 @@ description: "Complete reference for the adamo Python package — Robot, video t
 
 import { Aside } from "@astrojs/starlight/components";
 
-The `adamo` Python package runs a robot: it streams hardware-encoded video, delivers operator control to callbacks, subscribes to other keys in your organization, keeps robot state, and lists and downloads recordings. It is the canonical Rust SDK compiled as a Python extension, so the Rust and Python SDKs share one implementation. Python 3.8+.
+The `adamo` Python package runs a robot: it streams hardware-encoded video, delivers operator control to callbacks, publishes and subscribes on other keys in your organization, keeps robot state, and lists and downloads recordings. It is the canonical Rust SDK compiled as a Python extension, so the Rust and Python SDKs share one implementation. Python 3.8+.
 
 <Aside type="caution" title="Changed in adamo 1.0">
-The 1.0 package is robot-side only. `adamo.connect()` and the standalone session (`put`, `publisher`, `get`, liveliness), `Robot.publish` / `subscribe` / `send` / `recv` / `log`, `attach_audio`, the ROS options, `adamo.operate`, and `adamo.data` are no longer part of the Python SDK. Use the [Rust](/rust-sdk/), [C](/c-sdk/), or [TypeScript](/typescript-sdk/) SDK for operators and publish-side tools.
+The 1.0 package is robot-side only. `adamo.connect()` and the standalone session (`get`, liveliness), `Robot.publish` / `subscribe` / `send` / `recv` / `log`, `attach_audio`, the ROS options, `adamo.operate`, and `adamo.data` are no longer part of the Python SDK. Publish on other keys from the robot's own connection with `robot.session.put` and `robot.session.publisher` (1.0.6+). Use the [Rust](/rust-sdk/), [C](/c-sdk/), or [TypeScript](/typescript-sdk/) SDK for operators.
 </Aside>
 
 ## Install
@@ -37,7 +37,9 @@ import adamo
 |--------|-------------|
 | `Robot` | A robot: video tracks, operator control, subscriptions, state, recording. |
 | `VideoTrack` | Push handle returned by `Robot.video`. |
-| `Session` | The robot's connection, from `robot.session`. |
+| `Session` | The robot's connection, from `robot.session`: publish and subscribe on other keys. |
+| `Publisher` | Persistent publisher returned by `Session.publisher`. |
+| `Priority` | Named priority levels (`REAL_TIME`, `INTERACTIVE_HIGH`, ..., `BACKGROUND`). |
 | `Sample` | One sample received on a subscribed key. |
 | `Subscriber` / `CallbackSubscriber` | Pull and callback subscription handles. |
 | `ControlSample` | One operator control message delivered to `Robot.on`. |
@@ -73,7 +75,7 @@ Every key the robot uses is scoped to your organization; you write `{robot}/{top
 
 ```python
 robot.name -> str
-robot.session -> Session   # the robot's connection, for subscribing to keys
+robot.session -> Session   # the robot's connection, for publishing and subscribing on keys
 ```
 
 ### `Robot.attach_video`
@@ -256,6 +258,9 @@ robot.session.org -> str   # the organization slug resolved from the API key
 
 robot.session.subscribe(key: str) -> Subscriber
 robot.session.subscribe(key: str, *, callback: Callable[[Sample], object]) -> CallbackSubscriber
+
+robot.session.put(key: str, payload: bytes, *, priority: int = 100, express: bool = False) -> None
+robot.session.publisher(key: str, *, priority: int = 100, express: bool = False, reliable: bool = False) -> Publisher
 ```
 
 Subscribe to any organization-relative key expression, such as another robot's telemetry. Wildcards:
@@ -267,6 +272,31 @@ Subscribe to any organization-relative key expression, such as another robot's t
 | `*/tasks/signal` | that key on every robot |
 
 With `callback`, samples are delivered on an SDK thread and a `CallbackSubscriber` is returned; the subscription keeps delivering after the handle is dropped, until `close()` on the handle or on the robot.
+
+### Publishing
+
+`put` and `publisher` were added in `adamo` 1.0.6. `put` sends one value, such as a configuration change or a single event. For a stream on one key, declare a `publisher` once and call `put` on it. `express` skips batching for lower latency, `priority` (0-255, or an `adamo.Priority` constant) orders it against other traffic, and `reliable` retransmits on loss.
+
+```python
+import struct
+import time
+
+joints = robot.session.publisher("my-arm/proprioception/joints", express=True)
+while running:
+    joints.put(struct.pack(">Q6f", time.time_ns() // 1000, *positions))
+joints.close()
+```
+
+For values that late readers should still get, use [`robot.state_store()`](#statestore) instead: it keeps the latest value per key and answers reads. See [Sending and Receiving Data](/data/#publishing) for more.
+
+### `Publisher`
+
+```python
+publisher.put(payload: bytes) -> None   # ValueError after close()
+publisher.close() -> None
+```
+
+Supports the context-manager protocol. A publisher stays declared until `close()`, the end of its `with` block, or garbage collection, and keeps working after the `robot.session` handle that declared it is dropped.
 
 ### `Sample`
 

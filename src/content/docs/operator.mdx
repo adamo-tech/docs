@@ -14,7 +14,7 @@ You build your own operator when you outgrow the hosted UI:
 - A leader/follower rig (GELLO, Aloha) where one robot's joint state drives another.
 - A browser app for an end customer that should never see operate.adamohq.com.
 
-The pattern is symmetric: an operator is just another `Session` (Rust/C) or TypeScript session participant. The Python SDK 1.0 is robot-side only. It publishes; the robot subscribes. Same SDK, same wire format, same priority knobs.
+The pattern is symmetric: an operator is just another `Session` (Rust/C) or TypeScript session participant. The operator publishes; the robot subscribes. Same SDK, same wire format, same priority knobs.
 
 ## The Operator / Robot Pattern
 
@@ -31,7 +31,7 @@ This is the sender side. Pair it with the robot-side receiver on the [Receiving 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-The Python SDK 1.0 is robot-side only and cannot publish operator topics. Write operators with the Rust, C, or [TypeScript](/typescript-sdk/) SDK; the robot side receives them as shown on [Receiving Control](/control/#custom-control-topics).
+The Python SDK 1.0 is robot-side only and has no operator session. Write operators with the Rust, C, or [TypeScript](/typescript-sdk/) SDK; the robot side receives them as shown on [Receiving Control](/control/#custom-control-topics).
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
