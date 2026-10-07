@@ -34,6 +34,7 @@ Re-exports:
 | `Sample` | `adamo.operate.session` | A received message. |
 | `Publisher` | `adamo.operate.session` | A persistent publisher. |
 | `Subscriber` | `adamo.operate.session` | An iterator over received samples. |
+| `Rate` | `adamo` | Ticks at a fixed rate for publishing loops. |
 | `Robot` | `adamo.session` | A participant — combines pub/sub with hardware video. |
 | `Participant` | `adamo.session` | Alias for `Robot`. |
 | `VideoTrack` | `adamo._video` | Python-fed video track (lazy import). |
@@ -265,6 +266,36 @@ publisher.close() -> None
 ```
 
 `str` payloads are encoded as UTF-8. Supports the context-manager protocol — exit closes (undeclares) the publisher.
+
+---
+
+## `Rate`
+
+```python
+class adamo.Rate(hz: float)
+```
+
+Ticks `hz` times a second, for loops that publish at a fixed rate. Iterate over it:
+
+```python
+with session.publisher("my-arm/state/joints", express=True) as pub:
+    for _ in adamo.Rate(100):
+        pub.put(read_joint_positions())
+```
+
+The first loop runs immediately. A `continue` still waits for the next tick.
+
+Or call `sleep()` at the end of each loop, as with ROS. The first `sleep()` waits one full period:
+
+```python
+rate = adamo.Rate(100)
+with session.publisher("my-arm/state/joints", express=True) as pub:
+    while True:
+        pub.put(read_joint_positions())
+        rate.sleep()
+```
+
+Each tick waits for the next deadline on a fixed schedule that starts when the `Rate` is created, so the time the loop body takes does not slow the rate down. A tick that runs more than one period late starts a new schedule from that moment instead of catching up with a burst of ticks. The wait releases the GIL.
 
 ---
 

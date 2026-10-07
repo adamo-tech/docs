@@ -49,30 +49,32 @@ adamo_put(sess, "my-arm/sensors/temperature",
 
 For repeated puts on the same key (telemetry, joint state, etc.). Avoids re-resolving the key expression each time and lets you set declare-time options like `express` and `reliability` once.
 
+To publish at a fixed rate, create a `Rate(hz)` and call `rate.sleep()` at the end of each loop, or in Python iterate over it. Each tick waits for the next deadline on a fixed schedule, so the time your loop body takes does not slow the rate down. A tick that runs more than one period late starts a new schedule instead of catching up with a burst.
+
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
 ```python
-import time, json
+import json
 with session.publisher("my-arm/sensors/imu", express=True) as pub:
-    while True:
+    for _ in adamo.Rate(100):
         pub.put(json.dumps({"x": 0.1, "y": 0.0, "z": 9.8}).encode())
-        time.sleep(0.01)
 ```
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
-use adamo::{PublisherOptions, Session};
+use adamo::{PublisherOptions, Rate, Session};
 let session = Session::open_default("ak_...")?;
 let pub_ = session.publisher(
     "my-arm/sensors/imu",
     PublisherOptions { priority: 128, express: true, reliable: false },
 )?;
+let mut rate = Rate::new(100.0);
 loop {
     pub_.put(b"{\"x\":0.1,\"y\":0.0,\"z\":9.8}")?;
-    std::thread::sleep(std::time::Duration::from_millis(10));
+    rate.sleep();
 }
 ```
 

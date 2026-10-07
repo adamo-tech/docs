@@ -762,7 +762,6 @@ The payload is eight big-endian `f64` values: `[timestamp_seconds, effort_0, ...
 import os
 import struct
 import sys
-import time
 
 import adamo
 
@@ -805,17 +804,16 @@ def run_follower(session):
         express=True,
         reliable=False,
     ) as pub:
-        while True:
+        for _ in adamo.Rate(RATE_HZ):
             efforts = read_follower_external_efforts()
             pub.put(pack_efforts(now_seconds(session), efforts))
-            time.sleep(1.0 / RATE_HZ)
 
 
 def run_leader(session):
     teleop_started_at = now_seconds(session)
 
     with session.subscribe(EFFORT_TOPIC) as sub:
-        while True:
+        for _ in adamo.Rate(RATE_HZ):
             latest = None
             while True:
                 sample = sub.try_recv()
@@ -828,8 +826,6 @@ def run_leader(session):
                 if timestamp >= teleop_started_at:
                     applied = [-GAIN * effort for effort in measured]
                     apply_leader_external_efforts(applied)
-
-            time.sleep(1.0 / RATE_HZ)
 
 
 session = adamo.connect(
@@ -847,8 +843,8 @@ else:
 <TabItem label="Rust" icon="seti:rust">
 
 ```rust
-use adamo::{PublisherOptions, Session};
-use std::{env, thread, time::Duration};
+use adamo::{PublisherOptions, Rate, Session};
+use std::env;
 
 const N_JOINTS: usize = 7;
 const EFFORT_BYTES: usize = (1 + N_JOINTS) * 8;
@@ -914,12 +910,13 @@ fn apply_leader_external_efforts(_efforts: [f64; N_JOINTS]) {
 fn run_follower(session: &Session) -> adamo::Result<()> {
     let topic = effort_topic();
     let publisher = session.publisher(&topic, realtime_options())?;
+    let mut rate = Rate::new(RATE_HZ);
 
     loop {
         let efforts = read_follower_external_efforts();
         let payload = pack_efforts(now_seconds(), efforts);
         publisher.put(&payload)?;
-        thread::sleep(Duration::from_secs_f64(1.0 / RATE_HZ));
+        rate.sleep();
     }
 }
 
@@ -927,6 +924,7 @@ fn run_leader(session: &Session) -> adamo::Result<()> {
     let topic = effort_topic();
     let subscriber = session.subscribe(&topic)?;
     let teleop_started_at = now_seconds();
+    let mut rate = Rate::new(RATE_HZ);
 
     loop {
         let mut latest = None;
@@ -946,7 +944,7 @@ fn run_leader(session: &Session) -> adamo::Result<()> {
             }
         }
 
-        thread::sleep(Duration::from_secs_f64(1.0 / RATE_HZ));
+        rate.sleep();
     }
 }
 
