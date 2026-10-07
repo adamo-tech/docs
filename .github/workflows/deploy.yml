@@ -55,7 +55,10 @@ jobs:
         with:
           role-to-assume: ${{ vars.DOCS_AWS_ROLE_ARN }}
           aws-region: eu-west-2
-          allowed-account-ids: '727481405861'
+      - name: Verify AWS account
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          test "$account" = '727481405861' || { echo '::error::Refusing to publish outside the Adamo AWS account'; exit 1; }
       - name: Publish docs
         env:
           DOCS_CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.DOCS_CLOUDFRONT_DISTRIBUTION_ID }}
