@@ -465,6 +465,7 @@ pub struct VideoOptions {
     pub backend: VideoBackend,
     pub shm_publish: Option<String>,
     pub passthrough: bool,
+    pub face_blur: Option<FaceBlurOptions>, // feature = "face_blur"
 }
 ```
 
@@ -472,6 +473,10 @@ pub struct VideoOptions {
 2000 kbit/s with adaptive bitrate enabled. Builder helpers include
 `with_source_format`, `with_encoder`, `with_backend`, `with_shm_publish`, and
 `with_passthrough`.
+
+`face_blur: Some(FaceBlurOptions::default())` masks faces on the robot before
+encoding. It requires the `face_blur` feature and ONNX Runtime. See
+[Masking faces](/cameras/#masking-faces).
 
 ### `Robot`
 
