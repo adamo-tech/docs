@@ -1,0 +1,62 @@
+name: Docs
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docs
+          path: dist/
+          if-no-files-found: error
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: docs
+          path: dist/
+      - name: Check deployment configuration
+        env:
+          ROLE: ${{ vars.DOCS_AWS_ROLE_ARN }}
+          DISTRIBUTION: ${{ vars.DOCS_CLOUDFRONT_DISTRIBUTION_ID }}
+        run: |
+          test -n "$ROLE" || { echo '::error::Set DOCS_AWS_ROLE_ARN from the docs Terraform outputs'; exit 1; }
+          test -n "$DISTRIBUTION" || { echo '::error::Set DOCS_CLOUDFRONT_DISTRIBUTION_ID from the docs Terraform outputs'; exit 1; }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.DOCS_AWS_ROLE_ARN }}
+          aws-region: eu-west-2
+          allowed-account-ids: '727481405861'
+      - name: Publish docs
+        env:
+          DOCS_CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.DOCS_CLOUDFRONT_DISTRIBUTION_ID }}
+        run: python3 scripts/deploy.py
