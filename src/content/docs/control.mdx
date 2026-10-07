@@ -629,7 +629,7 @@ adamo_subscribe_cb(sess, "xr-operator/control/xr/hand/*", on_hand, NULL);
 
 ## Task Signals
 
-For labelling data collection, the hosted UI can emit **task start/stop signals** — the operator picks a named task and marks when it begins and ends. This is opt-in (Settings → Tasks → "Show task list" in the web app) and is a standalone signal: it does **not** touch the recording pipeline. Use it to segment and tag what your robot is doing.
+For labelling data collection, the hosted UI can emit **task start/stop signals** — the operator picks a named task and marks when it begins and ends. This is opt-in (Settings → Tasks → "Show task list" in the web app). In Episodes mode the data service records each task as its own file; see [Recording and Exporting Data](/recording/#tasks).
 
 The signal is published on:
 
@@ -644,11 +644,12 @@ reliably (`DATA` priority), as UTF-8 JSON:
   "action": "start",
   "task_id": "d69c5a80-9f03-4d8a-b32a-3819cd00a7c9",
   "task_name": "Solder my own hand",
-  "ts": 1780686715804
+  "ts": 1780686715804,
+  "capture_time_us": 1780686715804120
 }
 ```
 
-`action` is `"start"` or `"stop"`. `task_id` is the task's UUID (matches the task in the web app); `task_name` is the human-readable label (may be absent); `ts` is `Date.now()` in milliseconds. Subscribe to `*/tasks/signal` to catch every robot in the org — the robot is the first key segment.
+`action` is `"start"`, `"stop"` (with an `outcome` of `"success"` or `"failure"`), `"abort"`, `"next"` or `"discard"`; the data service ends a task on `"stop"` or `"abort"`. `capture_time_us` is the capture time of the video frame the operator saw when acting. `task_id` is the task's UUID (matches the task in the web app); `task_name` is the human-readable label (may be absent); `ts` is `Date.now()` in milliseconds. Subscribe to `*/tasks/signal` to catch every robot in the org — the robot is the first key segment.
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
