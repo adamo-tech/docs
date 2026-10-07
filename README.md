@@ -15,6 +15,8 @@ npm run build
 `.github/workflows/deploy.yml` builds pull requests and publishes successful
 `main` builds to the dedicated private S3 bucket behind CloudFront. A manual
 workflow run on `main` can republish the site. There is no release versioning.
+`vercel.json` disables the former Vercel automatic deployments; the existing
+Vercel deployment remains available for migration rollback.
 
 Provision `infra/envs/docs` in `adamo-tech/adamo-infra`, then configure these
 repository Actions variables from its Terraform outputs:
