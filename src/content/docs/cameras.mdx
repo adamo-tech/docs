@@ -770,6 +770,109 @@ starting the real track, and live external `shmsrc` sources can stall there
 before `video/<track>/alive` is declared. The `shmsink` → `shm-publisher` →
 SDK `shm=` path above is the reliable path today.
 
+## Masking Faces
+
+Adamo can mask faces on the robot before encoding, so unmasked faces never
+reach the network, the relay or cloud policies. Enable it per track:
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+robot.attach_video("front", device="/dev/video0", face_blur=True)
+
+robot.attach_video(
+    "front",
+    device="/dev/video0",
+    face_blur=adamo.FaceBlur(padding=0.3, border=0.05),
+)
+```
+
+`face_blur=` works on `attach_video` and on caller-fed `video()` tracks.
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```sh
+cargo add adamo --features face_blur
+```
+
+```rust
+use adamo::{FaceBlurOptions, Robot, VideoOptions};
+
+let options = VideoOptions {
+    face_blur: Some(FaceBlurOptions { padding: 0.3, border: 0.05, ..FaceBlurOptions::default() }),
+    ..VideoOptions::default()
+};
+robot.attach_v4l2_with_options("front", "/dev/video0", &options)?;
+```
+
+</TabItem>
+</Tabs>
+
+The C SDK does not expose face masking yet.
+
+### How it works
+
+Detection runs on its own thread. Only the first frame waits for it; each later
+frame is masked with the boxes found on the previous frame, grown by `padding`
+to cover motion in between. A face stays masked for `hold_frames` frames after
+it was last seen, which hides detector flicker. If no detection is newer than
+`max_box_age_frames`, the whole frame is masked rather than streamed unmasked.
+
+Faces are pixelated by default, on one grid anchored to the frame, so near, far
+and partly visible faces all get the same blocks. `mask_style="fixed"` fills
+them with `mask_color` instead. The edge border and the whole-frame mask are
+always one flat color: `mask_color` with `fixed`, or gray with `pixelate`.
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `padding` | `0.25` | Margin added on each side of a face, as a fraction of its size. |
+| `border` | `0` | Band masked along every frame edge, as a fraction of the frame, hiding faces as they enter. `0` disables it. |
+| `hold_frames` | `2` | Frames a face stays masked after its last detection. |
+| `max_box_age_frames` | `3` | Oldest detection still used; older ones mask the whole frame. |
+| `score_threshold` | `0.4` | Minimum detector confidence. The low default catches faces entering the frame early. |
+| `min_face_width` | `0.01` | Narrowest face masked, as a fraction of the frame width. Drops most of the tiny false detections the low threshold adds. |
+| `mask_style` | `"pixelate"` | `"pixelate"` or `"fixed"`. |
+| `mask_block_size` | `0.025` | Pixelation block width, as a fraction of the frame width (32 px at 1280). Larger blocks hide more. |
+| `mask_color` | gray | `(r, g, b)` fill for `"fixed"`. |
+| `backend` | `"auto"` | `"auto"`, `"tensorrt"`, `"cuda"`, `"coreml"` or `"cpu"`. |
+| `weights` | embedded | Path to a fine-tuned YuNet ONNX file. |
+
+### Requirements
+
+Face masking needs an SDK built with the `face_blur` feature. For Python, build
+the wheel with `--features face_blur`. Detection uses YuNet on ONNX Runtime
+1.22 or newer, loaded at run time from the installed `onnxruntime` pip package,
+or from `ORT_DYLIB_PATH` when it is set. Install the variant for the robot's
+hardware:
+
+| Hardware | Package | Backend |
+|----------|---------|---------|
+| Jetson | `onnxruntime-gpu` from `https://pypi.jetson-ai-lab.io/jp6/cu126` | TensorRT |
+| NVIDIA GPU | `onnxruntime-gpu` | TensorRT or CUDA |
+| Mac | `onnxruntime` | Core ML |
+| Intel, AMD or any other CPU | `onnxruntime` | CPU |
+
+`backend="auto"` takes the first of TensorRT, CUDA, Core ML and CPU that loads;
+name one to require it. YuNet is small enough that the CPU keeps up: it takes
+about 4 ms on an Intel i5-12400 and 11 ms on a Jetson Orin's CPU.
+
+<Aside type="note" title="TensorRT first start">
+The first start on TensorRT builds an engine, which can take minutes. It is
+cached under `ADAMO_STATE_DIR`, one per input size.
+</Aside>
+
+To use a fine-tuned YuNet, convert its ONNX file to take uint8 RGBA input first,
+then pass it as `weights`. The script is in the `adamo` repository and needs
+`onnx` and `numpy`:
+
+```sh
+python crates/media_pipeline/models/wrap_yunet_rgba.py yunet.onnx yunet_rgba.onnx
+```
+
+An unconverted file fails at startup.
+
 ## Tuning Quality
 
 Two knobs cover almost everything:
