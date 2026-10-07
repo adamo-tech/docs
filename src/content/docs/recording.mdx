@@ -1,0 +1,145 @@
+---
+title: "Recording and Exporting Data"
+description: "Record a robot's cameras and topics, then export the recordings as a LeRobot dataset for training"
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+The Adamo data service records a robot's cameras and the topics it publishes. Recordings appear on the Recordings page of [app.adamohq.com](https://app.adamohq.com), and the Python SDK lists, downloads and exports them as [LeRobot](https://github.com/huggingface/lerobot) datasets.
+
+## Recording a robot
+
+A robot says what to record with its `Recording`:
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import json
+import adamo
+
+recording = adamo.Recording(
+    adamo.ControllerMask.HUMAN | adamo.ControllerMask.POLICY,
+    mode=adamo.RecordingMode.Episodes(frame_rate=30),
+    topics=["left/joint_pos", "left/joint_cmd"],
+)
+robot = adamo.Robot(name="my-arm", record=recording)
+joint_pos = robot.session.publisher("my-arm/left/joint_pos", reliable=True)
+joint_pos.put(json.dumps([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]).encode())
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use std::num::NonZeroU32;
+use std::time::Duration;
+use adamo::{ControllerMask, FrameRate, Mode, PublisherOptions, Recording, Robot};
+
+let robot = Robot::new_default("ak_...", Some("my-arm"))?.with_recording(Recording {
+    controller_mask: ControllerMask::HUMAN | ControllerMask::POLICY,
+    mode: Mode::Episodes { frame_rate: FrameRate::Fixed(NonZeroU32::new(30).unwrap()), min_duration: Duration::from_secs(2) },
+    topics: vec!["left/joint_pos".to_owned(), "left/joint_cmd".to_owned()],
+    ..Recording::default()
+});
+let joint_pos = robot.publisher("my-arm/left/joint_pos", PublisherOptions { reliable: true, ..PublisherOptions::default() })?;
+joint_pos.put(b"[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]")?;
+```
+
+</TabItem>
+</Tabs>
+
+### When it records
+
+`controller_mask` selects the time to record: sessions in which a person (`HUMAN`) or a policy (`POLICY`) controls the robot, and time when nobody does (`UNATTENDED`). The default is `HUMAN | POLICY`. `robot.start_recording()` records the robot whether or not anyone is in control, until `robot.stop_recording()`.
+
+### Modes
+
+`mode` says what the recording is for:
+
+| Mode | For | Files |
+|---|---|---|
+| `RecordingMode.Episodes(frame_rate, min_duration=2.0)` (default) | Training control policies | One per task, from its start to its stop or abort. Tasks shorter than `min_duration` seconds are left out. |
+| `RecordingMode.Continuous(frame_rate)` | Training video models | One per stretch of recorded time. |
+| `RecordingMode.Interventions(pre_roll=5.0, post_roll=0.0, frame_rate)` | Auditing | One whenever the controller changes, with `pre_roll` seconds before it and `post_roll` seconds after. |
+
+Files are cut into parts after `max_duration` seconds (default 1800) or `max_size` bytes (default 1.5 GB).
+
+### Frame rate
+
+`frame_rate` is a number of frames a second, `FrameRate.Max` (the default) for the rate of the fastest camera, or `FrameRate.Raw` to keep each camera's video as the robot sent it. The data service puts every camera on that one clock as it records, so frame *k* of each camera is at *k* / `frame_rate` seconds into the file. Recordings saved with `FrameRate.Raw` can be downloaded but not exported.
+
+### Topics
+
+`topics` are the keys, relative to the robot, that it publishes on with a put or a [persistent publisher](/data/#persistent-publisher): `"left/joint_pos"` records `my-arm/left/joint_pos`. Each value is stamped with the time it was sent, on the same clock as the video frames, and recorded next to the frames of that moment. Each file also starts with the latest value of every topic sent before it, so a topic sent once, or more slowly than a task lasts, is in every file. Payloads are recorded as they are, in any format: values that are JSON numbers or arrays of numbers export directly, and anything else exports through a decoder (see [Decoders](#decoders)).
+
+### ROS topics
+
+With [ROS](/ros/) enabled, `record_ros` records native ROS topics. Each message is decoded to JSON and published on the robot's key for that topic, without its leading slash, as one of the topics it records:
+
+```python
+robot.record_ros(["/joint_states", "/gripper/state"], max_age=1.0)
+```
+
+`/joint_states` is recorded as `joint_states`, and its fields export as `joint_states.position`. Messages older than `max_age` seconds when they are read are skipped. Custom message types need their `.msg` definitions in `definitions={"package/msg/Type": msg_text}`. Call it once, with every ROS topic to record.
+
+### Tasks
+
+In Episodes mode, the files follow the tasks the operator runs from the task list in the web app (Settings, Tasks, "Show task list"). Starting a task opens a file, and stopping it with Success or Failure, or aborting it, closes it with that outcome. The signals are published on `{robot}/tasks/signal`; see [Task Signals](/control/#task-signals).
+
+## Finding recordings
+
+`adamo.Recordings` reads the recordings of the organization of your API key (`ADAMO_API_KEY`):
+
+```python
+from datetime import datetime, timedelta, timezone
+import adamo
+
+client = adamo.Recordings()
+recordings = client.list(
+    start=datetime.now(timezone.utc) - timedelta(days=7),
+    devices=["my-arm"],
+    tasks=["PickUpCube"],
+    tags=["data_collection"],
+)
+client.download(recordings, "recordings")
+```
+
+`list` also filters by `end`, `controllers`, `sessions`, `folder` and a `search` over names and notes. The Copy Query button on the Recordings page writes this code for the current filters.
+
+## Exporting to LeRobot
+
+`pip install "adamo[export]"` (Python 3.12 or newer) adds `Recordings.export`, which writes the recordings as a LeRobot dataset, one episode per recording, and returns the `LeRobotDataset`:
+
+```python
+dataset = client.export(recordings, adamo.Export(
+    state=["left/joint_pos", "left/gripper_pos"],
+    action=["left/joint_cmd"],
+    outcomes=["success", "failure"],
+    tasks={"PickUpCube": "Pick up the cube."},
+))
+```
+
+- `state` and `action` name recorded topics, or fields inside a JSON topic (`"arm/state.position"`), concatenated in that order. Each is sampled at every video frame: a frame holds the latest value sent at or before it.
+- `outcomes` selects which Episodes recordings are kept by how their task ended: `"success"` (the default), `"failure"` and `"abort"`.
+- `tasks` maps each task to the prompt written into the dataset, and keeps only the recordings of those tasks, along with recordings that have no task. Without it, every task is kept and its prompt is its name as a sentence.
+
+The video is copied into the dataset as recorded. Recordings exported together must share one frame rate and one set of cameras; any that do not, or that lack a topic in `state` or `action`, are skipped with a warning that names each one and why.
+
+The dataset goes to `lerobot-{hash of the recordings, config and decoders}` in the current folder unless `output_folder=` says where. An existing folder is opened as it is, so running the same export again is instant. The recordings are downloaded to a temporary folder unless `download_folder=` keeps them.
+
+The Export Dataset button on the Recordings page writes this code for the current filters, with the state, action, outcomes and prompts you pick.
+
+### Decoders
+
+A topic whose values are not JSON numbers, such as packed binary or MessagePack, needs a decoder that turns one recorded payload into numbers:
+
+```python
+import struct
+
+dataset = client.export(recordings, adamo.Export(state=["proprioception/joints"], action=["left/joint_cmd"]), decoders={
+    "proprioception/joints": lambda payload: struct.unpack(">8x14f", payload),
+})
+```
+
+An export that names such a topic without its decoder stops before downloading anything, with a `ValueError` that names the topics missing one.
