@@ -378,6 +378,7 @@ robot.attach_video(
     shm_publish: str | None = None,
     passthrough: bool = False,
     allow_missing: bool = False,
+    face_blur: bool | FaceBlur | None = None,
 ) -> None
 ```
 
@@ -412,10 +413,31 @@ robot.video(
     backend: str | None = None,   # "gstreamer" or "hw_pipeline"
     keyframe_distance: float = 2.0,
     stereo: bool = False,
+    face_blur: bool | FaceBlur | None = None,
 ) -> VideoTrack
 ```
 
 Create a track whose frames you push from Python. Returns a `VideoTrack`; call `.send(frame)` with a numpy array (or bytes-like). The encoder pipeline auto-starts on the first `send()` if you haven't called `robot.run()` yourself. `pixel_format` is required and raises `ValueError` when omitted. With `adaptive_bitrate` (the default) the encoder follows the congestion forecast between `min_bitrate_kbps` and `max_bitrate_kbps`; `bitrate_priority` weights this track's share when several tracks compete.
+
+```python
+adamo.FaceBlur(
+    *,
+    model: str = "yunet",
+    weights: str | None = None,               # fine-tuned YuNet ONNX, converted to RGBA input
+    padding: float = 0.25,
+    border: float = 0.0,
+    hold_frames: int = 2,
+    max_box_age_frames: int = 3,
+    score_threshold: float = 0.4,
+    min_face_width: float = 0.01,
+    mask_style: str = "pixelate",             # or "fixed"
+    mask_color: tuple[int, int, int] | None = None,
+    mask_block_size: float = 0.025,
+    backend: str = "auto",                    # "tensorrt", "cuda", "coreml" or "cpu"
+)
+```
+
+`face_blur=True` masks faces on the robot before encoding with the default settings; pass a `FaceBlur` to change them. Requires a wheel built with the `face_blur` feature and ONNX Runtime. See [Masking faces](/cameras/#masking-faces).
 
 ### Audio attachments
 
