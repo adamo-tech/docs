@@ -193,24 +193,50 @@ Pass `record=True` (or a `Recording`) to the constructor to have the Adamo data 
 ### Cloud inference
 
 ```python
-robot.inference(
-    prompt: str,
-    track: str,
-    *,
-    wrist_track: str | None = None,
-    control_channel: str | None = None,
-    hz: float | None = None,
-    replan_steps: int | None = None,
-    seconds: float | None = None,
-    stereo: str | None = None,
-    layout: str | None = None,
-    flip: str | None = None,
-    max_frame_age: float | None = None,
-    dry_run: bool | None = None,
-) -> Inference
+robot.inference(prompt: str) -> Inference
 ```
 
-Start a cloud policy that watches one of this robot's video tracks and publishes actions on its control channel. It returns as soon as the run is enqueued; a cold start takes about a minute. `Inference.status()` returns a dict with `done`, `progress`, `result`, and `error` (`done` means the run ended, never that the task succeeded); `Inference.stop()` ends it. Unset options use the service's defaults.
+Run the hosted policy against this robot. It watches the robot's cameras and publishes actions on its control channel. `inference` returns as soon as the service accepts the request.
+
+After a cold start the policy compiles first (under a minute). The service starts the run as soon as the policy is ready, so follow it with `Inference.status()`:
+
+| Key | Meaning |
+| --- | --- |
+| `policy` | `"compiling"` after a cold start, then `"ready"`. |
+| `policy_error` | Why the policy failed to load, or `None`. |
+| `start_pending` | The start is still waiting for the policy to be ready. |
+| `run` | The live run's progress (cameras, actions published, inference latency), or `None` when nothing is running. |
+| `last_stop` | How the previous run ended. |
+
+`Inference.stop()` stops the run, and cancels the start if it is still waiting. It is idempotent. Leaving a `with robot.inference(...)` block, `robot.close()`, or the robot being collected also stops it. Starting again while a start is pending raises `ValueError`.
+
+```python
+import time
+import adamo
+
+with adamo.Robot(name="abc-sim") as robot:
+    with robot.inference("put the plastic bottles in the bin") as run:
+        while True:
+            status = run.status()
+            if status["policy_error"]:
+                raise RuntimeError(status["policy_error"])
+            if status["run"]:
+                print("actions published:", status["run"]["actions_published"])
+            else:
+                print("policy", status["policy"], "- waiting to start")
+            time.sleep(5)
+```
+
+The same calls are available over HTTP with your organization API key, for use without the SDK:
+
+```bash
+API=https://api.adamohq.com/api/inference
+curl -X POST $API/start -H "X-API-Key: $ADAMO_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"robot_name": "abc-sim", "prompt": "put the plastic bottles in the bin"}'
+curl $API/status -H "X-API-Key: $ADAMO_API_KEY"
+curl -X POST $API/stop -H "X-API-Key: $ADAMO_API_KEY"
+```
 
 ### Lifecycle
 
