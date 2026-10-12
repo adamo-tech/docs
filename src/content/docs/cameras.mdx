@@ -649,7 +649,10 @@ instead of silently using a known high-latency configuration.
 
 The Python SDK always encodes natively: `backend="gstreamer"` (legacy GStreamer
 encoding) and `passthrough=True` (publishing a pipeline's already-encoded bytes)
-are not available in Python SDK 1.0.
+are not available in Python SDK 1.0. `backend` accepts `"hw_pipeline"` or
+`"auto"` (the default, same as omitting it); `backend="gstreamer"` is rejected
+at `attach_video` with `ValueError`. Your `pipeline=` still runs as the video
+source either way; only the encoding moves to Adamo.
 
 #### Apply and verify the fix
 
@@ -681,7 +684,16 @@ zedsrc stream-type=2 camera-resolution=3 camera-fps=60 ! video/x-raw,format=BGRA
 
 The caps should match the frame layout you pass to `attach_video`: width,
 height, and frame rate. If the GStreamer source negotiates `BGRA`
-`1280x720@30`, pass `width=1280`, `height=720`, and `fps=30`. In Python, omit
+`1280x720@30`, pass `width=1280`, `height=720`, and `fps=30`. Adamo converts
+and scales the pipeline's output to `width` x `height`, which default to
+1280x720 rather than following the pipeline. A 4096x1536 pipeline published
+without `width=4096, height=1536` is scaled down to fit 1280x720.
+
+The pipeline must end in system memory. Output left in GPU memory, such as
+`video/x-raw(memory:VAMemory)` from Intel VA elements, fails at startup with
+`native encoder boundary currently requires CPU-mappable SystemMemory`. End
+such pipelines with `vapostproc ! video/x-raw,format=NV12` to copy frames back
+to system memory, at some CPU cost. In Python, omit
 `pixel_format` for raw pipeline output; it accepts only `"NV12"`, `"YUY2"`,
 `"UYVY"`, or `"MJPEG"` when you do pass it.
 

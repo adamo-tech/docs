@@ -96,6 +96,7 @@ robot.attach_video(
     pixel_format: str | None = None,
     encoder: str | None = None,
     adaptive_bitrate: bool = True,
+    rate_control: str | None = None,    # "cbr" or "vbr"
     min_bitrate_kbps: int | None = None,
     max_bitrate_kbps: int | None = None,
     bitrate_priority: float = 1.0,
@@ -120,6 +121,10 @@ Attach a camera track that the SDK captures, encodes, and publishes. Pass exactl
 
 Omitting `encoder` selects a hardware encoder for `codec`; there is no automatic software fallback. Explicit choices on Linux are `"nvenc"`, `"vaapi"`, `"x264"` (software), and `"jetson"` (aarch64 builds with Jetson support); `"vtenc_h264"` on macOS. GStreamer element names such as `"nvh264enc"`, `"vah264enc"`, and `"nvv4l2h264enc"` are accepted as aliases.
 
+`width`, `height`, and `fps` set the track's output for every source and default to 1280x720 at 30 fps. A `pipeline=` source is converted and scaled to them rather than published at its own size, so pass the pipeline's output size explicitly. The pipeline must end in system memory; see [GStreamer Pipelines](/cameras/#gstreamer-pipelines).
+
+`rate_control` overrides the hardware encoder's rate-control mode: `"cbr"` (constant bitrate) or `"vbr"` (variable bitrate). Omit it to keep the encoder's default, which follows `adaptive_bitrate`. Pair `"vbr"` with `adaptive_bitrate=False` to hold a fixed quality budget while simple scenes use fewer bits. On VA-API, an explicit `rate_control` is strict for H.264: startup fails if the GPU lacks that mode. With it omitted, the encoder switches to CBR when the GPU lacks VBR (and the reverse), and fails only if the GPU supports neither, for example a GPU limited to constant-QP.
+
 With `allow_missing=True` a track waits for a late or idle source until `close()`; otherwise it fails after ten seconds without a frame.
 
 `route` selects relay or direct delivery for the track: `"auto"` (default) races a LAN candidate against the relay, `"relay"` never dials one, and `"local"` requires the direct link named by `direct_target`.
@@ -140,6 +145,7 @@ robot.video(
     codec: str = "h264",
     encoder: str | None = None,
     adaptive_bitrate: bool = True,
+    rate_control: str | None = None,    # "cbr" or "vbr"
     min_bitrate_kbps: int | None = None,
     max_bitrate_kbps: int | None = None,
     bitrate_priority: float = 1.0,
