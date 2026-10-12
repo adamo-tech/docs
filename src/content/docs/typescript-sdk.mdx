@@ -1053,9 +1053,12 @@ All topics follow the pattern `adamo/{org}/{robot}/...`. The `{org}` segment is 
 
 | Topic | Direction | Description |
 |---|---|---|
-| `adamo/{org}/{robot}/audio/{track}` | Robot → Cloud | Opus audio stream data. Binary. Decoded for you by `<AudioStream>` / `createAudioStream`. |
-| `adamo/{org}/{robot}/audio/{track}/caps` | Robot → Cloud | Queryable JSON caps: `{ codec, sample_rate, channels, frame_ms, bitrate_bps }`. Read to configure the decoder before the first frame. |
-| `adamo/{org}/{robot}/audio/{track}/alive` | Robot → Cloud | Liveliness token for this audio track. Present while streaming. |
+| `adamo/{org}/{robot}/audio/{track}` | Robot or browser → Cloud | Opus audio, one frame per packet. Binary. Decoded for you by `<AudioStream>` / `createAudioStream`. |
+| `adamo/{org}/{robot}/audio/{track}/meta` | Robot or browser → Cloud | Queryable JSON, also published when the track starts: `{ codec, sample_rate, channels, frame_duration_us, bitrate_kbps, dtx, inband_fec, source }`. |
+| `adamo/{org}/{robot}/audio/{track}/alive` | Robot or browser → Cloud | Liveliness token for this audio track. Present while streaming. |
+
+An operator's microphone is a track on the robot it is sent to, named
+`operator-{id}` (see [`useMicrophonePublisher`](#usemicrophonepublisheroptions-adamo-react)).
 
 ### Control Topics
 
@@ -1296,62 +1299,149 @@ player.close();
 
 ## 13. Audio
 
-Robots can stream an Opus microphone track alongside video (see
-[Streaming Audio](/audio/)). Audio is a per-robot, independent stream — it is not
-tied to a specific video track. Playback is receive-only in the browser; the
-robot SDKs send.
+Audio works in both directions (see [Streaming Audio](/audio/)). The browser
+plays a robot's audio tracks, and it can publish the operator's microphone as a
+track on the robot. Audio is independent of video: it is not tied to a video
+track.
+
+### `useAudioTracks(robotId?)` (`adamo-react`)
+
+Lists the audio tracks live on a robot, including microphones that operators
+publish to it. Returns the same [`Track`](#track-type) objects as `useTracks`.
+
+```tsx
+import { AudioStream, isOperatorAudioTrack, useAudioTracks } from "adamo-react";
+
+const tracks = useAudioTracks("arm-01").filter((track) => track.isActive && !isOperatorAudioTrack(track.name));
+return tracks.map((track) => <AudioStream key={track.name} robot="arm-01" track={track.name} />);
+```
 
 ### `<AudioStream>` (`adamo-react`)
 
-A headless component that subscribes to a robot's audio track, decodes Opus via
-WebCodecs, and plays it. It renders nothing — mount one per robot you want to
-hear. Because browsers block autoplay, it stays silent until the first user
-gesture (click or keypress) anywhere on the page, then resumes automatically.
+A headless component that subscribes to one audio track, decodes it and plays
+it. It renders nothing: mount one per track you want to hear. Browsers block
+autoplay, so it stays silent until the first click or keypress anywhere on the
+page, then starts by itself.
 
 ```tsx
 import { AudioStream } from "adamo-react";
 
-<AudioStream robot="arm-01" track="mic" />
+<AudioStream robot="arm-01" track="mic" volume={0.8} />
 ```
-
-A robot with no audio track is handled gracefully — the underlying caps query
-fails and the component simply stays silent, so you can mount it unconditionally.
 
 #### Props
 
 | Prop | Type | Default | Description |
 |---|---|---|---|
-| `robot` | `string` | — | Robot ID. Required. |
-| `track` | `string` | `"mic"` | Audio track name. |
+| `robot` | `string` | | Robot name. Required. |
+| `track` | `string` | | Audio track name. Required. |
 | `org` | `string` | provider's org | Org slug override. |
-| `volume` | `number` | `1` | Linear gain, 0–1. |
-| `muted` | `boolean` | `false` | Start muted. |
-| `onStats` | `(stats: AudioStats) => void` | — | Called about once per second with playback health. |
-
-There is no `topic` prop — audio is addressed by `robot` + `track`.
+| `volume` | `number` | `1` | Linear gain, 0 to 1. |
+| `muted` | `boolean` | `false` | Silence playback while still receiving. |
+| `echoReference` | `boolean` | `false` | Set it while the microphone is published, so the browser can cancel this audio out of the microphone. |
+| `onStats` | `(stats: AudioStats) => void` | | Called about once per second with playback health. |
+| `onError` | `(error: Error) => void` | | Called when the track cannot start or stops, for example when the robot is not publishing it. |
 
 ### `AudioStats` type
 
 ```ts
 type AudioStats = {
-  codec: string;            // negotiated codec, e.g. "opus"
-  sampleRate: number;       // from the track's caps document
-  channels: number;
-  packetsReceived: number;  // audio packets received
-  rlncRecovered: number;    // packets recovered from loss
-  repairsReceived: number;  // recovery packets received
-  concealed: number;        // gaps that couldn't be filled in time — audible breaks
-  decoded: number;          // frames decoded
-  played: number;           // frames handed to the audio device
-  decodeQueueSize: number;  // live decoder queue depth
-  g2gMs: number | null;     // glass-to-glass ms when a time sync is available
+  meta: AudioMeta;              // the track's /meta document
+  wireMode: "reliable" | "datagram" | null; // how frames arrive, null before the first one
+  framesReceived: number;
+  recoveredChunks: number;      // rebuilt from repair packets
+  framesDecoded: number;
+  framesPlayed: number;
+  framesConcealed: number;      // lost frames that were smoothed over
+  framesLate: number;           // arrived after their slot had played
+  underruns: number;            // times the buffer ran empty
+  droppedMs: number;            // audio dropped to bring the delay back down
+  bufferedMs: number;           // audio waiting to play
+  targetMs: number;             // delay the buffer is aiming for
+  outputLatencyMs: number;      // delay added by the audio device
+  mouthToEarMs: number | null;  // capture to playback, when a time sync is available
+};
+
+type AudioMeta = {
+  codec: "opus";
+  sample_rate: number;
+  channels: 1 | 2;
+  frame_duration_us: number;
+  bitrate_kbps: number;
+  dtx: boolean;
+  inband_fec: boolean;
+  source: string;
+};
+```
+
+### `useMicrophonePublisher(options)` (`adamo-react`)
+
+Publishes the operator's microphone as an audio track on a robot. The browser
+asks for microphone permission the first time `enabled` is true.
+
+```tsx
+import { AudioStream, operatorAudioTrack, useMicrophonePublisher } from "adamo-react";
+
+const microphone = useMicrophonePublisher({
+  robot: "arm-01",
+  track: operatorAudioTrack(sessionId),
+  enabled: isMicrophoneOn,
+  echoCancellation: "all",
+});
+
+<AudioStream robot="arm-01" track="mic" echoReference={isMicrophoneOn} />
+{microphone.error && <p>{microphone.error.message}</p>}
+```
+
+`operatorAudioTrack(id)` returns `operator-{id}` for an id that is unique to
+this operator, such as their session id. The robot plays the tracks that
+`isOperatorAudioTrack` accepts (see [Streaming Audio](/audio/)), and the same
+function keeps operator microphones out of the list of robot tracks to play.
+
+#### Options
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `robot` | `string` | | Robot to publish to. Required. |
+| `track` | `string` | | Track name. Required. Use `operatorAudioTrack(id)`. |
+| `enabled` | `boolean` | `true` | Publishes while true. Turning it off releases the microphone. |
+| `deviceId` | `string` | system default | A microphone from `navigator.mediaDevices.enumerateDevices()`. |
+| `channels` | `"mono" \| "stereo"` | `"mono"` | `"stereo"` is a ceiling: a mono microphone is still sent as mono. |
+| `application` | `OpusApplication` | `{ kind: "lowdelay" }` | `{ kind: "voice" \| "music", inbandFec: boolean }` trades a little delay for better quality at low bitrates. |
+| `echoCancellation` | `boolean \| "all" \| "remote-only"` | `true` | `"all"` also cancels audio this page plays, where the browser supports it. Pair it with `echoReference` on `<AudioStream>`. |
+| `noiseSuppression` | `boolean` | `true` | Browser noise suppression. |
+| `autoGainControl` | `boolean` | `true` | Browser automatic gain. |
+
+#### Return value
+
+```ts
+type MediaPublisherState<MicrophonePublisherStats> = {
+  stream: MediaStream | null;                      // the captured microphone, null while off
+  stats: () => MicrophonePublisherStats | null;
+  error: Error | null;                             // for example a denied permission
+};
+
+type MicrophonePublisherStats = {
+  channelCount: 1 | 2;
+  bitrateKbps: number;
+  wireMode: "reliable" | "datagram";
+  framesCaptured: number;
+  framesEncoded: number;
+  framesSkipped: number;        // dropped because the encoder was behind
+  discontinuities: number;
+  bytesPublished: number;
+  queuedBytes: number;
+  application: OpusApplication;
+  echoCancellation: boolean | "all" | "remote-only" | null; // what the browser applied
 };
 ```
 
 ### `createAudioStream(options)` (`adamo/media`)
 
-The low-level entry point behind `<AudioStream>`, for non-React apps or custom
-pipelines. It owns the whole receive-and-play chain and returns a handle.
+The entry point behind `<AudioStream>`, for apps that do not use React. It owns
+the whole receive-and-play chain and returns a handle. It rejects when the
+track's metadata cannot be read, for example when the robot is not publishing
+that track.
 
 ```ts
 import { createAudioStream } from "adamo/media";
@@ -1361,13 +1451,13 @@ const audio = await createAudioStream({
   org: "my-org",
   robot: "arm-01",
   track: "mic",
-  onStats: (s) => console.log(s.concealed, "gaps"),
+  onStats: (stats) => console.log(stats.framesConcealed, "concealed"),
 });
 
-// Autoplay policy: nothing plays until a user gesture resumes the AudioContext.
-await audio.unlock();        // call from a click/keypress handler
+// Nothing plays until a user gesture resumes the AudioContext.
+await audio.unlock();        // call from a click or keypress handler
 audio.setVolume(0.5);
-audio.close();
+await audio.close();
 ```
 
 #### `AudioStreamOptions`
@@ -1375,16 +1465,15 @@ audio.close();
 ```ts
 type AudioStreamOptions = {
   session: Session;
-  audioTopic?: string;   // full topic, or build it from org/robot/track below
-  org?: string;
-  robot?: string;
-  track?: string;        // default "mic"
-  timeSync?: TimeSyncHandle; // shared fabric clock — enables glass-to-glass stats
-  jitterMs?: number;     // playout jitter buffer, also the nominal A/V offset (default 120)
-  volume?: number;       // 0..1 (default 1)
-  muted?: boolean;       // default false
+  org: string;
+  robot: string;
+  track: string;
+  timeSync?: TimeSyncHandle;    // shared fabric clock, enables mouthToEarMs
+  volume?: number;              // 0 to 1 (default 1)
+  muted?: boolean;              // default false
+  echoReference?: boolean;      // see <AudioStream>
   onStats?: (stats: AudioStats) => void;
-  onError?: (err: Error) => void;
+  onError?: (error: Error) => void;
 };
 ```
 
@@ -1392,42 +1481,39 @@ type AudioStreamOptions = {
 
 ```ts
 type AudioStreamHandle = {
-  readonly codec: string | null;
-  readonly caps: AudioCaps | null; // { codec, sample_rate, channels, frame_ms, bitrate_bps }
-  setVolume(v: number): void;
-  setMuted(m: boolean): void;
-  unlock(): Promise<void>;         // resume the AudioContext from a user gesture
-  getStats(): AudioStats;
-  close(): void;
+  readonly meta: AudioMeta;
+  setVolume(volume: number): void;
+  setMuted(muted: boolean): void;
+  unlock(): Promise<void>;      // resume the AudioContext from a user gesture
+  stats(): AudioStats;
+  close(): Promise<void>;
 };
 ```
 
-`createAudioStream`, `AudioStreamOptions`, `AudioStreamHandle`, `AudioStats`, and
-`AudioCaps` are exported from `adamo/media`. `<AudioStream>` and its
-`AudioStreamProps` are exported from `adamo-react`.
+### `publishMicrophone(options)` (`adamo/media`)
 
-### Audio on the XR players
-
-`createXRStereoPlayer` and `createXRMultiCamPlayer` can play the robot's audio
-inside the immersive view. It is off unless you pass `enableAudio: true`;
-`enterVR()` performs the autoplay-unlock gesture for you.
+The entry point behind `useMicrophonePublisher`. It takes the same options plus
+`session`, `org`, a `timeSync` from `startTimeSync(session)` and an optional
+`onError`, and returns a handle.
 
 ```ts
-const player = await createXRStereoPlayer({
-  session, org: "my-org", robot: "arm-01", track: "stereo",
-  canvas: previewCanvas,
-  enableAudio: true,
-  audioTrack: "mic",          // default "mic"
-  audioVolume: 1,
-  onAudioStats: (s) => {},
+import { operatorAudioTrack, publishMicrophone, startTimeSync } from "adamo/media";
+
+const timeSync = await startTimeSync(session);
+const microphone = await publishMicrophone({
+  session,
+  timeSync,
+  org: "my-org",
+  robot: "arm-01",
+  track: operatorAudioTrack(sessionId),
+  echoCancellation: "all",
 });
 
-await player.enterVR();       // also unlocks audio
-player.setAudioVolume(0.5);
-player.setAudioMuted(true);
+microphone.stats();          // MicrophonePublisherStats
+await microphone.close();    // stops publishing and releases the microphone
 ```
 
-Audio options: `enableAudio`, `audioTrack`, `audioTopic`, `audioSession`,
-`audioJitterMs`, `audioVolume`, `onAudioStats`. Handle methods: `setAudioVolume`,
-`setAudioMuted`, `unlockAudio`, `getAudioStats` (all no-ops when `enableAudio`
-was not set).
+`createAudioStream`, `publishMicrophone`, `operatorAudioTrack`,
+`isOperatorAudioTrack`, `startTimeSync` and their types are exported from
+`adamo/media`. `<AudioStream>`, `useAudioTracks`, `useMicrophonePublisher`,
+`operatorAudioTrack` and `isOperatorAudioTrack` are exported from `adamo-react`.
