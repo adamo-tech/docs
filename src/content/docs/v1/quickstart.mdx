@@ -1,0 +1,271 @@
+---
+title: "Quickstart"
+description: "Write a robot program in Python, Rust, or C and operate it from operate.adamohq.com in five minutes"
+---
+
+import { Tabs, TabItem, Steps, LinkCard, CardGrid } from "@astrojs/starlight/components";
+
+Get a robot streaming video to [operate.adamohq.com](https://operate.adamohq.com) in under five minutes. Pick the language you want to write your robot in — Python, Rust, or C — install the SDK, write a short program that opens a camera, run it.
+
+You don't need to write an operator — operate.adamohq.com provides a gamepad, VR teleop, recording, and replay against any robot you've started. The [Building Your Own Operator](/v1/operator/) page covers the case when you want a custom one.
+
+## Install the SDK
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```sh
+pip install adamo
+```
+
+Requires Python 3.8+. Video support is built in; there are no extras to install.
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```sh
+cargo add adamo
+```
+
+For video capture (requires iceoryx2 on the host):
+
+```sh
+cargo add adamo --features video
+```
+
+Prebuilt for `aarch64-unknown-linux-gnu` (Jetson / Ubuntu 22.04 arm64), `x86_64-unknown-linux-gnu`, and `aarch64-apple-darwin` — `cargo add adamo` just works on those hosts. Other targets can point at a local `libadamo` via `ADAMO_LIB_DIR`.
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+Download the prebuilt tarball for your host and extract it into a CMake-discoverable prefix:
+
+```sh
+# Linux arm64 (Jetson / Ubuntu 22.04 aarch64), with video:
+curl -fsSL -o adamo-sdk.tar.gz \
+  https://install.adamohq.com/sdk/adamo-sdk-linux-arm64-video-latest.tar.gz
+sudo tar xzf adamo-sdk.tar.gz -C /opt
+```
+
+Builds are also available for Linux x86_64 and macOS arm64, with and without video — see the [C SDK install section](/v1/c-sdk/#install) for the full list and the GStreamer runtime the `-video` builds need.
+
+Then in your project's `CMakeLists.txt`:
+
+```cmake
+list(APPEND CMAKE_PREFIX_PATH "/opt/adamo-sdk-linux-arm64-video-latest")
+find_package(Adamo REQUIRED)
+target_link_libraries(my_robot PRIVATE Adamo::adamo)
+# C++17 RAII wrapper is also available:
+# target_link_libraries(my_robot PRIVATE Adamo::adamo_cpp)
+```
+
+</TabItem>
+</Tabs>
+
+## Get an API Key
+
+Sign up at [operate.adamohq.com](https://operate.adamohq.com) and go to **Settings → API Keys**. Create a key (it starts with `ak_`) and copy it. The SDK uses this key to find the right router for your organisation.
+
+You can pass the key inline or read it from the `ADAMO_API_KEY` environment variable.
+
+## Write Your Robot Program
+
+A robot program does two things: declares the cameras it streams, then blocks driving the pipeline. That's it.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+robot.attach_video("main", device="/dev/video0")
+robot.run()
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Robot;
+
+fn main() -> adamo::Result<()> {
+    let mut robot = Robot::new_default("ak_...", Some("my-arm"))?;
+    robot.attach_v4l2("main", "/dev/video0", 1280, 720, 30, 4000, false)?;
+    robot.run()
+}
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+#include "adamo/adamo.h"
+#include <stdio.h>
+
+int main(void) {
+    adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-arm");
+    if (!robot) {
+        fprintf(stderr, "adamo_robot_new: %s\n", adamo_last_error());
+        return 1;
+    }
+    if (adamo_robot_attach_video_v4l2(
+            robot, "main", "/dev/video0", 1280, 720, 30, 4000, false) != 0) {
+        fprintf(stderr, "attach: %s\n", adamo_last_error());
+        return 1;
+    }
+    return adamo_robot_run(robot);
+}
+```
+
+</TabItem>
+</Tabs>
+
+## Common Issues
+
+### First step: run the doctor
+
+```sh
+adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
+```
+
+It checks API key validity, QUIC reachability (including whether this network blocks UDP), encoder availability, and the video extras — and prints output you can paste straight into a support request.
+
+### The robot starts but never connects
+
+The default transport is **QUIC**, which runs over UDP (port 443). Some corporate networks, lab firewalls, VPNs, and hotel Wi-Fi block outbound UDP even when normal HTTPS works.
+
+The fix is to open the firewall, not to switch transports: ask your network administrator to allow **outbound UDP 443** to the Adamo relays (`*.adamohq.com`).
+
+To confirm UDP blocking is the problem — or to get telemetry flowing while the firewall change lands — you can temporarily connect over TCP:
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+robot = adamo.Robot(api_key="ak_...", name="my-arm", protocol="tcp")
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::{Protocol, Robot};
+
+let mut robot = Robot::new("ak_...", Some("my-arm"), Protocol::Tcp)?;
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_robot_t *robot = adamo_robot_new(
+    "ak_...", "my-arm", adamo_protocol_t_ADAMO_PROTOCOL_TCP);
+```
+
+</TabItem>
+</Tabs>
+
+Treat TCP as a diagnostic or telemetry-only fallback. **Do not teleoperate over TCP**: when packets drop, TCP retransmits and queues everything behind the loss, so control commands arrive late and bunched together — on a moving robot that is dangerous.
+
+## Run It
+
+Run your program. On startup the SDK fetches your router endpoint and opens a session.
+
+```
+[adamo] connecting to router as my-arm…
+[adamo] connected (org: my-org)
+[adamo] streaming main: 1280x720 @ 30 fps, 4000 kbps (nvh264enc)
+```
+
+## See Your Robot
+
+Open [operate.adamohq.com](https://operate.adamohq.com) and log in. Your robot appears in the grid with its live camera feed already playing. Click it to open the teleoperation view.
+
+From there you have:
+
+- **Gamepad control** — plug in a USB or Bluetooth controller; the web app publishes Joy messages that your robot can subscribe to. See [Receiving Control](/v1/control/).
+- **VR teleop** — for stereo camera tracks, "View Stereo" launches a WebXR view with head + controller pose forwarded to the robot.
+- **Recording & replay** — every session can be recorded and replayed later.
+- **Layouts** — multi-camera grids you can configure once and reuse.
+
+See [The operate.adamohq.com Platform](/v1/web-interface/) for the full tour.
+
+To make the robot *respond* to gamepad or VR input, see [Receiving Control](/v1/control/).
+
+## Inspect Live Topics
+
+When you are not sure what is flowing through the network, subscribe to a wildcard and print the keys that arrive. This is the live equivalent of "list topics": it observes traffic, so quiet topics appear only after they publish a sample.
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="topic-tap")
+seen = set()
+
+with robot.session.subscribe("my-arm/**") as sub:
+    for sample in sub:
+        if sample.key not in seen:
+            seen.add(sample.key)
+            print(sample.key)
+```
+
+Use `my-arm/**` for one robot, `**/control/**` for control traffic, or `**` when you really want to see every sample in your org. See [Robot and Topic Discovery](/v1/discovery/#listing-live-topics) for Python, Rust, C, and TypeScript versions.
+
+## Add More Cameras
+
+Most robots have more than one camera. Just call the attach method again — once per track.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+robot.attach_video("wrist_left",  device="/dev/video0")
+robot.attach_video("wrist_right", device="/dev/video1")
+robot.attach_video("head",        shm="head_cam",     # iceoryx2 SHM
+                   pixel_format="BGRA", width=1280, height=720)
+robot.run()
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Robot;
+
+fn main() -> adamo::Result<()> {
+    let mut robot = Robot::new_default("ak_...", Some("my-arm"))?;
+    robot.attach_v4l2("wrist_left",  "/dev/video0", 1280, 720, 30, 4000, false)?;
+    robot.attach_v4l2("wrist_right", "/dev/video1", 1280, 720, 30, 4000, false)?;
+    robot.attach_shm("head", "head_cam", 1280, 720, "BGRA", 30, 4000, false)?;
+    robot.run()
+}
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-arm");
+adamo_robot_attach_video_v4l2(robot, "wrist_left",  "/dev/video0", 1280, 720, 30, 4000, false);
+adamo_robot_attach_video_v4l2(robot, "wrist_right", "/dev/video1", 1280, 720, 30, 4000, false);
+adamo_robot_attach_video_shm(robot, "head", "head_cam", 1280, 720, "BGRA", 30, 4000, false);
+adamo_robot_run(robot);
+```
+
+</TabItem>
+</Tabs>
+
+For the full set of input methods (V4L2 and shared memory), see [Adding Cameras](/v1/cameras/).
+
+## What's Next
+
+<CardGrid>
+  <LinkCard title="Adding Cameras" description="Every supported camera source, per language." href="/v1/cameras/" />
+  <LinkCard title="Receiving Control" description="Make the robot respond to the platform's gamepad / VR." href="/v1/control/" />
+  <LinkCard title="Sending and Receiving Data" description="Publish telemetry and subscribe to other robots." href="/v1/data/" />
+  <LinkCard title="The operate.adamohq.com Platform" description="What the hosted operator can do." href="/v1/web-interface/" />
+</CardGrid>

@@ -184,14 +184,11 @@ gap with synthesized audio so playback never stalls. Those frames are marked
 ```python
 import adamo
 
-with adamo.Robot(name="my-robot") as robot, robot.audio_receiver("operator") as receiver:
+with adamo.connect() as client, client.audio_receiver("my-robot", "mic") as receiver:
     while True:
         frame = receiver.recv()
         play(frame.samples)  # int16 array, shape (frames, channels)
 ```
-
-The Python SDK 1.0 is robot-side only: `robot.audio_receiver` receives tracks
-published on that robot, such as an operator's microphone.
 
 `audio_receiver` takes `sample_rate` (an `AudioSampleRate`, default 48 kHz),
 `channels` (default: the sender's), `max_reorder_delay_ms` (40) and
@@ -234,6 +231,10 @@ published as a track under the robot.
 for track in robot.audio_tracks():
     if track != "mic":
         playback = robot.play_audio(track)  # AudioOutput.Default()
+
+# On an operator machine:
+with adamo.connect() as client, client.play_audio("my-robot", "mic") as playback:
+    print(playback.stats())
 ```
 
 </TabItem>

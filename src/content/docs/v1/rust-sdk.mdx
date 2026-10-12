@@ -1,0 +1,780 @@
+---
+title: "Rust SDK"
+description: "Complete reference for the adamo crate — Session, pub/sub, queries, liveliness, latency, video, and fabric time"
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The `adamo` crate is a safe, idiomatic Rust wrapper over the Adamo SDK shared library. Same primitives as the Python and C SDKs.
+
+## Install
+
+```sh
+cargo add adamo@^0.1.103
+cargo add adamo@^0.1.103 --features video    # video capture + caller-fed tracks
+cargo add adamo@^0.1.103 --features audio    # Opus audio tracks and receiver (implies video)
+```
+
+Prebuilt `libadamo` is available for `aarch64-unknown-linux-gnu` (Jetson / Ubuntu 22.04 arm64 — bundled in the crate, offline-friendly), `x86_64-unknown-linux-gnu`, and `aarch64-apple-darwin` (fetched at build time, pinned by version and sha256; requires `curl`). All prebuilts include video. Other targets can point at a local build via `ADAMO_LIB_DIR=/path/to/dir/with/libadamo.{so,dylib}`.
+
+The crate is published as two:
+
+| Crate | Purpose |
+|-------|---------|
+| `adamo-sys` | Raw `unsafe extern "C"` FFI bindings + bundled `libadamo.{so,dylib}`. |
+| `adamo` | Safe wrapper. This is what you depend on. |
+
+---
+
+## `Session`
+
+```rust
+pub struct Session
+```
+
+The pub/sub, query, liveliness, latency, and control session. Constructed by `Session::open_default` or `Session::open`.
+
+`Send + Sync` — safe to share across threads.
+
+### `Session::open_default`
+
+```rust
+impl Session {
+    pub fn open_default(api_key: &str) -> Result<Self>;
+}
+```
+
+Open an authenticated session using the default transport.
+
+### `Session::open`
+
+```rust
+impl Session {
+    pub fn open(api_key: &str, protocol: Protocol) -> Result<Self>;
+}
+```
+
+Open an authenticated session with an explicit transport. Use `Session::open_default` unless you need to select a specific transport.
+
+### `Session::open_mtls`
+
+```rust
+impl Session {
+    pub fn open_mtls(api_key: &str, protocol: Protocol) -> Result<Self>;
+}
+```
+
+Like `Session::open`, but additionally mints a per-session mTLS client certificate and presents it on the QUIC handshake — required once your routers enforce mTLS.
+
+### `Session::org`
+
+```rust
+pub fn org(&self) -> Result<&str>;
+```
+
+The organisation slug resolved from the API key.
+
+### `Session::put`
+
+```rust
+pub fn put(&self, key: &str, payload: &[u8], opts: PublishOptions) -> Result<()>;
+```
+
+One-shot publish. The key is auto-scoped to your organisation; you write `{robot}/{topic}`.
+
+### `Session::publisher`
+
+```rust
+pub fn publisher(&self, key: &str, opts: PublisherOptions) -> Result<Publisher<'_>>;
+```
+
+Declare a persistent publisher tied to the session's lifetime. Dropped → undeclared.
+
+### `Session::log`
+
+```rust
+pub fn log(&self, name: &str, message: &str, level: &str) -> Result<()>;
+```
+
+Publish a log line from a robot. The web operator console subscribes to this stream and renders entries in real time.
+
+`level` is a free-form string; the standard values `"info"`, `"warn"`, `"error"`, `"debug"` are rendered with colour. Messages are truncated at 10,000 characters. Each entry is stamped with the fabric clock so lines from multiple robots stay ordered in the operator view.
+
+```rust
+use adamo::Session;
+
+let session = Session::open_default("ak_...")?;
+session.log("my-robot", "booted and attached camera", "info")?;
+session.log("my-robot", "encoder dropped a frame", "warn")?;
+```
+
+### `Session::subscribe`
+
+```rust
+pub fn subscribe(&self, key: &str) -> Result<Subscriber<'_>>;
+```
+
+Pull-style subscriber. Use `recv` / `try_recv` to receive samples. Wildcards in `key`:
+
+| Pattern | Matches |
+|---------|---------|
+| `my-arm/sensors/**` | Everything under `sensors/`. |
+| `my-arm/sensors/*`  | One level under `sensors/`. |
+| `*/sensors/imu`     | IMU from any robot. |
+
+### `Session::subscribe_with`
+
+```rust
+pub fn subscribe_with<F>(&self, key: &str, callback: F) -> Result<CallbackSubscriber<'_>>
+where
+    F: Fn(Sample) + Send + Sync + 'static;
+```
+
+Callback subscriber. The callback runs on a background receive thread — keep it short. The returned `CallbackSubscriber` owns the boxed callback; drop it to undeclare.
+
+### `Session::get`
+
+```rust
+pub fn get(&self, key: &str, timeout: Duration) -> Result<Vec<Sample>>;
+```
+
+One-shot query. Collects every reply that arrives within `timeout`. Returns an empty `Vec` if nothing replies.
+
+### `Session::alive`
+
+```rust
+pub fn alive(&self, token_key: &str) -> Result<LivelinessToken<'_>>;
+```
+
+Declare this client as alive at `{token_key}/alive`. The returned token is RAII — drop it to undeclare.
+
+### `Session::live_tokens`
+
+```rust
+pub fn live_tokens(&self, pattern: &str) -> Result<Vec<String>>;
+```
+
+Query currently-live tokens matching `pattern`. Pass `"**/alive"` for every live token in the org.
+
+### `Session::on_liveliness`
+
+```rust
+pub fn on_liveliness<F>(
+    &self,
+    pattern: &str,
+    history: bool,
+    callback: F,
+) -> Result<LivelinessSubscriber<'_>>
+where
+    F: Fn(String, bool) + Send + Sync + 'static;
+```
+
+Watch for liveliness changes. The callback fires with `(prefix-stripped key, is_alive)` whenever a token appears or disappears. `history=true` delivers the current set up front.
+
+### `Session::state_store`
+
+```rust
+pub fn state_store(&self, robot: &str) -> Result<StateStore<'_>>;
+```
+
+Declare a robot-owned [key/value store](/v1/state/) on `{robot}/state/**`. The robot updates it; operators read with `get` / `subscribe`.
+
+### `Session::task_runner`
+
+```rust
+pub fn task_runner(&self, robot: &str) -> Result<TaskRunner<'_>>;
+```
+
+Declare a [task runner](/v1/state/#task-runs) — a looping subtask sequence with an idle gap between reps — published on `{robot}/state/task_run`.
+
+### `Session::relay_rtt`
+
+```rust
+pub fn relay_rtt(&self) -> Result<Option<Duration>>;
+```
+
+Most recent best RTT to the connected relay's time plugin. Returns `Ok(None)` until the time-sync loop has received its first pong.
+
+### `Session::measure_rtt`
+
+```rust
+pub fn measure_rtt(&self, robot: &str, timeout: Duration) -> Result<Duration>;
+```
+
+Measure round-trip time to `robot` by publishing a ping and waiting for the echoed pong. Blocks the calling thread.
+
+### `Session::watch_latency`
+
+```rust
+pub fn watch_latency(&self, robot: &str) -> Result<Subscriber<'_>>;
+```
+
+Subscribe to `robot`'s heartbeat topic. Each received sample can be parsed with `LatencyStats::parse`.
+
+---
+
+## `Protocol`
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Protocol {
+    Udp,
+    Quic,
+    Tcp,
+}
+```
+
+Transport selection. Use **QUIC** in all cases — reliable streams over a single multiplexed UDP socket. `Tcp` is a telemetry/diagnostic fallback for networks that block UDP: TCP retransmission queues control signals behind packet loss, so don't teleoperate over it — ask the network admin to open outbound UDP 443 instead.
+
+---
+
+## `PublishOptions`
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub struct PublishOptions {
+    pub priority: u8,    // 0–255 mapped to 8 priority classes; ≥240 = REAL_TIME
+    pub express: bool,   // bypass batching for lower latency
+}
+
+impl Default for PublishOptions {
+    fn default() -> Self {
+        Self { priority: Priority::DATA, express: false }  // DATA = 100
+    }
+}
+```
+
+---
+
+## `PublisherOptions`
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub struct PublisherOptions {
+    pub priority: u8,
+    pub express: bool,
+    pub reliable: bool,  // BEST_EFFORT (false, default) vs RELIABLE (true)
+}
+
+impl Default for PublisherOptions {
+    fn default() -> Self {
+        Self { priority: Priority::DATA, express: false, reliable: false }
+    }
+}
+```
+
+---
+
+## `Publisher<'a>`
+
+```rust
+pub struct Publisher<'a> {
+    // tied to the session by lifetime
+}
+
+impl Publisher<'_> {
+    pub fn put(&self, payload: &[u8]) -> Result<()>;
+}
+```
+
+`Send + Sync`. Drop calls the underlying free.
+
+---
+
+## `Subscriber<'a>`
+
+```rust
+pub struct Subscriber<'a> {
+    // tied to the session by lifetime
+}
+
+impl Subscriber<'_> {
+    pub fn recv(&self, timeout: Option<Duration>) -> Result<Sample>;
+    pub fn try_recv(&self) -> Result<Option<Sample>>;
+}
+```
+
+`recv(None)` blocks indefinitely. `recv(Some(d))` returns `Err(Error::Timeout)` if `d` elapses. `try_recv` returns `Ok(None)` when the queue is empty.
+
+`Send`. Drop calls the underlying free.
+
+---
+
+## `CallbackSubscriber<'a>`
+
+```rust
+pub struct CallbackSubscriber<'a> {
+    // owns the boxed callback for as long as the subscriber lives
+}
+```
+
+Returned by `Session::subscribe_with`. `Send + Sync`. The callback runs on a background receive thread and stays registered until this handle is dropped.
+
+---
+
+## `StateStore<'a>`
+
+A robot-owned retained key/value store — see [Robot State](/v1/state/). Tied to its `Session` by lifetime; dropping it stops answering reads.
+
+```rust
+pub fn set(&self, key: &str, value: &[u8]) -> Result<()>;
+pub fn get(&self, key: &str) -> Result<Option<Vec<u8>>>;
+pub fn delete(&self, key: &str) -> Result<()>;
+```
+
+---
+
+## `TaskRunner<'a>`
+
+A looping subtask sequence with an idle gap between reps; publishes `{robot}/state/task_run`. See [Task Runs](/v1/state/#task-runs).
+
+```rust
+// subtasks: &[(id, name)] in order
+pub fn select(&self, task_set_id: &str, name: &str, subtasks: &[(&str, &str)]) -> Result<()>;
+pub fn advance(&self) -> Result<()>;   // one pedal press
+pub fn reset(&self) -> Result<()>;     // back to idle without counting a rep
+```
+
+---
+
+## `LivelinessToken<'a>`
+
+```rust
+pub struct LivelinessToken<'a>;
+```
+
+A declared liveliness token. `Send + Sync`. Drop → undeclared.
+
+---
+
+## `LivelinessSubscriber<'a>`
+
+```rust
+pub struct LivelinessSubscriber<'a> {
+    // owns the boxed callback for as long as the subscriber lives
+}
+```
+
+Watching subscriber returned by `Session::on_liveliness`. `Send + Sync`. The callback runs on a background receive thread and stays registered until this handle is dropped.
+
+---
+
+## `Sample`
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Sample {
+    pub key: String,        // prefix-stripped key
+    pub payload: Vec<u8>,
+    pub is_delete: bool,    // true for DELETE samples (liveliness-gone)
+    pub timestamp_us: Option<u64>,
+}
+```
+
+---
+
+## Fabric time
+
+```rust
+pub fn adamo::fabric_now_us() -> u64;
+pub fn adamo::fabric_synced() -> bool;
+```
+
+Microseconds since the Unix epoch on the **adamo fabric clock** — the shared time axis every node on the network sees. Use these instead of `SystemTime::now()` whenever a timestamp will be subtracted from a stamp produced on a different node (capture timestamps, latency measurements).
+
+`fabric_synced()` returns `true` once the first sync completes (typically under 100 ms after `Session::open`). Until then `fabric_now_us()` falls back to the local wall clock.
+
+These are free functions on `adamo` — they don't take a session, so any code on the host can stamp timestamps consistently.
+
+---
+
+## Latency Stats
+
+```rust
+pub enum Regime {
+    Stable,
+    Degrading,
+    Volatile,
+    Recovering,
+}
+
+pub struct LatencyStats {
+    pub regime: Regime,
+    pub jitter_hint_ms: f32,
+    pub garch_sigma_ms: f32,
+    pub target_bitrate_kbps: u32,
+    pub loss_rate: f32,
+    pub queuing_delay_ms: f32,
+    pub timestamp_ms: u64,
+}
+
+impl LatencyStats {
+    pub fn parse(payload: &[u8]) -> Option<Self>;
+}
+```
+
+Use `Session::watch_latency(robot)` to subscribe, then pass each sample payload to `LatencyStats::parse`.
+
+```rust
+use adamo::{LatencyStats, Session};
+use std::time::Duration;
+
+let session = Session::open_default("ak_...")?;
+let sub = session.watch_latency("my-arm")?;
+
+loop {
+    let sample = sub.recv(Some(Duration::from_secs(5)))?;
+    if let Some(stats) = LatencyStats::parse(&sample.payload) {
+        println!("{:?}: {:.1} ms jitter", stats.regime, stats.jitter_hint_ms);
+    }
+}
+```
+
+---
+
+## Video — `feature = "video"`
+
+```rust
+#[cfg(feature = "video")]
+pub use robot::{Robot, VideoBackend, VideoOptions, VideoTrack, detect_encoder};
+```
+
+### `VideoBackend` and `VideoOptions`
+
+```rust
+pub enum VideoBackend {
+    Auto,          // choose the default for this source and host
+    GStreamer,     // force the GStreamer pipeline
+    HwPipeline,    // force the native hardware pipeline
+}
+
+pub struct VideoOptions {
+    pub width: u32,
+    pub height: u32,
+    pub pixel_format: Option<String>, // raw layout or h264/h265 input codec
+    pub codec: String,                // output: h264, h265, or av1
+    pub encoder: Option<String>,      // None = auto-detect
+    pub bitrate_kbps: u32,
+    pub adaptive_bitrate: bool,
+    pub min_bitrate_kbps: Option<u32>,
+    pub max_bitrate_kbps: Option<u32>,
+    pub bitrate_priority: f32,
+    pub fps: u32,
+    pub keyframe_distance: f64,
+    pub stereo: bool,
+    pub backend: VideoBackend,
+    pub shm_publish: Option<String>,
+    pub passthrough: bool,
+    pub face_blur: Option<FaceBlurOptions>, // feature = "face_blur"
+}
+```
+
+`VideoOptions::default()` produces a 1280×720, 30 fps H.264 track at
+2000 kbit/s with adaptive bitrate enabled. Builder helpers include
+`with_source_format`, `with_encoder`, `with_backend`, `with_shm_publish`, and
+`with_passthrough`.
+
+`face_blur: Some(FaceBlurOptions::default())` masks faces on the robot before
+encoding. It requires the `face_blur` feature and ONNX Runtime. See
+[Masking faces](/v1/cameras/#masking-faces).
+
+### `Robot`
+
+```rust
+pub struct Robot;
+
+impl Robot {
+    pub fn new_default(api_key: &str, name: Option<&str>) -> Result<Self>;
+    pub fn new(api_key: &str, name: Option<&str>, protocol: Protocol) -> Result<Self>;
+
+    /// Caller-fed track. Returns a VideoTrack you push raw frames to.
+    pub fn video(
+        &mut self,
+        name: &str,
+        width: u32,
+        height: u32,
+        pixel_format: &str,    // "BGRA", "RGB", "I420", "NV12", ...
+        fps: u32,
+        bitrate_kbps: u32,
+        stereo: bool,
+    ) -> Result<VideoTrack<'_>>;
+
+    /// V4L2 capture. The SDK owns capture and encoding.
+    pub fn attach_v4l2(
+        &mut self,
+        name: &str,
+        device: &str,           // "/dev/video0"
+        width: u32,
+        height: u32,
+        fps: u32,
+        bitrate_kbps: u32,
+        stereo: bool,
+    ) -> Result<()>;
+
+    /// Existing iceoryx2 SHM service. The SDK owns decoding/encoding.
+    pub fn attach_shm(
+        &mut self,
+        name: &str,
+        service: &str,          // "camera/front"
+        width: u32,
+        height: u32,
+        pixel_format: &str,     // "BGRA", "NV12", "mjpeg", ...
+        fps: u32,
+        bitrate_kbps: u32,
+        stereo: bool,
+    ) -> Result<()>;
+
+    /// Existing SHM service with explicit input codec, output codec, encoder,
+    /// backend, and passthrough control.
+    pub fn attach_shm_with_options(
+        &mut self,
+        name: &str,
+        service: &str,
+        options: &VideoOptions,
+    ) -> Result<()>;
+
+    /// Block driving the pipeline forever. Consumes self.
+    pub fn run(self) -> Result<()>;
+}
+```
+
+`Send`. `Drop` releases the handle (unless `run()` consumed it).
+
+`attach_shm` consumes frames from another process. That producer must publish
+one complete frame per iceoryx2 `[u8]` sample with no timestamps, headers, or
+metadata prepended. `pixel_format` must match the producer's payload layout;
+use `"mjpeg"` when each sample is a complete JPEG frame.
+
+For an encoded source, use `attach_shm_with_options`, set the source format to
+`"h264"` or `"h265"`, select the output `codec`, and leave `passthrough` false.
+Each sample must be one complete Annex-B access unit:
+
+```rust
+use adamo::{Protocol, Robot, VideoBackend, VideoOptions};
+
+let mut robot = Robot::new(&api_key, Some("my-robot"), Protocol::Quic)?;
+let options = VideoOptions {
+    width: 1920,
+    height: 1080,
+    codec: "h264".into(),
+    bitrate_kbps: 4000,
+    fps: 30,
+    backend: VideoBackend::HwPipeline,
+    passthrough: false,
+    ..VideoOptions::default()
+}
+.with_source_format("h265");
+
+robot.attach_shm_with_options(
+    "front",
+    "camera/front/encoded",
+    &options,
+)?;
+robot.run()?;
+```
+
+This decodes H.265 from shared memory and sends H.264 through Adamo. Use
+`VideoBackend::GStreamer` to force the GStreamer path. Set `passthrough: true`
+only when the input and output codecs match and no decode/re-encode is wanted.
+See [Adding Cameras: transcoding encoded shared memory](/v1/cameras/#transcode-h264-or-h265-from-shared-memory)
+for the producer wire format and host encoder names.
+
+<Aside>The `attach_gst(...)` GStreamer pipeline path is still present in the crate but deprecated for new code; use V4L2 or shared memory instead.</Aside>
+
+### `VideoTrack<'a>`
+
+```rust
+pub struct VideoTrack<'a>;
+
+impl VideoTrack<'_> {
+    pub fn send(&mut self, frame: &[u8]) -> Result<()>;
+}
+```
+
+Push one frame. `frame.len()` must equal `width × height × bytes-per-pixel` for the format declared on `Robot::video`. Tied to the parent `Robot` by lifetime; `Send`; drop releases the track.
+
+### `detect_encoder`
+
+```rust
+pub fn detect_encoder() -> Result<&'static str>;
+```
+
+Returns the best available H.264 encoder for the host (NVENC, VA-API, VideoToolbox, x264) or `"none"` if no encoder is available.
+
+---
+
+## Audio: `feature = "audio"`
+
+The `audio` feature adds audio tracks to `Robot`, `AudioReceiver` for
+decoding them and `AudioPlayback` for playing them. It implies `video`. Builds need libopus (`libopus-dev` or
+`brew install opus`) and, on Linux, `libasound2-dev`. See
+[Streaming Audio](/v1/audio/) for sources, defaults and transport.
+
+### `AudioOptions`
+
+```rust
+pub struct AudioOptions {
+    pub sample_rate: AudioSampleRate,       // Hz48000
+    pub channels: AudioChannels,            // Mono; Stereo is a ceiling that never upmixes
+    pub frame_duration: AudioFrameDuration, // Ms10
+    pub bitrate_kbps: u32,                  // 48: 6 to 510, all channels
+    pub application: AudioApplication,      // LowDelay, Voice { inband_fec } or Music { inband_fec }
+    pub dtx: bool,                          // false
+}
+```
+
+### `Robot` audio methods
+
+```rust
+impl Robot {
+    /// Default input: ALSA `default` on Linux, Core Audio on macOS.
+    pub fn attach_audio(&mut self, name: &str, options: &AudioOptions) -> Result<()>;
+    /// A named ALSA device, Linux only.
+    pub fn attach_audio_alsa(&mut self, name: &str, device: &str, options: &AudioOptions) -> Result<()>;
+    /// A GStreamer capture description, with the `gstreamer` feature.
+    pub fn attach_audio_gst(&mut self, name: &str, pipeline: &str, options: &AudioOptions) -> Result<()>;
+    /// A 440 Hz tone.
+    pub fn attach_audio_test(&mut self, name: &str, options: &AudioOptions) -> Result<()>;
+    /// A track fed by the caller.
+    pub fn audio(&mut self, name: &str, options: &AudioOptions) -> Result<AudioTrack>;
+}
+
+impl AudioTrack {
+    /// Interleaved i16 captured just now.
+    pub fn send(&self, samples: &[i16]) -> Result<()>;
+    /// Interleaved i16 whose first sample was captured at `capture_time_us` (UNIX).
+    pub fn send_at(&self, samples: &[i16], capture_time_us: u64) -> Result<()>;
+}
+```
+
+Invalid options and unavailable sources are rejected when the track is
+attached. A track that fails while running ends alone: the robot's
+other tracks keep running, and `run` returns `Error::AudioStream`, which names
+the track, source and stage, once it ends.
+
+### `AudioReceiver`
+
+```rust
+impl AudioReceiver {
+    pub fn subscribe(session: &Session, robot: &str, track: &str, options: AudioReceiveOptions) -> Result<Self>;
+    /// The next frame in capture order, or `None` after `timeout`.
+    pub fn recv(&self, timeout: Duration) -> Result<Option<AudioFrame>>;
+    pub fn stats(&self) -> Result<AudioReceiverStats>;
+    pub fn close(&self) -> Result<()>;
+}
+
+pub struct AudioReceiveOptions {
+    pub sample_rate: AudioSampleRate,      // Hz48000, the decoder's output rate
+    pub channels: Option<AudioChannels>,   // None follows the sender
+    pub max_reorder_delay: Duration,       // 40 ms before a missing frame is concealed
+    pub max_queued_frames: NonZeroUsize,   // 50
+}
+
+pub struct AudioFrame {
+    pub samples: Vec<i16>,             // interleaved
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub sequence: u64,
+    pub capture_time_us: u64,          // fabric time of the first sample
+    pub concealed: bool,               // synthesized by Opus loss concealment
+}
+```
+
+```rust
+use adamo::{AudioOptions, Protocol, Robot};
+
+let mut robot = Robot::from_env(Some("my-robot"), Protocol::Quic)?;
+robot.attach_audio("mic", &AudioOptions::default())?;
+robot.run()?;
+```
+
+### `AudioPlayback`
+
+```rust
+impl Session {
+    /// Tracks `robot` carries right now, its own and operators'.
+    pub fn audio_tracks(&self, robot: &str) -> Result<Vec<String>>;
+}
+
+impl AudioPlayback {
+    pub fn start(session: &Session, robot: &str, track: &str, output: AudioOutput, options: AudioPlaybackOptions) -> Result<Self>;
+    pub fn stats(&self) -> Result<AudioPlaybackStats>;
+    pub fn close(&self) -> Result<()>;
+}
+
+pub enum AudioOutput {
+    Default,                     // Core Audio on macOS, ALSA `default` on Linux
+    Alsa { device: String },     // Linux
+    Gstreamer { sink: String },  // with the `gstreamer` feature
+}
+
+pub struct AudioPlaybackOptions {
+    pub receive: AudioReceiveOptions,
+    pub max_latency: Duration,   // 150 ms; the queue follows measured jitter from 20 ms up to this
+}
+```
+
+On the hosted relay, audio publishes and receives on its own QUIC connection,
+opened on first use.
+
+`examples/audio_robot.rs` in the SDK repository publishes a track, prints
+capture-to-decode latency from a receiver, and plays any track with
+`audio_robot play ROBOT TRACK`.
+
+---
+
+## Errors
+
+```rust
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum Error {
+    /// The Adamo API rejected the credentials (bad or inactive API key).
+    Auth(String),
+    /// The Adamo API or a relay could not be reached.
+    Network(String),
+    /// Invalid argument: bad option value, closed handle, or bad config.
+    Invalid(String),
+    /// Video pipeline failure: encoder/decoder unavailable, capture or
+    /// shared-memory source failed.
+    Video(String),
+    /// Audio pipeline failure: capture device, encoder, or source setup failed.
+    Audio(String),
+    /// An uncategorized error reported by the underlying SDK library.
+    Ffi(String),
+    /// A Rust string contained an interior NUL byte and could not cross FFI.
+    InteriorNul,
+    /// FFI returned non-UTF-8 data.
+    InvalidUtf8,
+    /// A blocking receive timed out.
+    Timeout,
+}
+
+impl std::fmt::Display for Error;
+impl std::error::Error for Error;
+impl From<std::ffi::NulError> for Error;
+```
+
+Match on the variant to branch by failure category — no string parsing needed:
+
+```rust
+match Session::open_default(&api_key) {
+    Ok(session) => { /* ... */ }
+    Err(Error::Auth(msg)) => eprintln!("check the API key: {msg}"),
+    Err(Error::Network(msg)) => eprintln!("connectivity problem: {msg}"),
+    Err(e) => eprintln!("{e}"),
+}
+```
+
+The enum is `#[non_exhaustive]` — always include a catch-all arm.
+
+---
+
+## Concurrency model
+
+- **`Session` is `Send + Sync`** — share a reference across threads when the lifetime works, or open a separate session for independent workers.
+- **All `Session` methods are blocking** at the Rust level. They use the SDK's internal runtime under the hood.
+- **`subscribe_with` callbacks run on a background receive thread.** Keep them short or hand off via a channel.
+- **`Robot::run()` blocks** driving the encoder. Spawn it on its own thread if you need to do other work concurrently.

@@ -10,11 +10,19 @@ npm run build
 `npm run dev` starts the local development server. The production build is in
 `dist/`, including the Pagefind search index and the generated 404 page.
 
+## Versions
+
+The site root serves the 0.x docs from `src/content/docs/`. The 1.0 docs live in
+`src/content/docs/v1/` and are served under `/v1/`. `src/versions.ts` lists the
+versions for the header's version selector, which switches to the same page in
+the other version; `src/routeData.ts` limits the sidebar and previous/next links
+to the version being viewed. Links inside the 1.0 pages use the `/v1/` prefix.
+
 ## S3 publishing
 
 `.github/workflows/deploy.yml` builds pull requests and publishes successful
 `main` builds to the dedicated private S3 bucket behind CloudFront. A manual
-workflow run on `main` can republish the site. There is no release versioning.
+workflow run on `main` can republish the site.
 `vercel.json` disables the former Vercel automatic deployments; the existing
 Vercel deployment remains available for migration rollback.
 
