@@ -83,6 +83,12 @@ robot.record_ros(["/joint_states", "/gripper/state"], max_age=1.0)
 
 `/joint_states` is recorded as `joint_states`, and its fields export as `joint_states.position`. Messages older than `max_age` seconds when they are read are skipped. Custom message types need their `.msg` definitions in `definitions={"package/msg/Type": msg_text}`. Call it once, with every ROS topic to record.
 
+### Audio
+
+`record_audio=True` (`record_audio: true` in Rust) also records every [audio track](/audio/) on the robot: the ones it publishes, under the names it gave them, and each operator's microphone, as the track `operator-{session id}`. It is off by default.
+
+Audio is not put on the frame clock. Each track is kept as the Opus packets it sent, one every 10 ms by default, under `audio/{track}` in the file, each at its capture time on the same clock as the video frames and topics. The track's metadata (sample rate, channels, frame duration) is under `audio/{track}/meta`. A recording lists its tracks in `audio_tracks`. See [Exporting audio](#exporting-audio) to decode them.
+
 ### Tasks
 
 In Episodes mode, the files follow the tasks the operator runs from the task list in the web app (Settings, Tasks, "Show task list"). Starting a task opens a file, and stopping it with Success or Failure, or aborting it, closes it with that outcome. The signals are published on `{robot}/tasks/signal`; see [Task Signals](/control/#task-signals).
@@ -143,3 +149,17 @@ dataset = client.export(recordings, adamo.Export(state=["proprioception/joints"]
 ```
 
 An export that names such a topic without its decoder stops before downloading anything, with a `ValueError` that names the topics missing one.
+
+## Exporting audio
+
+`Recordings.export_audio` decodes the audio of recordings made with `record_audio=True` into one file per track, for training a voice model:
+
+```python
+files = client.export_audio(recordings, "audio", tracks=["mic", "operator-*"])
+```
+
+- Each track goes to `audio/{device}/{name}/{track}.wav`, at 48 kHz. `format=` also takes `"flac"` and `"mp3"`; any other format is a `ValueError`.
+- `tracks` keeps the tracks whose name matches any of its patterns: `"mic"` is the robot's track of that name, and `"operator-*"` is every operator's microphone. Without it, every track is exported. A pattern that matches no track of any recording is named in a warning that lists the tracks the recordings have. When no pattern matches at all, the export stops before downloading anything, with a `ValueError` that lists them.
+- Each file starts at the recording's first video frame, or at its first audio packet when it has no camera, with silence wherever the track sent nothing. The tracks of one recording line up with each other and with its video.
+
+Recordings without a matching track are skipped. The Export Dataset button on the Recordings page adds this call when the recordings have audio and you tick Export audio.
