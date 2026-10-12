@@ -1,0 +1,1227 @@
+---
+title: "Receiving Control"
+description: "Subscribe to gamepad and VR input from operate.adamohq.com, plus your own custom operators"
+---
+
+import { Tabs, TabItem, Aside } from "@astrojs/starlight/components";
+
+A robot becomes useful when it does something with the input it receives. There are two sources of control:
+
+1. **operate.adamohq.com** — gamepad and VR input from the hosted operator, published as ROS envelopes containing CDR-encoded payloads on `control/joy` and `control/cdr/xr_tracking`.
+2. **Your own custom operator** — a teleop program you wrote yourself, publishing whatever topics and payload format you like (typically JSON). See [Building Your Own Operator](/v1/operator/).
+
+For both, the SDK primitive is the same: subscribe to a key expression and react to incoming samples.
+
+<Aside>
+  On a ROS 2 robot you can skip the decoding below entirely: enable the [ROS 2
+  control fan-out](/v1/ros/#operator-control-as-ros-topics) and the same gamepad
+  and VR messages arrive as native ROS topics (`/joy`, `/head_pose`,
+  `/controller/...`).
+</Aside>
+
+## Explicit control ownership
+
+The hosted web operator can require a deliberate ownership step before
+teleoperation. An organization owner or admin enables **Settings → Operator
+Control → Require explicit Take Control**. Operators then enter robot pages in
+view-only mode and use **Take Control** and **Release Control** in the
+teleoperation header.
+
+The policy is stored on the organization, so it follows users across browsers
+and applies to every operator in that organization.
+
+### Robot-facing ownership lease
+
+While an operator holds explicit control, the web app publishes JSON on:
+
+```text
+{robot}/control/json/operator_control
+```
+
+The SDK automatically adds the organization prefix. On the wire, the full key
+is `adamo/{org}/{robot}/control/json/operator_control`.
+
+An acquisition looks like:
+
+```json
+{
+  "version": 1,
+  "active": true,
+  "event": "acquired",
+  "operator": {
+    "userId": "2b1d…",
+    "sessionId": "b9f1…",
+    "displayName": "Sam Considine"
+  },
+  "timestampMs": 1785270488243
+}
+```
+
+The `event` field is one of:
+
+| Event | Meaning |
+|---|---|
+| `acquired` | This operator session has taken control |
+| `heartbeat` | The same session still holds control; sent once per second |
+| `released` | The session deliberately released control or left the robot page |
+
+Track ownership by `operator.sessionId`, not display name. A `released` event
+should only clear the matching session: during a takeover, the old holder's
+release can race with the new holder's acquisition.
+
+Treat the stream as a lease. Stop accepting motion when either:
+
+- the matching `released` event arrives; or
+- no matching `heartbeat` arrives for your chosen timeout (three seconds is a
+  reasonable starting point for the current one-second heartbeat).
+
+The timeout is required because a crashed browser or broken network cannot
+reliably send `released`.
+
+<Aside type="caution" title="Enforce ownership on the robot">
+  The ownership topic is a signal, not a network access-control boundary.
+  Custom publishers and integrations can write control topics directly. A
+  robot that requires a hard guarantee must gate every actuator command against
+  the current, unexpired ownership lease. Do not treat the presence of a
+  frontend button as robot-side enforcement.
+</Aside>
+
+### Inspecting the lifecycle with Python
+
+This listener prints `acquired`, heartbeats, and `released` from the ownership
+lease together with browser keyboard edges, and labels keyboard samples received
+without an active lease `UNEXPECTED_WHILE_RELEASED`:
+
+```python
+import threading
+
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+holder = {"session": None}
+
+
+@robot.on("json/operator_control", max_age=None)
+def on_ownership(sample):
+    msg = sample.message
+    session_id = msg.get("operator", {}).get("sessionId")
+    if msg["active"]:
+        holder["session"] = session_id
+    elif session_id == holder["session"]:
+        holder["session"] = None
+    print(msg["event"], msg.get("operator", {}).get("displayName"))
+
+
+@robot.on("json/keyboard")
+def on_key(sample):
+    label = "" if holder["session"] else "  UNEXPECTED_WHILE_RELEASED"
+    print(sample.message["action"], sample.message["key"] + label)
+
+
+threading.Event().wait()  # callbacks run on SDK threads
+```
+
+Use this listener while testing **Take Control → input → Release Control**. It
+is a diagnostic tool; the production receiver still needs to enforce the lease
+before applying commands.
+
+## Operator presence
+
+The hosted web operator publishes a presence signal while a browser tab is
+viewing a robot. This is separate from [explicit control
+ownership](#explicit-control-ownership): a viewer can be present without
+holding control, and multiple viewers can be present at once.
+
+Presence is a Zenoh liveliness token at:
+
+```text
+{robot}/operator/presence/{userId}/{sessionId}/{displayNameBase64Url}
+```
+
+The SDK adds the organization prefix. On the wire, the full key is:
+
+```text
+adamo/{org}/{robot}/operator/presence/{userId}/{sessionId}/{displayNameBase64Url}
+```
+
+Each browser tab gets its own `sessionId`. The last segment is the operator's
+UTF-8 display name encoded as unpadded base64url. Use `userId` and `sessionId`
+as identity; display names are labels and are not unique.
+
+Subscribe with history enabled so the callback first receives everyone already
+present and then receives changes. Liveliness subscriptions are available as
+Rust `Session::on_liveliness`, C `adamo_liveliness_subscribe`, and the
+TypeScript session's `liveliness().declareSubscriber`; the Python SDK 1.0 has no
+liveliness API. See [Robot Discovery](/v1/discovery/#watching-for-changes) for
+cross-language examples. To decode the last key segment in any language, add
+`=` padding to a multiple of four and base64url-decode it as UTF-8.
+
+A token appearing means that tab joined the robot view. It disappears when the
+tab leaves normally or when Zenoh detects that its session disconnected, so an
+unexpected browser or network failure does not depend on a final application
+message. Detection after an unclean disconnect is asynchronous and should not
+be used as a hard real-time actuator stop; use the short ownership lease above
+for control gating.
+
+### Viewing heartbeat
+
+The web operator also publishes best-effort JSON every two seconds on:
+
+```text
+{robot}/operator/viewing/{userId}/{sessionId}
+```
+
+```json
+{
+  "displayName": "Sam Considine",
+  "visible": true,
+  "sentAt": 1785270488243
+}
+```
+
+A clean exit publishes `visible: false`. If you consume this data topic instead
+of liveliness, expire a viewer after six seconds without a heartbeat because a
+crashed tab cannot reliably publish its final message. Prefer the liveliness
+token when you only need join/leave events.
+
+There is currently no typed `OperatorConnected` / `OperatorDisconnected` SDK
+helper. These signals are readable through the public pub/sub and liveliness
+primitives, but applications must parse the key or JSON payload themselves.
+
+## Gamepad from operate.adamohq.com
+
+The web app publishes a Joy message to `{robot}/control/joy` whenever the gamepad changes. The payload is a ROS envelope whose inner payload is a CDR-encoded `sensor_msgs/msg/Joy`.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+The Python SDK 1.0 decodes JSON and MessagePack control. In the web app's robot
+page, set the gamepad serialization to **JSON**; the default ROS-envelope CDR
+gamepad message is not decoded by the Python SDK 1.0. In JSON mode each message
+is a `JoystickCommand` with `axes`, `buttons`, `sequence_id`, and `stamp`.
+
+```python
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+
+
+# Samples whose fabric timestamp is more than one second old are dropped
+# before on_joy runs.
+@robot.on("joy", max_age=1.0)
+def on_joy(sample):
+    axes = sample.message["axes"]
+    buttons = sample.message["buttons"]
+    # axes[0..1] = left stick X/Y, axes[2..3] = right stick X/Y, etc.
+    drive(axes[0], axes[1])
+
+
+robot.attach_video("main", device="/dev/video0")
+robot.run()  # callbacks run on an SDK thread
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+The Rust SDK does not yet expose the typed ROS-envelope/CDR decoder. Decode the
+envelope and CDR manually (or with a ROS/CDR crate), and preserve the Header
+timestamp so delayed input can be rejected before it reaches the robot.
+
+```rust
+use adamo::Session;
+
+fn main() -> adamo::Result<()> {
+    let session = Session::open_default("ak_...")?;
+    let _sub = session.subscribe_with("my-arm/control/joy", |sample| {
+        // sample.payload is a ROS envelope. Strip it before decoding CDR.
+        let Ok((topic, type_name, cdr_payload)) = decode_ros_envelope(&sample.payload) else {
+            return;
+        };
+        if topic != "/joy" || type_name != "sensor_msgs/msg/Joy" {
+            return;
+        }
+
+        // The helper below decodes the Joy fields used here.
+        if let Ok(joy) = decode_joy_cdr(cdr_payload) {
+            let Some(source_us) = joy.source_timestamp_us() else {
+                return; // an unset timestamp is unsafe for robot commands
+            };
+            if adamo::fabric_now_us().saturating_sub(source_us) > 1_000_000 {
+                return; // buffered for more than one second
+            }
+            drive(joy.axes[0], joy.axes[1]);
+        }
+    })?;
+    std::thread::park();
+    Ok(())
+}
+
+fn decode_ros_envelope(data: &[u8]) -> Result<(&str, &str, &[u8]), &'static str> {
+    if data.len() < 8 {
+        return Err("payload too short");
+    }
+
+    let mut offset = 0;
+    let topic_len = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+    offset += 4;
+    if offset + topic_len + 4 > data.len() {
+        return Err("bad topic length");
+    }
+    let topic = std::str::from_utf8(&data[offset..offset + topic_len]).map_err(|_| "bad topic")?;
+    offset += topic_len;
+
+    let type_len = u32::from_be_bytes(data[offset..offset + 4].try_into().unwrap()) as usize;
+    offset += 4;
+    if offset + type_len > data.len() {
+        return Err("bad type length");
+    }
+    let type_name = std::str::from_utf8(&data[offset..offset + type_len]).map_err(|_| "bad type")?;
+    offset += type_len;
+
+    Ok((topic, type_name, &data[offset..]))
+}
+
+struct JoyMsg {
+    stamp_sec: i32,
+    stamp_nanosec: u32,
+    axes: Vec<f32>,
+    buttons: Vec<i32>,
+}
+
+impl JoyMsg {
+    fn source_timestamp_us(&self) -> Option<u64> {
+        if self.stamp_sec < 0
+            || (self.stamp_sec == 0 && self.stamp_nanosec == 0)
+            || self.stamp_nanosec >= 1_000_000_000
+        {
+            return None;
+        }
+        Some(self.stamp_sec as u64 * 1_000_000 + self.stamp_nanosec as u64 / 1_000)
+    }
+}
+
+struct MinimalCdrReader<'a> {
+    data: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> MinimalCdrReader<'a> {
+    fn new(data: &'a [u8]) -> Result<Self, &'static str> {
+        if data.len() < 4 || data[0] != 0x00 || data[1] != 0x01 {
+            return Err("expected little-endian CDR payload");
+        }
+        Ok(Self { data, offset: 4 })
+    }
+
+    fn align(&mut self, size: usize) {
+        let relative = self.offset - 4;
+        self.offset += (size - (relative % size)) % size;
+    }
+
+    fn take<const N: usize>(&mut self) -> Result<[u8; N], &'static str> {
+        if self.offset + N > self.data.len() {
+            return Err("CDR payload ended early");
+        }
+        let bytes = self.data[self.offset..self.offset + N].try_into().unwrap();
+        self.offset += N;
+        Ok(bytes)
+    }
+
+    fn read_i32(&mut self) -> Result<i32, &'static str> {
+        self.align(4);
+        Ok(i32::from_le_bytes(self.take()?))
+    }
+
+    fn read_u32(&mut self) -> Result<u32, &'static str> {
+        self.align(4);
+        Ok(u32::from_le_bytes(self.take()?))
+    }
+
+    fn read_f32(&mut self) -> Result<f32, &'static str> {
+        self.align(4);
+        Ok(f32::from_le_bytes(self.take()?))
+    }
+
+    fn read_string(&mut self) -> Result<&'a str, &'static str> {
+        let len = self.read_u32()? as usize;
+        if len == 0 {
+            return Ok("");
+        }
+        if self.offset + len > self.data.len() {
+            return Err("CDR string ended early");
+        }
+        let value = std::str::from_utf8(&self.data[self.offset..self.offset + len - 1])
+            .map_err(|_| "bad CDR string")?;
+        self.offset += len;
+        Ok(value)
+    }
+}
+
+fn decode_joy_cdr(data: &[u8]) -> Result<JoyMsg, &'static str> {
+    let mut reader = MinimalCdrReader::new(data)?;
+    let stamp_sec = reader.read_i32()?;
+    let stamp_nanosec = reader.read_u32()?;
+    if stamp_nanosec >= 1_000_000_000 {
+        return Err("invalid ROS timestamp");
+    }
+    let _frame_id = reader.read_string()?;
+
+    let axes_len = reader.read_u32()? as usize;
+    let mut axes = Vec::with_capacity(axes_len);
+    for _ in 0..axes_len {
+        axes.push(reader.read_f32()?);
+    }
+
+    let buttons_len = reader.read_u32()? as usize;
+    let mut buttons = Vec::with_capacity(buttons_len);
+    for _ in 0..buttons_len {
+        buttons.push(reader.read_i32()?);
+    }
+
+    Ok(JoyMsg { stamp_sec, stamp_nanosec, axes, buttons })
+}
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+The plain C API does not expose a typed ROS-envelope/CDR decoder. Parse the
+outer envelope, then use a CDR library and retain `header.stamp` for freshness
+checks.
+
+```c
+adamo_session_t *sess = adamo_open_default("ak_...");
+
+void on_joy(const adamo_sample_t *s, void *user) {
+    /*
+     * s->payload is a ROS envelope:
+     *   u32be topic_len, topic bytes, u32be type_len, type bytes, CDR payload.
+     * Strip the envelope, verify topic="/joy" and type="sensor_msgs/msg/Joy",
+     * then decode the remaining CDR bytes as sensor_msgs/msg/Joy. Preserve
+     * Header.stamp and reject unset or old source timestamps against
+     * adamo_fabric_now_us() before issuing a robot command.
+     */
+}
+
+adamo_cb_sub_t *sub = adamo_subscribe_cb(
+    sess, "my-arm/control/joy", on_joy, /* user */ NULL);
+```
+
+For C/C++ robots, [eProsima Fast CDR](https://github.com/eProsima/Fast-CDR) is a small library that handles the wire format.
+
+</TabItem>
+</Tabs>
+
+The standard W3C / Xbox button and axis mapping is documented in the [TypeScript SDK reference](/v1/typescript-sdk/#axis-mapping).
+
+## VR Headset from operate.adamohq.com
+
+When a viewer enters immersive VR mode on a stereo track, the headset publishes pose data continuously:
+
+| Inner topic | Payload | Description |
+|-------------|---------|-------------|
+| `/head_pose` | `geometry_msgs/msg/PoseStamped` | Headset pose |
+| `/controller/left` | `geometry_msgs/msg/PoseStamped` | Left controller grip (wrist/hold pose) |
+| `/controller/right` | `geometry_msgs/msg/PoseStamped` | Right controller grip (wrist/hold pose) |
+| `/controller/{handedness}/tip` | `geometry_msgs/msg/PoseStamped` | Controller tip — the aim pose (WebXR `targetRaySpace`) |
+| `/controller/{handedness}/joy` | `sensor_msgs/msg/Joy` | XR controller axes and buttons |
+
+The hosted UI sends XR data on `{robot}/control/cdr/xr_tracking`. Each payload is a ROS envelope whose inner topic is `/head_pose`, `/controller/{handedness}`, `/controller/{handedness}/tip`, or `/controller/{handedness}/joy`.
+
+In Python, `subscribe_xr_control` from `adamo.xr` decodes these envelopes into
+typed messages. Each inner topic is normalized to a channel: `/head_pose`
+arrives on `json/xr/head/pose`, `/controller/left` on `json/xr/left/pose`, and
+`/controller/left/joy` on `json/xr/left/joy`. Quaternion order is always
+ROS/WebXR scalar-last: `x, y, z, w`.
+
+```python
+import adamo
+from adamo.xr import PoseStamped, XrFrame, subscribe_xr_control
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+
+
+# max_age drops samples whose fabric timestamp is older than 0.5 s.
+@subscribe_xr_control(robot, max_age=0.5)
+def on_xr(sample):
+    if isinstance(sample.message, PoseStamped):
+        print(sample.channel, sample.message.position.as_tuple(), sample.message.orientation.as_tuple())
+    elif isinstance(sample.message, XrFrame) and sample.message.left:
+        print("left", sample.message.left.pose.position.as_tuple())
+```
+
+`sample.is_stale(max_age_seconds)` judges freshness by the sender's own stamp
+instead and treats an unstamped message as stale. The Python SDK 1.0 no longer
+exposes the raw envelope decoder (`decode_ros_envelope`), so republishing the
+CDR bytes into ROS 2 is done from the [ROS 2 control fan-out](/v1/ros/#operator-control-as-ros-topics)
+of an `adamo-network` robot instead.
+
+## Custom Control Topics
+
+When you write your own operator (XR app, mobile, GELLO leader, …), you choose the topic name and the payload format. JSON is the default in the Python SDK and works across all three languages.
+
+The example below is the robot-side receiver that pairs with the bimanual XR operator on the [Building Your Own Operator](/v1/operator/) page.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+`robot.session.subscribe(...)` follows the operator's topics; a `*` wildcard covers both hands, and the last key segment names the side.
+
+```python
+import json
+
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+
+# Cameras streamed back to the operator
+robot.attach_video("wrist_left",  device="/dev/video0")
+robot.attach_video("wrist_right", device="/dev/video1")
+robot.attach_video("head",        shm="head_cam", pixel_format="BGRA", width=1280, height=720)
+
+
+# Bimanual hand controllers — the last key segment is "left" or "right"
+def hand(sample):
+    msg = json.loads(sample.payload)
+    side = sample.key.rsplit("/", 1)[-1]
+    move_arm(side, msg["pos"], msg["quat"])
+    set_gripper(side, msg["trigger"])
+
+
+# Head pose — separate handler
+def on_head(sample):
+    msg = json.loads(sample.payload)
+    update_head_tracking(msg["pos"], msg["quat"])
+
+
+robot.session.subscribe("xr-operator/control/xr/hand/*", callback=hand)
+robot.session.subscribe("xr-operator/control/xr/head", callback=on_head)
+robot.run()
+```
+
+The subscriptions follow `{operator}/{track}` — keys the operator publishes. Callbacks run on SDK threads. To receive commands an operator sends to *this* robot on `{robot}/control/{channel}` as JSON or MessagePack, use `@robot.on(channel)` instead, which decodes the payload for you.
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Session;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct HandMsg { pos: [f32; 3], quat: [f32; 4], trigger: f32 }
+
+fn main() -> adamo::Result<()> {
+    let session = Session::open_default("ak_...")?;
+
+    let _left = session.subscribe_with("xr-operator/control/xr/hand/left", |s| {
+        let msg: HandMsg = serde_json::from_slice(&s.payload).unwrap();
+        move_arm("left", msg.pos, msg.quat);
+        set_gripper("left", msg.trigger);
+    })?;
+
+    let _right = session.subscribe_with("xr-operator/control/xr/hand/right", |s| {
+        let msg: HandMsg = serde_json::from_slice(&s.payload).unwrap();
+        move_arm("right", msg.pos, msg.quat);
+        set_gripper("right", msg.trigger);
+    })?;
+
+    std::thread::park();
+    Ok(())
+}
+```
+
+The Rust SDK doesn't have brace-capture pattern matching like Python — declare a subscriber per side, or subscribe to `xr-operator/control/xr/hand/*` and pull the side off the key string yourself.
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+Use one callback subscriber per topic, or subscribe to a wildcard and switch on the key:
+
+```c
+void on_hand(const adamo_sample_t *s, void *user) {
+    const char *side = strrchr(s->key, '/');
+    if (side) side++;  /* "left" or "right" */
+    /* decode JSON from s->payload, s->payload_len */
+    /* move_arm(side, ...); */
+}
+
+adamo_subscribe_cb(sess, "xr-operator/control/xr/hand/*", on_hand, NULL);
+```
+
+</TabItem>
+</Tabs>
+
+## Task Signals
+
+For labelling data collection, the hosted UI can emit **task start/stop signals** — the operator picks a named task and marks when it begins and ends. This is opt-in (Settings → Tasks → "Show task list" in the web app). In Episodes mode the data service records each task as its own file; see [Recording and Exporting Data](/v1/recording/#tasks).
+
+The signal is published on:
+
+```text
+{robot}/tasks/signal
+```
+
+reliably (`DATA` priority), as UTF-8 JSON:
+
+```json
+{
+  "action": "start",
+  "task_id": "d69c5a80-9f03-4d8a-b32a-3819cd00a7c9",
+  "task_name": "Solder my own hand",
+  "ts": 1780686715804,
+  "capture_time_us": 1780686715804120
+}
+```
+
+`action` is `"start"`, `"stop"` (with an `outcome` of `"success"` or `"failure"`), `"abort"`, `"next"` or `"discard"`; the data service ends a task on `"stop"` or `"abort"`. `capture_time_us` is the capture time of the video frame the operator saw when acting. `task_id` is the task's UUID (matches the task in the web app); `task_name` is the human-readable label (may be absent); `ts` is `Date.now()` in milliseconds. Subscribe to `*/tasks/signal` to catch every robot in the org — the robot is the first key segment.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import json
+
+import adamo
+
+robot = adamo.Robot(api_key="ak_...", name="task-listener")
+
+def on_task(sample):
+    sig = json.loads(sample.payload)
+    robot_name = sample.key.split("/")[0]
+    print(robot_name, sig["action"], sig["task_id"], sig.get("task_name"))
+
+sub = robot.session.subscribe("*/tasks/signal", callback=on_task)
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Session;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct TaskSignal { action: String, task_id: String, task_name: Option<String> }
+
+fn main() -> adamo::Result<()> {
+    let session = Session::open_default("ak_...")?;
+    let _sub = session.subscribe_with("*/tasks/signal", |s| {
+        let sig: TaskSignal = serde_json::from_slice(&s.payload).unwrap();
+        println!("{} {} {:?}", sig.action, sig.task_id, sig.task_name);
+    })?;
+    std::thread::park();
+    Ok(())
+}
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+void on_task(const adamo_sample_t *s, void *user) {
+    /* s->key is e.g. "arm-01/tasks/signal"; decode JSON from
+       s->payload, s->payload_len for action / task_id / task_name */
+}
+
+adamo_subscribe_cb(sess, "*/tasks/signal", on_task, NULL);
+```
+
+</TabItem>
+</Tabs>
+
+### Managing tasks programmatically
+
+Tasks and sets are normally created in the web app, but you can also manage them over a small REST API — handy for pre-creating a set before a collection run so the `task_id` is known up front. Authenticate with your **org API key** (the same `ak_…` key the SDKs use): exchange it for a short-lived bearer token, then call the task endpoints. The token response also gives you your `org_id`.
+
+```bash
+RESP=$(curl -s -X POST https://api.adamohq.com/api/keys/token -H "X-API-Key: ak_...")
+TOKEN=$(jq -r .token   <<<"$RESP")
+ORG=$(jq -r .org_id <<<"$RESP")
+```
+
+All endpoints are under `https://api.adamohq.com/api/orgs/{org_id}` and take/return JSON:
+
+| Method | Path | Body | Description |
+|---|---|---|---|
+| `GET` | `/task-sets` | — | List sets, each with its tasks (ordered by `position`) |
+| `POST` | `/task-sets` | `{name, position?}` | Create a set |
+| `GET` | `/task-sets/{set_id}` | — | Get one set with its tasks |
+| `DELETE` | `/task-sets/{set_id}` | — | Delete a set (and its tasks) |
+| `POST` | `/task-sets/{set_id}/tasks` | `{name, position?}` | Add a task |
+| `PATCH` | `/task-sets/{set_id}/tasks/{task_id}` | `{name?, position?}` | Rename / reorder a task |
+| `DELETE` | `/task-sets/{set_id}/tasks/{task_id}` | — | Remove a task |
+
+```bash
+# Create a set, then add a task to it
+SET=$(curl -s -X POST https://api.adamohq.com/api/orgs/$ORG/task-sets \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"Pick and place"}' | jq -r .id)
+
+curl -X POST https://api.adamohq.com/api/orgs/$ORG/task-sets/$SET/tasks \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"Grasp the cube"}'
+```
+
+The `task_id` returned here is the same UUID that appears in the task signal above, so a script can lay out a set and the operator just selects and records.
+
+<Aside type="note">
+An org API key grants org-scoped task management. Signed-in users (Supabase tokens) are instead limited by their org role — owner, admin, or developer may write. Tokens from `/api/keys/token` are short-lived (~1 hour); re-exchange the key when one expires.
+</Aside>
+
+## Bilateral Force Feedback
+
+A bilateral teleop setup sends measured follower joint efforts back to the leader on a real-time control topic. The leader keeps only the newest sample, scales it negatively, then applies it in the leader arm's external-effort mode.
+
+The example below isolates the feedback path. Replace the two hardware-driver functions with calls to your robot API:
+
+- follower side: read measured external efforts from the follower arm
+- leader side: apply external efforts to the leader arm
+
+The payload is eight big-endian `f64` values: `[timestamp_seconds, effort_0, ..., effort_6]`.
+
+<Aside>Force feedback writes actuator efforts. Clamp torques in your driver, reject stale samples, and always clear effort commands before leaving external-effort mode.</Aside>
+
+<Tabs syncKey="lang">
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::{PublisherOptions, Rate, Session};
+use std::env;
+
+const N_JOINTS: usize = 7;
+const EFFORT_BYTES: usize = (1 + N_JOINTS) * 8;
+const RATE_HZ: f64 = 100.0;
+const GAIN: f64 = 0.1;
+
+fn effort_topic() -> String {
+    let robot = env::var("ADAMO_ROBOT_NAME").unwrap_or_else(|_| "my-arm".to_string());
+    format!("{robot}/control/force_feedback/follower_effort")
+}
+
+fn now_seconds() -> f64 {
+    adamo::fabric_now_us() as f64 / 1_000_000.0
+}
+
+fn pack_efforts(timestamp: f64, efforts: [f64; N_JOINTS]) -> [u8; EFFORT_BYTES] {
+    let mut out = [0_u8; EFFORT_BYTES];
+    for (i, value) in std::iter::once(timestamp)
+        .chain(efforts.iter().copied())
+        .enumerate()
+    {
+        let start = i * 8;
+        out[start..start + 8].copy_from_slice(&value.to_be_bytes());
+    }
+    out
+}
+
+fn unpack_efforts(payload: &[u8]) -> Option<(f64, [f64; N_JOINTS])> {
+    if payload.len() != EFFORT_BYTES {
+        return None;
+    }
+
+    let mut timestamp_bytes = [0_u8; 8];
+    timestamp_bytes.copy_from_slice(&payload[0..8]);
+
+    let mut efforts = [0.0_f64; N_JOINTS];
+    for (i, effort) in efforts.iter_mut().enumerate() {
+        let start = (i + 1) * 8;
+        let mut bytes = [0_u8; 8];
+        bytes.copy_from_slice(&payload[start..start + 8]);
+        *effort = f64::from_be_bytes(bytes);
+    }
+
+    Some((f64::from_be_bytes(timestamp_bytes), efforts))
+}
+
+fn realtime_options() -> PublisherOptions {
+    PublisherOptions {
+        priority: 250,
+        express: true,
+        reliable: false,
+    }
+}
+
+fn read_follower_external_efforts() -> [f64; N_JOINTS] {
+    todo!("read joint efforts from your follower driver")
+}
+
+fn apply_leader_external_efforts(_efforts: [f64; N_JOINTS]) {
+    todo!("send joint efforts to your leader driver")
+}
+
+fn run_follower(session: &Session) -> adamo::Result<()> {
+    let topic = effort_topic();
+    let publisher = session.publisher(&topic, realtime_options())?;
+    let mut rate = Rate::new(RATE_HZ);
+
+    loop {
+        let efforts = read_follower_external_efforts();
+        let payload = pack_efforts(now_seconds(), efforts);
+        publisher.put(&payload)?;
+        rate.sleep();
+    }
+}
+
+fn run_leader(session: &Session) -> adamo::Result<()> {
+    let topic = effort_topic();
+    let subscriber = session.subscribe(&topic)?;
+    let teleop_started_at = now_seconds();
+    let mut rate = Rate::new(RATE_HZ);
+
+    loop {
+        let mut latest = None;
+        while let Some(sample) = subscriber.try_recv()? {
+            latest = Some(sample);
+        }
+
+        if let Some(sample) = latest {
+            if let Some((timestamp, measured)) = unpack_efforts(&sample.payload) {
+                if timestamp >= teleop_started_at {
+                    let mut applied = [0.0_f64; N_JOINTS];
+                    for (out, effort) in applied.iter_mut().zip(measured.iter()) {
+                        *out = -GAIN * *effort;
+                    }
+                    apply_leader_external_efforts(applied);
+                }
+            }
+        }
+
+        rate.sleep();
+    }
+}
+
+fn main() -> adamo::Result<()> {
+    let api_key = env::var("ADAMO_API_KEY").expect("set ADAMO_API_KEY");
+    let session = Session::open_default(&api_key)?;
+    let mode = env::args().nth(1).unwrap_or_else(|| "leader".to_string());
+
+    if mode == "follower" {
+        run_follower(&session)
+    } else {
+        run_leader(&session)
+    }
+}
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+#define _POSIX_C_SOURCE 199309L
+
+#include <adamo/adamo.h>
+
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#define N_JOINTS 7
+#define EFFORT_BYTES ((1 + N_JOINTS) * 8)
+#define RATE_HZ 100.0
+#define GAIN 0.1
+
+static int host_is_little_endian(void) {
+    const uint16_t probe = 1;
+    return *(const uint8_t *)&probe == 1;
+}
+
+static void pack_be_double(double value, uint8_t *out) {
+    uint8_t bytes[8];
+    memcpy(bytes, &value, 8);
+    if (host_is_little_endian()) {
+        for (int i = 0; i < 8; i++) out[i] = bytes[7 - i];
+    } else {
+        memcpy(out, bytes, 8);
+    }
+}
+
+static double unpack_be_double(const uint8_t *in) {
+    uint8_t bytes[8];
+    if (host_is_little_endian()) {
+        for (int i = 0; i < 8; i++) bytes[i] = in[7 - i];
+    } else {
+        memcpy(bytes, in, 8);
+    }
+    double value = 0.0;
+    memcpy(&value, bytes, 8);
+    return value;
+}
+
+static void pack_efforts(double timestamp,
+                         const double efforts[N_JOINTS],
+                         uint8_t out[EFFORT_BYTES]) {
+    pack_be_double(timestamp, out);
+    for (int i = 0; i < N_JOINTS; i++) {
+        pack_be_double(efforts[i], out + (i + 1) * 8);
+    }
+}
+
+static int unpack_efforts(const uint8_t *payload,
+                          size_t len,
+                          double *timestamp,
+                          double efforts[N_JOINTS]) {
+    if (len != EFFORT_BYTES) return -1;
+    *timestamp = unpack_be_double(payload);
+    for (int i = 0; i < N_JOINTS; i++) {
+        efforts[i] = unpack_be_double(payload + (i + 1) * 8);
+    }
+    return 0;
+}
+
+static double now_seconds(void) {
+    return (double)adamo_fabric_now_us() / 1000000.0;
+}
+
+static void sleep_tick(void) {
+    struct timespec ts;
+    ts.tv_sec = 0;
+    ts.tv_nsec = (long)(1000000000.0 / RATE_HZ);
+    nanosleep(&ts, NULL);
+}
+
+static void read_follower_external_efforts(double efforts[N_JOINTS]) {
+    /* Fill from your follower driver, e.g. get_all_external_efforts(). */
+    for (int i = 0; i < N_JOINTS; i++) efforts[i] = 0.0;
+}
+
+static void apply_leader_external_efforts(const double efforts[N_JOINTS]) {
+    /* Send to your leader driver, e.g. set_all_external_efforts(...). */
+    (void)efforts;
+}
+
+static int run_follower(adamo_session_t *session, const char *topic) {
+    adamo_publisher_t *pub = adamo_publisher(
+        session, topic, /* priority */ 250, /* express */ 1, /* reliable */ 0);
+    if (!pub) return -1;
+
+    for (;;) {
+        double efforts[N_JOINTS];
+        uint8_t payload[EFFORT_BYTES];
+        read_follower_external_efforts(efforts);
+        pack_efforts(now_seconds(), efforts, payload);
+        if (adamo_publisher_put(pub, payload, sizeof(payload)) != 0) {
+            adamo_publisher_free(pub);
+            return -1;
+        }
+        sleep_tick();
+    }
+}
+
+static int run_leader(adamo_session_t *session, const char *topic) {
+    adamo_subscriber_t *sub = adamo_subscribe(session, topic);
+    if (!sub) return -1;
+
+    const double teleop_started_at = now_seconds();
+    for (;;) {
+        adamo_sample_t *latest = NULL;
+        for (;;) {
+            adamo_sample_t *sample = adamo_sub_try_recv(sub);
+            if (!sample) {
+                const char *err = adamo_last_error();
+                if (err && *err) {
+                    if (latest) adamo_sample_free(latest);
+                    adamo_sub_free(sub);
+                    return -1;
+                }
+                break;
+            }
+            if (latest) adamo_sample_free(latest);
+            latest = sample;
+        }
+
+        if (latest) {
+            double timestamp = 0.0;
+            double measured[N_JOINTS];
+            if (unpack_efforts(latest->payload, latest->payload_len,
+                               &timestamp, measured) == 0 &&
+                timestamp >= teleop_started_at) {
+                double applied[N_JOINTS];
+                for (int i = 0; i < N_JOINTS; i++) {
+                    applied[i] = -GAIN * measured[i];
+                }
+                apply_leader_external_efforts(applied);
+            }
+            adamo_sample_free(latest);
+        }
+
+        sleep_tick();
+    }
+}
+
+int main(int argc, char **argv) {
+    const char *api_key = getenv("ADAMO_API_KEY");
+    const char *robot = getenv("ADAMO_ROBOT_NAME");
+    if (!api_key) {
+        fprintf(stderr, "set ADAMO_API_KEY\n");
+        return 1;
+    }
+    if (!robot) robot = "my-arm";
+
+    char topic[256];
+    snprintf(topic, sizeof(topic), "%s/control/force_feedback/follower_effort", robot);
+
+    adamo_session_t *session = adamo_open_default(api_key);
+    if (!session) {
+        fprintf(stderr, "adamo_open: %s\n", adamo_last_error());
+        return 1;
+    }
+
+    const char *mode = argc > 1 ? argv[1] : "leader";
+    int rc = strcmp(mode, "follower") == 0
+        ? run_follower(session, topic)
+        : run_leader(session, topic);
+
+    fprintf(stderr, "adamo error: %s\n", adamo_last_error());
+    adamo_session_free(session);
+    return rc == 0 ? 0 : 1;
+}
+```
+
+</TabItem>
+</Tabs>
+
+## Real-Time Priority
+
+Control topics should be published with **REAL_TIME** priority and dropped on congestion — a command that arrives 200 ms late is worse than no command at all. The robot side doesn't choose priority on subscribe (the router uses the publisher's choice), but it's worth knowing the convention so your own operator programs follow it.
+
+<Tabs syncKey="lang">
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+session.publisher("control/joy", PublisherOptions {
+    priority: 250,
+    express: true,
+    reliable: false,
+})?;
+```
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_publisher(sess, "control/joy",
+    /* priority */ 250, /* express */ 1, /* reliable */ 0);
+```
+
+</TabItem>
+</Tabs>
+
+## Link Safety Gate
+
+Robots publish a 1 Hz heartbeat on `{robot}/heartbeat` carrying latency stats — the network regime classified by the robot's congestion forecaster, jitter, loss rate, and queuing delay. Use it as a safety gate before applying teleop commands: stop the robot when heartbeats go stale or the regime degrades.
+
+Robots built on the Python SDK 1.0 do not publish this heartbeat, and the Python SDK 1.0 has no `watch_latency` helper.
+
+```ts
+import { watchLatest } from "adamo/fleet";
+
+let lastBeat = performance.now();
+const hb = await watchLatest(session, `adamo/${org}/my-arm/heartbeat`);
+hb.onMessage(() => { lastBeat = performance.now(); });
+
+// In the control loop: two missed heartbeats = stale link
+if (performance.now() - lastBeat > 2500) stopRobot();
+```
+
+For dashboards, the parsed stats expose `regime`, `jitter_ms`, `garch_sigma_ms`, `target_bitrate_kbps`, `loss_rate`, and `queuing_delay_ms` — see the per-SDK `LatencyStats` reference.
+
+See [Building Your Own Operator](/v1/operator/) for the publisher side end-to-end.
+
+## Hosted UI Payload Reference
+
+The current `adamo-ts/examples/web` frontend publishes operator input as real-time, best-effort messages. The exact key and payload depend on the input mode.
+
+### Browser keyboard
+
+Raw keyboard state is published on:
+
+```text
+{robot}/control/json/keyboard
+```
+
+The payload is UTF-8 JSON:
+
+```json
+{
+  "key": "w",
+  "code": "KeyW",
+  "action": "down",
+  "stamp": 1770210000000
+}
+```
+
+`key` is the browser `KeyboardEvent.key` value, so it reflects the active keyboard layout and modifiers. `code` is the browser `KeyboardEvent.code` value, so it identifies the physical key position. `action` is `"down"` or `"up"`, and `stamp` is `Date.now()` in milliseconds.
+
+The hosted UI suppresses browser auto-repeat events. While a physical key remains held, it republishes a `"down"` heartbeat about every 100 ms. Receivers should treat the heartbeat as a dead-man signal and stop the associated motion if it expires, rather than relying only on a single `"up"` edge.
+
+### CDR ROS envelope
+
+When the UI is using CDR mode, the bytes on the Adamo key are a small ROS envelope followed by the CDR-encoded ROS message:
+
+```text
+u32 topic_length_be
+utf8 topic
+u32 type_length_be
+utf8 type
+bytes cdr_payload
+```
+
+The `topic` and `type` fields describe the inner ROS message. The `cdr_payload` is the serialized message named by `type`.
+
+Python applications should use `subscribe_xr_control` from `adamo.xr` instead
+of unpacking XR tracking manually; it validates and decodes the envelope. The
+Python SDK 1.0 does not decode the gamepad's CDR `/joy` envelope — switch the
+web app's gamepad serialization to JSON and receive it with `robot.on("joy")`.
+The wire layout remains documented here for non-Python SDKs and protocol
+debugging.
+
+### Browser gamepad / Xbox controller
+
+Gamepad input is published on:
+
+```text
+adamo/{org}/{robot}/control/joy
+```
+
+By default the payload is a ROS envelope with:
+
+| Inner field | Value |
+|-------------|-------|
+| `topic` | `/joy` |
+| `type` | `sensor_msgs/msg/Joy` |
+| `payload` | CDR `sensor_msgs/msg/Joy` |
+
+The Joy message uses `header.frame_id = "joy"` and contains six axes plus 21 button slots. Standard W3C / Xbox controllers populate buttons `0..16`; buttons `17..20` are reserved and normally remain `0`.
+
+| Axis | Meaning | Range |
+|------|---------|-------|
+| `axes[0]` | Left stick X | `-1` left, `+1` right |
+| `axes[1]` | Left stick Y | `-1` up, `+1` down |
+| `axes[2]` | Right stick X | `-1` left, `+1` right |
+| `axes[3]` | Right stick Y | `-1` up, `+1` down |
+| `axes[4]` | Left trigger analog | `0` released, `1` pressed |
+| `axes[5]` | Right trigger analog | `0` released, `1` pressed |
+
+| Button | Xbox / W3C control |
+|--------|--------------------|
+| `buttons[0]` | A |
+| `buttons[1]` | B |
+| `buttons[2]` | X |
+| `buttons[3]` | Y |
+| `buttons[4]` | LB |
+| `buttons[5]` | RB |
+| `buttons[6]` | LT pressed |
+| `buttons[7]` | RT pressed |
+| `buttons[8]` | Back / Select |
+| `buttons[9]` | Start |
+| `buttons[10]` | Left stick click |
+| `buttons[11]` | Right stick click |
+| `buttons[12]` | D-pad up |
+| `buttons[13]` | D-pad down |
+| `buttons[14]` | D-pad left |
+| `buttons[15]` | D-pad right |
+| `buttons[16]` | Guide / Xbox |
+
+If joystick serialization is switched to JSON in the UI, the same key carries:
+
+```json
+{
+  "type": "JoystickCommand",
+  "sequence_id": 42,
+  "stamp": 1710000000.123,
+  "axes": [0, 0, 0, 0, 0, 0],
+  "buttons": [0, 0, 0]
+}
+```
+
+### Logitech Extreme 3D Pro
+
+The Logitech Extreme 3D Pro uses the same `control/joy` key and payload format, but the axes are mapped as a joystick:
+
+| Axis | Meaning |
+|------|---------|
+| `axes[0]` | Stick X |
+| `axes[1]` | Stick Y |
+| `axes[2]` | Twist / rudder |
+| `axes[3]` | Throttle, with forward usually negative |
+| `axes[4]` | Unused, normally `0` |
+| `axes[5]` | Unused, normally `0` |
+
+Buttons `0..11` are copied from the physical buttons. Buttons `12..15` are the hat switch when the browser reports it as buttons.
+
+### XR head, controllers, and hands
+
+XR tracking is published on one Adamo key:
+
+```text
+adamo/{org}/{robot}/control/cdr/xr_tracking
+```
+
+Each publish contains one ROS envelope. Consumers should decode the envelope and dispatch by the inner `topic`:
+
+| Inner topic | Type | Contents |
+|-------------|------|----------|
+| `/head_pose` | `geometry_msgs/msg/PoseStamped` | Head pose |
+| `/controller/{handedness}` | `geometry_msgs/msg/PoseStamped` | Physical controller grip pose (the wrist/hold point), or hand wrist pose when hand tracking is active without a physical controller |
+| `/controller/{handedness}/tip` | `geometry_msgs/msg/PoseStamped` | Physical controller tip — the aim pose from WebXR `targetRaySpace`. Published alongside the grip pose above: grip is where the hand holds the controller, tip is where it points. Omitted for a frame if the runtime reports no target-ray pose. |
+| `/controller/{handedness}/joy` | `sensor_msgs/msg/Joy` | XR controller axes and buttons |
+| `/hand/{handedness}` | `geometry_msgs/msg/PoseArray` | 25 hand joint poses when hand tracking is enabled |
+
+`{handedness}` is normally `left` or `right`. Pose headers use `frame_id = "xr_origin"`. Positions are in meters in the WebXR `local-floor` reference space. Orientations are published as ROS quaternions `{x, y, z, w}`; the frontend converts from WebXR's internal `[w, x, y, z]` order before encoding the ROS message.
+
+In Python, `adamo.xr.subscribe_xr_control` decodes `PoseStamped`, `Joy`,
+`PoseArray` (hand joints), and `Bool` into immutable typed objects, normalizing
+each inner topic to a `json/xr/...` channel (`/hand/left` arrives on
+`json/xr/left/hand`). Pass `max_age` to drop samples by transport time, or check
+`XrControlSample.is_stale(...)` against the sender's own stamp, before using
+controller input to issue commands.
+
+XR controller Joy messages use:
+
+```ts
+const rawAxisCount = xrGamepad.axes.length;
+axes = [
+  ...xrGamepad.axes,
+  ...xrGamepad.buttons.map((button) => button.value),
+];
+buttons = xrGamepad.buttons.map((button) => button.pressed ? 1 : 0);
+```
+
+The raw axis and button order is the order reported by the WebXR runtime for that controller. The UI does not remap XR controller buttons to Xbox-style button indices.
+
+For controllers using the WebXR [`xr-standard`](https://www.w3.org/TR/webxr-gamepads-module-1/#xr-standard-heading) mapping, the Joy values are:
+
+| Joy value | WebXR value | Meaning |
+|-----------|-------------|---------|
+| `axes[0]` | `xrGamepad.axes[0]` | Primary touchpad X, or placeholder `0` |
+| `axes[1]` | `xrGamepad.axes[1]` | Primary touchpad Y, or placeholder `0` |
+| `axes[2]` | `xrGamepad.axes[2]` | Primary thumbstick X |
+| `axes[3]` | `xrGamepad.axes[3]` | Primary thumbstick Y |
+| `buttons[0]` | `xrGamepad.buttons[0].pressed` | Primary trigger pressed |
+| `axes[rawAxisCount + 0]` | `xrGamepad.buttons[0].value` | Primary trigger analog value |
+| `buttons[1]` | `xrGamepad.buttons[1].pressed` | Grip / squeeze pressed |
+| `axes[rawAxisCount + 1]` | `xrGamepad.buttons[1].value` | Grip / squeeze analog value |
+| `buttons[2]` | `xrGamepad.buttons[2].pressed` | Primary touchpad pressed, if present |
+| `axes[rawAxisCount + 2]` | `xrGamepad.buttons[2].value` | Primary touchpad button value |
+| `buttons[3]` | `xrGamepad.buttons[3].pressed` | Primary thumbstick pressed, if present |
+| `axes[rawAxisCount + 3]` | `xrGamepad.buttons[3].value` | Primary thumbstick button value |
+| `buttons[4]` | `xrGamepad.buttons[4].pressed` | First extra button. On current Quest/Pico-style controllers this is usually **X** on left hand and **A** on right hand. |
+| `axes[rawAxisCount + 4]` | `xrGamepad.buttons[4].value` | First extra button value |
+| `buttons[5]` | `xrGamepad.buttons[5].pressed` | Second extra button. On current Quest/Pico-style controllers this is usually **Y** on left hand and **B** on right hand. |
+| `axes[rawAxisCount + 5]` | `xrGamepad.buttons[5].value` | Second extra button value |
+
+`rawAxisCount` is commonly `4` for thumbstick controllers, so the trigger analog value is commonly `axes[4]`, grip is `axes[5]`, thumbstick button value is `axes[7]`, and the first extra face button value is `axes[8]`. Check `axes.length - buttons.length` if you want to derive the offset at runtime.
+
+Hand tracking publishes `PoseArray` joints in this fixed order:
+
+```text
+wrist,
+thumb-metacarpal, thumb-phalanx-proximal, thumb-phalanx-distal, thumb-tip,
+index-finger-metacarpal, index-finger-phalanx-proximal, index-finger-phalanx-intermediate, index-finger-phalanx-distal, index-finger-tip,
+middle-finger-metacarpal, middle-finger-phalanx-proximal, middle-finger-phalanx-intermediate, middle-finger-phalanx-distal, middle-finger-tip,
+ring-finger-metacarpal, ring-finger-phalanx-proximal, ring-finger-phalanx-intermediate, ring-finger-phalanx-distal, ring-finger-tip,
+pinky-finger-metacarpal, pinky-finger-phalanx-proximal, pinky-finger-phalanx-intermediate, pinky-finger-phalanx-distal, pinky-finger-tip
+```

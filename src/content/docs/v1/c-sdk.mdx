@@ -1,0 +1,1208 @@
+---
+title: "C SDK"
+description: "Complete reference for libadamo — every function, type, ownership rule, plus the C++17 RAII wrapper"
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+`libadamo` exposes the Adamo SDK through a small C ABI (`adamo.h`). A header-only C++17 RAII wrapper (`adamo.hpp`) ships alongside.
+
+## Install
+
+The C SDK ships as a prebuilt tarball from `install.adamohq.com/sdk/`. Pick the build that matches your host OS, architecture, and whether you need video support, then extract it into a CMake-discoverable prefix (e.g. `/opt`).
+
+```sh
+# Linux arm64 (Jetson / Ubuntu 22.04 aarch64), with video:
+curl -fsSL -o adamo-sdk.tar.gz \
+  https://install.adamohq.com/sdk/adamo-sdk-linux-arm64-video-latest.tar.gz
+
+# Verify the checksum (recommended)
+curl -fsSL https://install.adamohq.com/sdk/adamo-sdk-linux-arm64-video-latest.tar.gz.sha256 | shasum -a 256 -c
+
+# Extract — the tarball expands to a top-level directory
+sudo tar xzf adamo-sdk.tar.gz -C /opt
+```
+
+Available builds:
+
+| Tarball stem | Host |
+|--------------|------|
+| `adamo-sdk-linux-arm64-video` | Jetson / Ubuntu 22.04 aarch64, with video |
+| `adamo-sdk-linux-arm64`       | Jetson / Ubuntu 22.04 aarch64, pub/sub only |
+| `adamo-sdk-linux-x86_64-video`| Ubuntu 22.04 x86_64, with video |
+| `adamo-sdk-linux-x86_64`      | Ubuntu 22.04 x86_64, pub/sub only |
+| `adamo-sdk-macos-arm64-video` | macOS arm64, with video |
+| `adamo-sdk-macos-arm64`       | macOS arm64, pub/sub only |
+Replace `latest` with a pinned version (at least `0.1.103`) in production. Intel macOS is not currently supported.
+
+The `-video` builds need the GStreamer runtime installed on the host:
+
+```sh
+# Ubuntu / Debian
+sudo apt-get install -y gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad gstreamer1.0-libav
+
+# macOS
+brew install gstreamer
+```
+
+Then in your project's `CMakeLists.txt`:
+
+```cmake
+list(APPEND CMAKE_PREFIX_PATH "/opt/adamo-sdk-linux-arm64-video-latest")
+find_package(Adamo REQUIRED)
+target_link_libraries(my_robot PRIVATE Adamo::adamo)
+# C++17 wrapper:
+# target_link_libraries(my_robot PRIVATE Adamo::adamo_cpp)
+```
+
+Each tarball ships:
+
+- `lib/libadamo.{so,dylib}` — the shared library
+- `include/adamo/adamo.h` — the C header
+- `include/adamo/adamo.hpp` — the C++17 RAII wrapper (when `ADAMO_BUILD_CPP=ON` was set, which is the default)
+- `lib/cmake/Adamo/` — CMake package config so `find_package(Adamo)` works
+
+## Conventions
+
+- Every public symbol is prefixed `adamo_`.
+- Functions returning a handle (`adamo_session_t *`, etc.) return `NULL` on failure.
+- Functions returning `int32_t` use `0` for success and `-1` for failure.
+- After any failure, call `adamo_last_error()` to retrieve a thread-local error string. Valid until the next fallible call on the same thread.
+- Every handle returned by the library is heap-allocated and must be freed with its matching `adamo_*_free` function.
+- All `_free` functions are NULL-safe.
+- The library manages its own internal runtime; C callers don't see it. `adamo_session_t *` is safe to share between threads.
+
+---
+
+## Errors
+
+```c
+const char *adamo_last_error(void);
+adamo_error_code_t adamo_last_error_code(void);
+```
+
+`adamo_last_error` returns the most recent error message for the current thread, or `NULL` if there is none. The pointer is valid until the next fallible call. Each thread has its own slot.
+
+`adamo_last_error_code` returns the category of that error — branch on the code, show the message to humans. Values are stable across releases:
+
+```c
+typedef enum adamo_error_code_t {
+    adamo_error_code_t_ADAMO_OK           = 0,  // no error
+    adamo_error_code_t_ADAMO_ERR_AUTH     = 1,  // API rejected the credentials
+    adamo_error_code_t_ADAMO_ERR_NETWORK  = 2,  // API or relay unreachable
+    adamo_error_code_t_ADAMO_ERR_TIMEOUT  = 3,  // blocking call timed out
+    adamo_error_code_t_ADAMO_ERR_INVALID  = 4,  // null pointer, closed handle, bad config
+    adamo_error_code_t_ADAMO_ERR_VIDEO    = 5,  // encoder/decoder/capture/shm failure
+    adamo_error_code_t_ADAMO_ERR_INTERNAL = 6,  // anything else
+} adamo_error_code_t;
+```
+
+```c
+adamo_session_t *sess = adamo_open_default(api_key);
+if (!sess) {
+    if (adamo_last_error_code() == adamo_error_code_t_ADAMO_ERR_AUTH) {
+        /* bad key — prompt the user, don't retry */
+    }
+    fprintf(stderr, "%s\n", adamo_last_error());
+}
+```
+
+The C++ wrapper carries the same code on every exception via `adamo::Error::code()`.
+
+---
+
+## Protocol
+
+```c
+typedef enum adamo_protocol_t {
+    adamo_protocol_t_ADAMO_PROTOCOL_UDP  = 0,
+    adamo_protocol_t_ADAMO_PROTOCOL_QUIC = 1,
+    adamo_protocol_t_ADAMO_PROTOCOL_TCP  = 2,
+} adamo_protocol_t;
+```
+
+Use QUIC in all cases — reliable streams over a single multiplexed UDP socket. TCP is a telemetry/diagnostic fallback for networks that block UDP: TCP retransmission queues control signals behind packet loss, so don't teleoperate over it — ask the network admin to open outbound UDP 443 instead.
+
+---
+
+## Sessions
+
+```c
+adamo_session_t *adamo_open_default(const char *api_key);
+adamo_session_t *adamo_open(const char *api_key, adamo_protocol_t protocol);
+adamo_session_t *adamo_open_mtls(const char *api_key, adamo_protocol_t protocol);
+void             adamo_session_free(adamo_session_t *sess);
+
+const char *adamo_session_org(const adamo_session_t *sess);     // NUL-terminated
+size_t      adamo_session_org_len(const adamo_session_t *sess); // bytes, excluding NUL
+```
+
+`adamo_open_default` opens with the default transport. `adamo_open` is available when you need to select a specific transport. `adamo_open_mtls` additionally mints a per-session mTLS client certificate and presents it on the QUIC handshake — required once your routers enforce mTLS. All three return `NULL` on failure. `adamo_session_free` is NULL-safe and closes the underlying connection if this was the last reference.
+
+`adamo_session_org` returns a NUL-terminated C string valid for the lifetime of the session. `adamo_session_org_len` is provided for callers that prefer length-prefixed reads.
+
+---
+
+## Sample
+
+```c
+typedef struct adamo_sample_t {
+    char     *key;          // NUL-terminated, prefix-stripped
+    uint8_t  *payload;      // owned by the struct
+    uintptr_t payload_len;
+    int32_t   is_delete;    // 0 = PUT, 1 = DELETE (liveliness-gone)
+} adamo_sample_t;
+
+void adamo_sample_free(adamo_sample_t *sample);  // NULL-safe
+```
+
+Samples returned from `adamo_sub_recv` / `adamo_sub_try_recv` / `adamo_get` / callback subscribers are heap-allocated and must be freed.
+
+---
+
+## Publish
+
+### One-shot put
+
+```c
+int32_t adamo_put(
+    const adamo_session_t *sess,
+    const char *key,
+    const uint8_t *payload,
+    uintptr_t payload_len,
+    uint8_t  priority,    // 0–255, mapped to 8 priority classes; ≥240 = REAL_TIME
+    int32_t  express      // 1 = bypass batching for lower latency
+);
+```
+
+Returns `0` on success, `-1` on failure.
+
+### Persistent publisher
+
+```c
+adamo_publisher_t *adamo_publisher(
+    const adamo_session_t *sess,
+    const char *key,
+    uint8_t  priority,
+    int32_t  express,
+    int32_t  reliable     // 1 = RELIABLE, 0 = BEST_EFFORT
+);
+
+int32_t adamo_publisher_put(
+    const adamo_publisher_t *pub,
+    const uint8_t *payload,
+    uintptr_t payload_len
+);
+
+void adamo_publisher_free(adamo_publisher_t *pub);
+```
+
+`adamo_publisher_free` undeclares before freeing. NULL-safe.
+
+### Log
+
+```c
+int32_t adamo_log(
+    const adamo_session_t *sess,
+    const char *name,     // robot name
+    const char *message,
+    const char *level     // e.g. "info", "warn", "error", "debug" (may be NULL)
+);
+```
+
+Publish a log line from the given robot. The web operator console subscribes to this stream and renders entries in real time.
+
+`level` is a free-form string; the standard values `"info"`, `"warn"`, `"error"`, `"debug"` are rendered with colour. Passing `NULL` for `level` defaults to `"info"`. Messages are truncated at 10,000 characters. Each entry is stamped with the fabric clock so lines from multiple robots stay ordered in the operator view.
+
+Returns `0` on success, `-1` on failure.
+
+```c
+adamo_log(sess, "my-robot", "booted and attached camera", "info");
+adamo_log(sess, "my-robot", "encoder dropped a frame", "warn");
+```
+
+---
+
+## Subscribe — pull
+
+```c
+adamo_subscriber_t *adamo_subscribe(const adamo_session_t *sess, const char *key);
+
+adamo_sample_t *adamo_sub_recv(const adamo_subscriber_t *sub, uint64_t timeout_ms);
+adamo_sample_t *adamo_sub_try_recv(const adamo_subscriber_t *sub);
+
+void adamo_sub_free(adamo_subscriber_t *sub);
+```
+
+`timeout_ms = 0` waits forever. `adamo_sub_recv` returns `NULL` on timeout (no error set) or on real failure (`adamo_last_error()` populated). `adamo_sub_try_recv` returns `NULL` with no error when the queue is empty.
+
+Wildcards in `key`:
+
+| Pattern | Matches |
+|---------|---------|
+| `my-arm/sensors/**` | Everything under `sensors/`. |
+| `my-arm/sensors/*`  | One level under `sensors/`. |
+| `*/sensors/imu`     | IMU from any robot. |
+
+---
+
+## Subscribe — callback
+
+```c
+typedef void (*adamo_sample_cb_t)(const adamo_sample_t *sample, void *user);
+
+adamo_cb_sub_t *adamo_subscribe_cb(
+    const adamo_session_t *sess,
+    const char *key,
+    adamo_sample_cb_t cb,
+    void *user
+);
+
+void adamo_cb_sub_free(adamo_cb_sub_t *sub);
+```
+
+The callback runs on a background receive thread. The `sample` pointer is **borrowed** — do **not** call `adamo_sample_free` from inside the callback. `user` must outlive the subscriber.
+
+---
+
+## One-shot queries
+
+```c
+adamo_sample_t **adamo_get(
+    const adamo_session_t *sess,
+    const char *key,
+    uint64_t timeout_ms,    // 0 → SDK default (60s)
+    size_t  *count_out
+);
+
+void adamo_get_replies_free(adamo_sample_t **replies, size_t count);
+```
+
+Collects every reply within `timeout_ms`. On success returns an array of `*count_out` sample pointers. Returns `NULL` on failure (set `*count_out` to 0).
+
+`adamo_get_replies_free` frees each sample in the array and the array storage. NULL-safe.
+
+---
+
+## Liveliness
+
+```c
+adamo_liveliness_token_t *adamo_liveliness_declare(
+    const adamo_session_t *sess,
+    const char *token_key
+);
+
+void adamo_liveliness_token_free(adamo_liveliness_token_t *tok);
+```
+
+Declare yourself alive at `{token_key}/alive`. The token is active until freed.
+
+```c
+char **adamo_liveliness_get(
+    const adamo_session_t *sess,
+    const char *pattern,    // e.g. "**/alive"
+    size_t *count_out
+);
+
+void adamo_liveliness_tokens_free(char **tokens, size_t count);
+```
+
+One-shot query for currently-live tokens. Returns an array of `*count_out` NUL-terminated strings (prefix-stripped). Free with `adamo_liveliness_tokens_free`, which frees each string and the array storage.
+
+```c
+typedef void (*adamo_liveliness_cb_t)(const char *key, int32_t alive, void *user);
+
+adamo_liveliness_sub_t *adamo_liveliness_subscribe(
+    const adamo_session_t *sess,
+    const char *pattern,
+    int32_t history,        // 1 = deliver current set up front, 0 = changes only
+    adamo_liveliness_cb_t cb,
+    void *user
+);
+
+void adamo_liveliness_sub_free(adamo_liveliness_sub_t *sub);
+```
+
+Watch for liveliness changes. The callback fires with `(key, 1)` when a token appears and `(key, 0)` when it disappears. `key` is valid only for the duration of the call. Runs on a background receive thread; `user` must outlive the subscriber.
+
+---
+
+## Robot state
+
+```c
+adamo_state_t *adamo_state_declare(const adamo_session_t *sess, const char *robot);
+
+int32_t adamo_state_set(const adamo_state_t *state, const char *key,
+                        const uint8_t *payload, size_t payload_len);
+int32_t adamo_state_get(const adamo_state_t *state, const char *key,
+                        uint8_t **out_payload, size_t *out_len);  // out NULL/0 if unset
+int32_t adamo_state_delete(const adamo_state_t *state, const char *key);
+void adamo_state_bytes_free(uint8_t *payload, size_t payload_len);
+void adamo_state_free(adamo_state_t *state);
+```
+
+A robot-owned retained key/value store on `{robot}/state/**` — the robot sets values; operators read them with `adamo_get` on `{robot}/state/{key}`. `adamo_state_get` reads the store's own latest value; free its buffer with `adamo_state_bytes_free`. See [Robot State](/v1/state/).
+
+## Task runner
+
+```c
+adamo_task_runner_t *adamo_task_runner_declare(const adamo_session_t *sess, const char *robot);
+
+int32_t adamo_task_runner_select(const adamo_task_runner_t *runner,
+                                 const char *task_set_id, const char *name,
+                                 const char *const *ids, const char *const *names, size_t count);
+int32_t adamo_task_runner_advance(const adamo_task_runner_t *runner);  // one pedal press
+int32_t adamo_task_runner_reset(const adamo_task_runner_t *runner);    // back to idle, no rep
+void adamo_task_runner_free(adamo_task_runner_t *runner);
+```
+
+A looping subtask sequence with an idle gap between reps, published on `{robot}/state/task_run`. `ids` / `names` are parallel arrays of `count` strings. Wire your pedal to `adamo_task_runner_advance`. See [Task Runs](/v1/state/#task-runs).
+
+## Fabric time
+
+```c
+uint64_t adamo_fabric_now_us(void);
+int32_t  adamo_fabric_synced(void);   // 1 once the first sync completes
+```
+
+Microseconds since the Unix epoch on the **adamo fabric clock** — the shared time axis every node on the network sees. Use these instead of `gettimeofday()` whenever a timestamp will be subtracted from a stamp produced on a different node.
+
+Until the first sync, `adamo_fabric_now_us` falls back to the local wall clock.
+
+These are free functions — they don't take a session, so any code on the host can stamp timestamps consistently.
+
+---
+
+## Video — `ADAMO_BUILD_VIDEO=ON`
+
+When the library is built with the video feature, the following are available:
+
+```c
+adamo_robot_t *adamo_robot_new_default(
+    const char *api_key,
+    const char *name                   // may be NULL — random name assigned
+);
+
+adamo_robot_t *adamo_robot_new(
+    const char *api_key,
+    const char *name,                  // may be NULL — random name assigned
+    adamo_protocol_t protocol
+);
+
+void adamo_robot_free(adamo_robot_t *robot);  // NULL-safe
+```
+
+### V4L2 capture
+
+```c
+int32_t adamo_robot_attach_video_v4l2(
+    adamo_robot_t *robot,
+    const char *name,                  // track name
+    const char *device,                // "/dev/video0"
+    uint32_t width,
+    uint32_t height,
+    uint32_t fps,
+    uint32_t bitrate_kbps,
+    bool stereo
+);
+```
+
+The SDK owns capture and encoding; frames never cross back into C. Returns `0` on success, `-1` on failure.
+
+### Existing shared-memory service
+
+```c
+int32_t adamo_robot_attach_video_shm(
+    adamo_robot_t *robot,
+    const char *name,                  // track name
+    const char *service,               // "camera/front"
+    uint32_t width,
+    uint32_t height,
+    const char *pixel_format,          // "BGRA", "NV12", "mjpeg", ...
+    uint32_t fps,
+    uint32_t bitrate_kbps,
+    bool stereo
+);
+```
+
+Consume an iceoryx2 service produced by another process. The producer must
+publish one complete frame per `[u8]` sample with no timestamps, headers, or
+metadata prepended. Use `"mjpeg"` when each sample is a complete JPEG frame.
+Returns `0` on success, `-1` on failure.
+
+### Caller-fed shared-memory track
+
+```c
+adamo_video_track_t *adamo_robot_video(
+    adamo_robot_t *robot,
+    const char *name,
+    uint32_t width,
+    uint32_t height,
+    const char *pixel_format,          // "BGRA", "RGB", "I420", "NV12", ...
+    uint32_t fps,
+    uint32_t bitrate_kbps,
+    bool stereo
+);
+
+int32_t adamo_video_track_send(
+    adamo_video_track_t *track,
+    const uint8_t *payload,
+    uintptr_t payload_len              // must equal width × height × bytes-per-pixel
+);
+
+void adamo_video_track_free(adamo_video_track_t *track);  // NULL-safe
+```
+
+Push raw frames yourself. Useful for perception pipelines and custom drivers.
+
+### Video protocol
+
+Video uses the **Adamo protocol** by default — the adaptive transport that watches the link from a rolling view of QUIC stats and tunes itself frame to frame: it delivers reliably on a clean low-RTT link, and switches to forward-error-corrected datagrams once RTT rises or loss turns bursty. The simple attach functions above always use it.
+
+To pin the **legacy Adamo protocol** — plain reliable, in-order delivery — use the *configured* attach variants. Each mirrors a simple function but takes an `adamo_video_options_t` instead of positional arguments (the same struct that carries codec, bitrate, and backend choices):
+
+```c
+typedef struct adamo_video_options_t {
+    uint32_t    width;
+    uint32_t    height;
+    const char *pixel_format;       // required for caller-fed/SHM; hint for V4L2/GStreamer
+    const char *codec;              // "h264" (default), "h265"/"hevc", "av1"
+    const char *encoder;            // explicit factory; NULL = auto-detect
+    uint32_t    bitrate_kbps;
+    int32_t     adaptive_bitrate;
+    uint32_t    min_bitrate_kbps;
+    uint32_t    max_bitrate_kbps;
+    float       bitrate_priority;
+    uint32_t    fps;
+    double      keyframe_distance;
+    int32_t     stereo;
+    adamo_video_backend_t backend;
+    const char *shm_publish;        // tee raw frames to an iceoryx2 service (V4L2 only)
+    const char *reliability;        // NULL/empty/"adamo" = Adamo protocol; "legacy" = legacy
+    int32_t     passthrough;        // non-zero forwards matching H.264/H.265 unchanged
+} adamo_video_options_t;
+
+adamo_video_options_t adamo_video_options_default(void);  // sensible defaults; reliability = NULL
+
+adamo_video_track_t *adamo_robot_video_configured(
+    adamo_robot_t *robot, const char *name,
+    const adamo_video_options_t *opts);                   // NULL = defaults
+
+int32_t adamo_robot_attach_video_v4l2_configured(
+    adamo_robot_t *robot, const char *name, const char *device,
+    const adamo_video_options_t *opts);
+
+int32_t adamo_robot_attach_video_shm_configured(
+    adamo_robot_t *robot, const char *name, const char *service,
+    const adamo_video_options_t *opts);
+
+int32_t adamo_robot_attach_video_gst_configured(
+    adamo_robot_t *robot, const char *name, const char *pipeline,
+    const adamo_video_options_t *opts);
+```
+
+`reliability` selects the protocol:
+
+| Value | Protocol |
+|-------|----------|
+| `NULL` / `""` / `"adamo"` | **Adamo protocol** — adaptive, the default. |
+| `"legacy"`                | **Legacy Adamo protocol** — reliable, in-order delivery. |
+
+An unrecognised value fails the attach with `ADAMO_ERR_INVALID` (read `adamo_last_error()` for the accepted list).
+
+```c
+adamo_video_options_t opts = adamo_video_options_default();
+opts.pixel_format = "BGRA";
+opts.reliability  = "legacy";   // pin the legacy Adamo protocol for this track
+adamo_robot_attach_video_shm_configured(robot, "main", "camera/front", &opts);
+```
+
+To transcode encoded shared-memory video, set `pixel_format` to the input codec,
+set `codec` to the desired output codec, and leave `passthrough` at its default
+zero value. Each shared-memory sample must contain one complete Annex-B access
+unit:
+
+```c
+adamo_video_options_t opts = adamo_video_options_default();
+opts.width          = 1920;
+opts.height         = 1080;
+opts.pixel_format   = "h265";       // input in shared memory
+opts.codec          = "h264";       // output sent through Adamo
+opts.bitrate_kbps   = 4000;
+opts.fps            = 30;
+opts.backend        = adamo_video_backend_t_ADAMO_VIDEO_BACKEND_HW_PIPELINE;
+opts.passthrough    = 0;
+
+adamo_robot_attach_video_shm_configured(
+    robot, "front", "camera/front/encoded", &opts);
+```
+
+Set `passthrough` to a non-zero value only when the input and output codecs
+match and the encoded access units should be forwarded without decoding or
+re-encoding. See [Adding Cameras: transcoding encoded shared memory](/v1/cameras/#transcode-h264-or-h265-from-shared-memory)
+for the wire format, backend prerequisites, and encoder names.
+
+The C++ wrapper exposes `reliability` on `adamo::VideoOptions` as well (an
+empty string selects the Adamo protocol):
+
+```cpp
+adamo::VideoOptions opts;
+opts.pixel_format = "BGRA";
+opts.reliability  = "legacy";
+robot.attach_shm("main", "camera/front", opts);
+```
+
+<Aside>Pin the legacy protocol only when you have a reason to. The Adamo protocol already delivers reliably on a clean low-RTT link, and outperforms the legacy protocol once RTT rises or loss turns bursty.</Aside>
+
+### Run
+
+```c
+int32_t adamo_robot_run(adamo_robot_t *robot);  // blocks driving the pipeline
+```
+
+Blocks indefinitely. Call from a dedicated thread. Consumes the robot — multiple `run` calls on the same handle are an error.
+
+### Encoder detection
+
+```c
+const char *adamo_detect_encoder(void);
+```
+
+Returns the best available H.264 encoder name for the host (NVENC, VA-API, VideoToolbox, x264) or `"none"`. Pointer valid for the lifetime of the process.
+
+<Aside>The `adamo_robot_attach_video_gst(...)` GStreamer pipeline path is still present in the library but deprecated for new code; use V4L2 or shared-memory tracks instead.</Aside>
+
+### Receiving a video track
+
+```c
+adamo_video_receiver_t *adamo_video_receiver_open(
+    const adamo_session_t *sess,
+    const char *robot,                 // robot name
+    const char *track                  // track name, e.g. "main"
+);
+
+adamo_video_frame_t *adamo_video_receiver_recv(
+    const adamo_video_receiver_t *rx,
+    uint64_t timeout_ms                // 0 = wait forever
+);
+adamo_video_frame_t *adamo_video_receiver_try_recv(const adamo_video_receiver_t *rx);
+void adamo_video_frame_free(adamo_video_frame_t *frame);
+
+int32_t adamo_video_receiver_request_keyframe(const adamo_video_receiver_t *rx);
+int32_t adamo_video_receiver_stereo(const adamo_video_receiver_t *rx);
+int32_t adamo_video_receiver_stats(const adamo_video_receiver_t *rx,
+                                   adamo_video_receiver_stats_t *out);
+void adamo_video_receiver_free(adamo_video_receiver_t *rx);
+```
+
+Opens a robot's video track and decodes it to raw frames. Everything between the wire and your code — packet reassembly, loss recovery, codec detection, decoding — happens inside the receiver. A keyframe is requested automatically at open (and once per second until the first one arrives), so video starts without waiting for the encoder's next scheduled keyframe.
+
+```c
+typedef struct adamo_video_frame_t {
+    uint8_t *data;             // tightly packed RGBA8888
+    size_t   data_len;         // width * height * 4
+    uint32_t width, height;
+    uint64_t seq;              // frame sequence number from the robot encoder
+    uint64_t capture_unix_us;  // capture time on the fabric clock; 0 if unstamped
+    int32_t  keyframe;
+} adamo_video_frame_t;
+```
+
+Minimal consumer:
+
+```c
+adamo_session_t *sess = adamo_open_default(getenv("ADAMO_API_KEY"));
+adamo_video_receiver_t *rx = adamo_video_receiver_open(sess, "my-robot", "main");
+
+for (;;) {
+    adamo_video_frame_t *f = adamo_video_receiver_recv(rx, 100);
+    if (!f) continue;          // timeout; adamo_last_error() distinguishes failure
+    // f->data is width × height × 4 bytes of RGBA — upload to a texture,
+    // run inference, write to disk, ...
+    adamo_video_frame_free(f);
+}
+```
+
+The receiver buffers the two newest decoded frames and drops older ones when your loop falls behind — a slow consumer raises the drop counter, not the latency.
+
+`adamo_video_receiver_recv` returns `NULL` on timeout (`adamo_last_error()` reads `"recv timeout"`) or on receiver failure (any other message). `adamo_video_receiver_try_recv` returns `NULL` with no error set when no frame is ready.
+
+Glass-to-glass latency for a frame is `adamo_fabric_now_us() - f->capture_unix_us` — both stamps are on the fabric clock, so the subtraction is valid across machines.
+
+#### Options
+
+```c
+typedef struct adamo_video_receive_options_t {
+    const char *codec;          // "h264", "h265", "av1"; NULL = auto-detect
+    const char *decoder;        // explicit decoder name; NULL = best available
+    uint32_t max_queued_frames; // 0 = default (2)
+} adamo_video_receive_options_t;
+
+adamo_video_receive_options_t adamo_video_receive_options_default(void);
+
+adamo_video_receiver_t *adamo_video_receiver_open_configured(
+    const adamo_session_t *sess,
+    const char *robot,
+    const char *track,
+    const adamo_video_receive_options_t *opts   // NULL = defaults
+);
+```
+
+The defaults are right for almost every case: the codec is detected from the stream and hardware decoding is used when the host has it (VideoToolbox, NVDEC, VA-API), falling back to software.
+
+#### Stereo tracks
+
+A stereo track packs both eyes into each frame — side-by-side or stacked top-bottom. `adamo_video_receiver_stereo` returns `1` for stereo, `0` for mono, and `-1` while the track's metadata hasn't arrived yet. The packing layout follows from the frame shape: frames taller than wide are top-bottom, wider are side-by-side. To show one eye, crop half the frame (or use texture coordinates — see the streaming UI section below).
+
+#### Stats
+
+```c
+typedef struct adamo_video_receiver_stats_t {
+    uint64_t packets;         // raw packets received
+    uint64_t frames;          // complete encoded frames reassembled
+    uint64_t keyframes;
+    uint64_t frames_decoded;
+    uint64_t frames_dropped;  // dropped because the consumer or decoder lagged
+    uint64_t rlnc_recovered;  // lost packets recovered by forward error correction
+} adamo_video_receiver_stats_t;
+```
+
+Counters since open. Cheap to read — poll it from a UI timer.
+
+### Building a streaming UI
+
+The pattern for showing live video in any UI framework is the same three steps per UI frame:
+
+1. Drain the receiver to the newest frame with `try_recv`.
+2. Upload the RGBA buffer to a GPU texture.
+3. Draw the texture.
+
+```c
+// once per UI frame
+adamo_video_frame_t *frame = NULL, *next = NULL;
+while ((next = adamo_video_receiver_try_recv(rx)) != NULL) {
+    adamo_video_frame_free(frame);
+    frame = next;                       // keep only the newest
+}
+if (frame) {
+    glBindTexture(GL_TEXTURE_2D, tex);  // or your framework's equivalent
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0,
+                    frame->width, frame->height,
+                    GL_RGBA, GL_UNSIGNED_BYTE, frame->data);
+    adamo_video_frame_free(frame);
+}
+```
+
+For a stereo track, draw one eye by halving the texture coordinates instead of copying pixels — e.g. with Dear ImGui:
+
+```cpp
+// left eye of a top-bottom stereo frame
+ImGui::Image(texture, size, /*uv0*/ {0.0f, 0.0f}, /*uv1*/ {1.0f, 0.5f});
+```
+
+Two complete programs ship in the SDK repository under `adamo-c/examples/`:
+
+- `video_player.c` — SDL2 player with stereo view modes (full / left / right / anaglyph)
+- `imgui_stream.cpp` — Dear ImGui app with connect/disconnect, eye selection, and live stats
+
+---
+
+## Audio — `ADAMO_BUILD_AUDIO=ON`
+
+<Aside type="caution">
+The 1.0 C SDK does not export the audio functions below yet. Use the Rust or
+Python SDK for audio.
+</Aside>
+
+When the library is built with the audio feature, the robot can capture and
+stream a microphone (send) and a consumer can decode a track to PCM (receive).
+`ADAMO_BUILD_AUDIO` **implies `ADAMO_BUILD_VIDEO`** — the `Robot` handle is shared
+— and defines `ADAMO_HAS_AUDIO` (which guards the C++ audio types). Audio is Opus;
+see [Streaming Audio](/v1/audio/) for the concepts, source types, and hardware notes.
+
+```cmake
+cmake -DADAMO_BUILD_AUDIO=ON ...
+```
+
+The Opus decoder is statically vendored, so the receive side needs no system
+libopus at runtime. Direct ALSA capture (`source_type` `alsa`) links `libasound`.
+
+### Attaching a microphone (send)
+
+```c
+adamo_audio_options_t adamo_audio_options_default(void);
+
+int32_t adamo_robot_attach_audio_test(
+    adamo_robot_t *robot,
+    const char *name);                 // synthetic tone, no hardware
+
+int32_t adamo_robot_attach_audio_alsa(
+    adamo_robot_t *robot,
+    const char *name,                  // track name
+    const char *device,                // "plughw:1,0"; NULL = ALSA "default"
+    uint32_t bitrate_kbps,
+    uint8_t  channels,                 // ceiling — a mono source stays mono
+    uint32_t sample_rate,
+    uint32_t frame_ms);                // 2 (=2.5 ms), 5, 10, 20, 40, 60
+
+int32_t adamo_robot_attach_audio_gst(
+    adamo_robot_t *robot,
+    const char *name,
+    const char *pipeline);             // GStreamer source ending in raw audio
+
+int32_t adamo_robot_attach_audio_configured(
+    adamo_robot_t *robot,
+    const char *name,
+    const adamo_audio_options_t *opts);
+```
+
+Each returns `0` on success, `-1` on failure. The SDK owns capture and encoding;
+samples never cross back into C. The configured variant takes:
+
+```c
+typedef struct adamo_audio_options_t {
+    const char *source_type;    // NULL = "auto"; "alsa"|"pipeline"|"test"
+    const char *device;         // ALSA device; NULL = default
+    const char *pipeline;       // GStreamer source; required for "pipeline"
+    const char *codec;          // NULL = "opus" (the only codec today)
+    uint32_t    bitrate_kbps;   // 64
+    uint32_t    sample_rate;    // 48000
+    uint8_t     channels;       // 2 — ceiling, not a target
+    uint32_t    frame_ms;       // 20
+    bool        inband_fec;     // false — Opus in-band FEC for lossy links
+    bool        dtx;            // false — discontinuous transmission
+    bool        allow_missing;  // false
+} adamo_audio_options_t;
+```
+
+`adamo_audio_options_default()` returns Opus 64 kbps stereo, 48 kHz, 20 ms
+frames, FEC/DTX off, `auto` source. String fields are borrowed for the duration
+of the call.
+
+```c
+adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-robot");
+
+adamo_audio_options_t opts = adamo_audio_options_default();
+opts.source_type  = "alsa";
+opts.device       = "plughw:1,0";
+adamo_robot_attach_audio_configured(robot, "mic", &opts);
+
+adamo_robot_run(robot);
+```
+
+### Receiving a track (decode to PCM)
+
+`adamo_audio_receiver_*` mirrors `adamo_video_receiver_*`, delivering interleaved
+signed-16-bit PCM. Loss recovery, reordering, Opus decode, and packet-loss
+concealment all happen inside the receiver — you get clean PCM frames out.
+
+```c
+adamo_audio_receive_options_t adamo_audio_receive_options_default(void);
+
+adamo_audio_receiver_t *adamo_audio_receiver_open(
+    const adamo_session_t *sess,
+    const char *robot,                 // robot name
+    const char *track);                // track name, e.g. "mic"
+
+adamo_audio_receiver_t *adamo_audio_receiver_open_configured(
+    const adamo_session_t *sess,
+    const char *robot,
+    const char *track,
+    const adamo_audio_receive_options_t *opts);   // NULL = defaults
+
+adamo_audio_frame_t *adamo_audio_receiver_recv(
+    const adamo_audio_receiver_t *rx,
+    uint64_t timeout_ms);              // 0 = wait forever
+adamo_audio_frame_t *adamo_audio_receiver_try_recv(const adamo_audio_receiver_t *rx);
+void adamo_audio_frame_free(adamo_audio_frame_t *frame);
+
+int32_t adamo_audio_receiver_stats(const adamo_audio_receiver_t *rx,
+                                   adamo_audio_receiver_stats_t *out);
+void adamo_audio_receiver_free(adamo_audio_receiver_t *rx);
+```
+
+```c
+typedef struct adamo_audio_frame_t {
+    const int16_t *samples;    // interleaved s16 PCM, owned by the frame
+    uintptr_t sample_count;    // total interleaved (= per_channel × channels)
+    uint32_t  sample_rate;
+    uint8_t   channels;
+    uint64_t  seq;             // monotonic per-track sequence
+    uint64_t  capture_unix_us; // capture time on the fabric clock; 0 if unstamped
+} adamo_audio_frame_t;
+
+typedef struct adamo_audio_receive_options_t {
+    uint32_t max_queued_frames;   // 0 = default (8)
+    uint32_t reorder_deadline_ms; // 0 = default (120) — how long a gap is held before it's conceded
+} adamo_audio_receive_options_t;
+```
+
+`adamo_audio_receiver_recv` returns `NULL` on timeout (no error set) or on
+failure (`adamo_last_error()` populated); `try_recv` returns `NULL` with no error
+when nothing is ready. Frames are ~20 ms each (about 50/s). Glass-to-glass
+latency is `adamo_fabric_now_us() - f->capture_unix_us`.
+
+Minimal consumer:
+
+```c
+adamo_session_t *sess = adamo_open_default(getenv("ADAMO_API_KEY"));
+adamo_audio_receiver_t *rx = adamo_audio_receiver_open(sess, "my-robot", "mic");
+
+for (;;) {
+    adamo_audio_frame_t *f = adamo_audio_receiver_recv(rx, 2000);
+    if (!f) continue;                  // timeout; adamo_last_error() distinguishes failure
+    // f->samples: f->sample_count interleaved int16 samples at f->sample_rate.
+    // Feed an audio device, write a WAV, run VAD, ...
+    adamo_audio_frame_free(f);
+}
+```
+
+#### Stats
+
+```c
+typedef struct adamo_audio_receiver_stats_t {
+    uint64_t packets;    // audio packets received
+    uint64_t repairs;    // recovery packets received
+    uint64_t recovered;  // packets recovered from loss
+    uint64_t concealed;  // frames concealed after unrecoverable loss
+    uint64_t decoded;    // frames decoded and delivered (real + concealed)
+    uint64_t dropped;    // decoded frames dropped because the consumer lagged
+} adamo_audio_receiver_stats_t;
+```
+
+Two example programs ship under `adamo-c/examples/` (built when
+`ADAMO_BUILD_AUDIO=ON`):
+
+- `audio_verify.c` — attaches a `test` tone and an ALSA mic; a send smoke test
+- `audio_player.c` — opens a receiver and writes the decoded PCM to a WAV file
+
+### C++ audio — `Robot`, `AudioReceiver`, `AudioFrame`
+
+All under `#ifdef ADAMO_HAS_AUDIO`, following the C++ video shape.
+
+```cpp
+struct AudioOptions {
+    std::string source_type = "auto";      // auto | alsa | pipeline | test
+    std::optional<std::string> device;     // "plughw:1,0"
+    std::optional<std::string> pipeline;   // GStreamer source for `pipeline`
+    std::string codec = "opus";
+    std::uint32_t bitrate_kbps = 64;
+    std::uint32_t sample_rate  = 48000;
+    std::uint8_t  channels     = 2;        // ceiling — a mono source stays mono
+    std::uint32_t frame_ms     = 20;
+    bool inband_fec   = false;
+    bool dtx          = false;
+    bool allow_missing = false;
+};
+
+class Robot {
+public:
+    void attach_audio_test(const std::string &name);
+    void attach_audio_alsa(const std::string &name,
+                           std::optional<std::string> device = std::nullopt,
+                           std::uint32_t bitrate_kbps = 64,
+                           std::uint8_t  channels     = 2,
+                           std::uint32_t sample_rate  = 48000,
+                           std::uint32_t frame_ms     = 20);
+    void attach_audio_gst(const std::string &name, const std::string &pipeline);
+    void attach_audio(const std::string &name, const AudioOptions &options);
+};
+
+class AudioReceiver {                       // move-only RAII
+public:
+    static AudioReceiver open(const Session &session,
+                              const std::string &robot,
+                              const std::string &track);
+    static AudioReceiver open(const Session &session,
+                              const std::string &robot,
+                              const std::string &track,
+                              const adamo_audio_receive_options_t &opts);
+
+    std::optional<AudioFrame> recv(std::uint64_t timeout_ms = 0);  // nullopt = timeout
+    std::optional<AudioFrame> try_recv();                          // nullopt = nothing ready
+    adamo_audio_receiver_stats_t stats() const;
+};
+
+class AudioFrame {                          // move-only, owns the PCM buffer
+public:
+    const std::int16_t *samples() const;    // interleaved s16
+    std::size_t   count() const;            // per_channel × channels()
+    std::uint32_t sample_rate() const;
+    std::uint8_t  channels() const;
+    std::uint64_t seq() const;
+    std::uint64_t capture_unix_us() const;  // fabric clock; 0 if unstamped
+};
+```
+
+```cpp
+auto session  = adamo::Session::open(api_key);
+auto receiver = adamo::AudioReceiver::open(session, "my-robot", "mic");
+
+while (auto frame = receiver.recv(2000)) {
+    play(frame->samples(), frame->count(), frame->sample_rate(), frame->channels());
+}
+```
+
+All methods throw `adamo::Error` on failure.
+
+---
+
+## Memory ownership summary
+
+| Handle / pointer | Owner | Free function |
+|------------------|-------|---------------|
+| `adamo_session_t *` | C caller | `adamo_session_free` |
+| `adamo_publisher_t *` | C caller | `adamo_publisher_free` (undeclares first) |
+| `adamo_subscriber_t *` | C caller | `adamo_sub_free` |
+| `adamo_cb_sub_t *` | C caller | `adamo_cb_sub_free` |
+| `adamo_sample_t *` (returned) | C caller | `adamo_sample_free` |
+| `adamo_sample_t *` (in callback) | borrowed | do not free |
+| `adamo_sample_t **` array (from `adamo_get`) | C caller | `adamo_get_replies_free` |
+| `adamo_liveliness_token_t *` | C caller | `adamo_liveliness_token_free` (undeclares first) |
+| `char **` array (from `adamo_liveliness_get`) | C caller | `adamo_liveliness_tokens_free` |
+| `adamo_liveliness_sub_t *` | C caller | `adamo_liveliness_sub_free` |
+| `adamo_robot_t *` | C caller (until `adamo_robot_run`) | `adamo_robot_free` |
+| `adamo_video_track_t *` | C caller | `adamo_video_track_free` |
+| `adamo_video_receiver_t *` | C caller | `adamo_video_receiver_free` |
+| `adamo_video_frame_t *` | C caller | `adamo_video_frame_free` |
+| `adamo_audio_receiver_t *` | C caller | `adamo_audio_receiver_free` |
+| `adamo_audio_frame_t *` | C caller | `adamo_audio_frame_free` |
+| `const char *` from `adamo_session_org` / `adamo_last_error` / `adamo_detect_encoder` | borrowed | do not free |
+
+---
+
+## C++17 wrapper — `adamo.hpp`
+
+A header-only wrapper providing move-only RAII handles and exception-based error propagation. Mirrors the C API one-to-one.
+
+```cpp
+#include "adamo/adamo.hpp"
+#include <iostream>
+
+int main() {
+    auto sess = adamo::Session::open("ak_your_key");
+
+    sess.put("my-robot/sensors/temperature", "22.5");
+
+    auto sub = sess.subscribe("my-robot/sensors/**");
+    while (auto sample = sub.recv(/* timeout_ms */ 5000)) {
+        std::cout << sample->key() << ": "
+                  << sample->payload_len() << " bytes\n";
+    }
+}
+```
+
+### Types
+
+```cpp
+namespace adamo {
+    enum class Protocol : int { Quic, Udp, Tcp };
+    inline constexpr Protocol default_protocol = Protocol::Quic;
+
+    class Error : public std::runtime_error {
+        adamo_error_code_t code() const noexcept;  // category, stable across releases
+    };
+
+    struct SampleView {                  // borrowed view (callbacks)
+        std::string_view key;
+        const uint8_t   *payload;
+        std::size_t      payload_len;
+        bool             is_delete;
+
+        static SampleView from_c(const adamo_sample_t *s);
+    };
+
+    class Sample;                        // owned, move-only
+    class Publisher;                     // move-only RAII
+    class Subscriber;                    // move-only RAII
+    class CallbackSubscriber;            // move-only RAII, owns the trampoline
+    class LivelinessToken;               // move-only RAII
+    class LivelinessSubscriber;          // move-only RAII, owns the trampoline
+    class Session;                       // move-only RAII
+
+#ifdef ADAMO_HAS_VIDEO
+    class VideoTrack;                    // move-only RAII
+    class Robot;                         // move-only RAII
+    class VideoReceiver;                 // move-only RAII
+    class VideoFrame;                    // move-only RAII, owns the pixels
+    inline std::string_view detect_encoder();
+#endif
+
+#ifdef ADAMO_HAS_AUDIO
+    struct AudioOptions;                 // capture/encode settings
+    class AudioReceiver;                 // move-only RAII
+    class AudioFrame;                    // move-only RAII, owns the PCM
+    // Robot also gains attach_audio_* methods.
+#endif
+}
+```
+
+### `Session`
+
+```cpp
+class Session {
+public:
+    static Session open(const std::string &api_key);
+    static Session open(const std::string &api_key,
+                        Protocol p);
+
+    std::string_view org() const;
+
+    void put(const std::string &key,
+             const uint8_t *data, std::size_t len,
+             std::uint8_t priority = 4, bool express = false);
+    void put(const std::string &key, std::string_view s, ...);
+
+    Publisher publisher(const std::string &key,
+                        std::uint8_t priority = 4,
+                        bool express  = false,
+                        bool reliable = true);
+
+    Subscriber subscribe(const std::string &key);
+
+    template <class F>
+    CallbackSubscriber subscribe_cb(const std::string &key, F &&cb);
+    // F is callable as void(SampleView)
+
+    std::vector<Sample> get(const std::string &key,
+                            std::uint64_t timeout_ms = 0);
+
+    LivelinessToken alive(const std::string &token_key);
+
+    std::vector<std::string> live_tokens(const std::string &pattern = "**/alive");
+
+    template <class F>
+    LivelinessSubscriber on_liveliness(const std::string &pattern,
+                                       F &&cb,
+                                       bool history = true);
+    // F is callable as void(std::string_view, bool)
+};
+```
+
+All methods throw `adamo::Error` on failure.
+
+### `Sample`
+
+```cpp
+class Sample {
+public:
+    std::string_view key() const;
+    const uint8_t   *payload() const noexcept;
+    std::size_t      payload_len() const noexcept;
+    bool             is_delete() const noexcept;
+    std::vector<uint8_t> payload_vec() const;
+
+    explicit operator bool() const noexcept;
+};
+```
+
+### `Publisher`
+
+```cpp
+class Publisher {
+public:
+    void put(const uint8_t *data, std::size_t len);
+    void put(std::string_view s);
+    void put(const std::vector<uint8_t> &v);
+};
+```
+
+### `Subscriber`
+
+```cpp
+class Subscriber {
+public:
+    std::optional<Sample> recv(std::uint64_t timeout_ms = 0);
+    std::optional<Sample> try_recv();
+};
+```
+
+Empty optional means timeout (`recv`) or empty queue (`try_recv`). Real errors throw.
+
+### `LivelinessToken` / `LivelinessSubscriber`
+
+Both are RAII move-only handles. `LivelinessToken` keeps the token alive until destruction; `LivelinessSubscriber` keeps the callback registered until destruction.
+
+### Video — `Robot` and `VideoTrack`
+
+```cpp
+class Robot {
+public:
+    static Robot create(const std::string &api_key,
+                        std::optional<std::string> name);
+    static Robot create(const std::string &api_key,
+                        std::optional<std::string> name,
+                        Protocol p);
+
+    VideoTrack video(const std::string &name,
+                     std::uint32_t width, std::uint32_t height,
+                     const std::string &pixel_format,
+                     std::uint32_t fps, std::uint32_t bitrate_kbps,
+                     bool stereo = false);
+
+    void attach_v4l2(const std::string &name, const std::string &device,
+                     std::uint32_t width, std::uint32_t height,
+                     std::uint32_t fps, std::uint32_t bitrate_kbps,
+                     bool stereo = false);
+
+    void attach_shm(const std::string &name, const std::string &service,
+                    std::uint32_t width, std::uint32_t height,
+                    const std::string &pixel_format,
+                    std::uint32_t fps, std::uint32_t bitrate_kbps,
+                    bool stereo = false);
+    void attach_shm(const std::string &name, const std::string &service,
+                    const VideoOptions &options);
+
+    int run() &&;        // consumes the Robot; returns adamo_robot_run's int
+};
+
+class VideoTrack {
+public:
+    void send(const uint8_t *data, std::size_t len);
+};
+```
+
+### Video — `VideoReceiver` and `VideoFrame`
+
+```cpp
+class VideoReceiver {
+public:
+    static VideoReceiver open(const Session &session,
+                              const std::string &robot,
+                              const std::string &track);
+    static VideoReceiver open(const Session &session,
+                              const std::string &robot,
+                              const std::string &track,
+                              const adamo_video_receive_options_t &opts);
+
+    std::optional<VideoFrame> recv(std::uint64_t timeout_ms = 0);  // nullopt = timeout
+    std::optional<VideoFrame> try_recv();                          // nullopt = no frame yet
+
+    void request_keyframe();
+    std::optional<bool> stereo() const;    // nullopt until track metadata arrives
+    adamo_video_receiver_stats_t stats() const;
+};
+
+class VideoFrame {
+public:
+    const std::uint8_t *data() const;      // tightly packed RGBA8888
+    std::size_t   size() const;            // width() * height() * 4
+    std::uint32_t width() const;
+    std::uint32_t height() const;
+    std::uint64_t seq() const;
+    std::uint64_t capture_unix_us() const; // fabric clock; 0 if unstamped
+    bool          keyframe() const;
+};
+```
+
+```cpp
+auto session  = adamo::Session::open(api_key);
+auto receiver = adamo::VideoReceiver::open(session, "my-robot", "main");
+
+while (auto frame = receiver.recv(100)) {
+    upload_texture(frame->data(), frame->width(), frame->height());
+}
+```
+
+Define `ADAMO_HAS_VIDEO` in your build to enable these — the CMake build does this automatically when `ADAMO_BUILD_VIDEO=ON`.

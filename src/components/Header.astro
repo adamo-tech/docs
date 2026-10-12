@@ -4,6 +4,9 @@ import config from "virtual:starlight/user-config";
 import Search from "virtual:starlight/components/Search";
 import SocialIcons from "virtual:starlight/components/SocialIcons";
 import logoUrl from "../assets/logo.svg";
+import { pathIn, versionOf, versions } from "../versions";
+
+const currentVersion = versionOf(Astro.url.pathname);
 
 const shouldRenderSearch =
   config.pagefind || config.components.Search !== "@astrojs/starlight/components/Search.astro";
@@ -20,6 +23,13 @@ const shouldRenderSearch =
     </a>
 
     <div class="adamo-nav-group">
+      <select class="adamo-version-select" aria-label="Docs version">
+        {versions.map((version) => (
+          <option value={pathIn(version, Astro.url.pathname)} selected={version === currentVersion}>
+            {version.label}
+          </option>
+        ))}
+      </select>
       <a class="adamo-nav-link adamo-nav-link--desktop" href="https://adamohq.com/">Main site</a>
       <a
         class="adamo-nav-link adamo-nav-link--desktop adamo-nav-link--login"
@@ -65,6 +75,10 @@ const shouldRenderSearch =
       nav.removeAttribute("data-scrolled");
     }
   }
+
+  document.querySelector<HTMLSelectElement>(".adamo-version-select")?.addEventListener("change", (event) => {
+    window.location.assign((event.target as HTMLSelectElement).value);
+  });
 
   syncCollapsedState();
   window.addEventListener("scroll", syncCollapsedState, { passive: true });

@@ -1,0 +1,134 @@
+---
+title: "Building Your Own Operator"
+description: "When operate.adamohq.com isn't enough — write a custom teleop program that publishes to your robot"
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+Most robots never need a custom operator — [operate.adamohq.com](https://operate.adamohq.com) provides gamepad teleop, VR, recording, replay, and fleet management. Skip this page until you've already shipped a robot using the platform.
+
+You build your own operator when you outgrow the hosted UI:
+
+- A custom XR app that wants direct hand and head tracking on your own hardware.
+- A mobile app that drives a delivery robot.
+- A leader/follower rig (GELLO, Aloha) where one robot's joint state drives another.
+- A browser app for an end customer that should never see operate.adamohq.com.
+
+The pattern is symmetric: an operator is just another `Session` (Rust/C) or TypeScript session participant. The operator publishes; the robot subscribes. Same SDK, same wire format, same priority knobs.
+
+## The Operator / Robot Pattern
+
+A control loop has two sides:
+
+Both sides connect to the same Adamo network. Each side picks a `name`, opens an SDK session, and the topic key expressions follow the convention `{name}/{track}` — the SDK adds the org scope for you.
+
+Use **REAL_TIME priority** (`250`) for control commands so they drain ahead of video under congestion. Use **drop-on-congestion** + **best-effort reliability** so a stuck operator never blocks the robot.
+
+## A Bimanual XR Operator
+
+This is the sender side. Pair it with the robot-side receiver on the [Receiving Control](/v1/control/#custom-control-topics) page.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+The Python SDK 1.0 is robot-side only and has no operator session. Write operators with the Rust, C, or [TypeScript](/v1/typescript-sdk/) SDK; the robot side receives them as shown on [Receiving Control](/v1/control/#custom-control-topics).
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::{PublisherOptions, Session};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct HandFrame { pos: [f32; 3], quat: [f32; 4], trigger: f32 }
+
+fn main() -> adamo::Result<()> {
+    let session = Session::open_default("ak_...")?;
+    let opts = PublisherOptions {
+        priority: 250,        // REAL_TIME
+        express: true,
+        reliable: false,
+    };
+    let left  = session.publisher("xr-operator/control/xr/hand/left",  opts)?;
+    let right = session.publisher("xr-operator/control/xr/hand/right", opts)?;
+    let head  = session.publisher("xr-operator/control/xr/head",       opts)?;
+
+    for frame in xr_stream() {
+        left.put(serde_json::to_vec(&frame.left)?.as_slice())?;
+        right.put(serde_json::to_vec(&frame.right)?.as_slice())?;
+        head.put(serde_json::to_vec(&frame.head)?.as_slice())?;
+    }
+    Ok(())
+}
+```
+
+The Rust SDK has no high-level `Robot` participant for the publish-only case — `Session::open` is what you want.
+
+</TabItem>
+<TabItem label="C" icon="seti:c">
+
+```c
+adamo_session_t *sess = adamo_open_default("ak_...");
+
+adamo_publisher_t *left = adamo_publisher(
+    sess, "xr-operator/control/xr/hand/left",
+    /* priority */ 250, /* express */ 1, /* reliable */ 0);
+
+for (;;) {
+    HandFrame f = next_xr_frame_left();
+    char buf[256];
+    int n = snprintf(buf, sizeof(buf),
+        "{\"pos\":[%f,%f,%f],\"trigger\":%f}",
+        f.pos[0], f.pos[1], f.pos[2], f.trigger);
+    adamo_publisher_put(left, (const uint8_t*)buf, (size_t)n);
+}
+
+adamo_publisher_free(left);
+adamo_session_free(sess);
+```
+
+For non-trivial JSON you'll want a library — [cJSON](https://github.com/DaveGamble/cJSON), [yyjson](https://github.com/ibireme/yyjson), or your own buffer code.
+
+</TabItem>
+</Tabs>
+
+## Browser Operators
+
+For operators that run in a browser — your own teleop UI, a customer-facing dashboard — use the [TypeScript SDK](/v1/typescript-sdk/). Same primitives plus React components for video, gamepad, and presence:
+
+```tsx
+import { AdamoProvider, Stream, GamepadController, useOrg } from "adamo-react";
+
+function Teleop() {
+  const org = useOrg();
+  return (
+    <>
+      <Stream robot="my-arm" track="main" />
+      <GamepadController topic={`adamo/${org}/my-arm/control/joy`} />
+    </>
+  );
+}
+
+// The relay URL, org, and auth all resolve from the API key.
+<AdamoProvider apiKey="ak_your_key_here">
+  <Teleop />
+</AdamoProvider>
+```
+
+The full surface — `useRobots`, `useTracks`, `useSubscription`, `usePublisher`, XR stereo player — is in the [TypeScript SDK reference](/v1/typescript-sdk/).
+
+## Discovery
+
+If your operator should attach to whichever robot is online, use [Robot Discovery](/v1/discovery/) to enumerate or watch the live set:
+
+```rust
+let robots: Vec<String> = session
+    .live_tokens("**/alive")?
+    .into_iter()
+    .map(|key| key.trim_end_matches("/alive").to_owned())
+    .collect();
+println!("online: {robots:?}");
+```
+
+Then pick one and start publishing to its control topics.
