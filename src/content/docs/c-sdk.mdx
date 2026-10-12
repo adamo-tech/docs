@@ -710,6 +710,11 @@ Two complete programs ship in the SDK repository under `adamo-c/examples/`:
 
 ## Audio — `ADAMO_BUILD_AUDIO=ON`
 
+<Aside type="caution">
+The 1.0 C SDK does not export the audio functions below yet. Use the Rust or
+Python SDK for audio.
+</Aside>
+
 When the library is built with the audio feature, the robot can capture and
 stream a microphone (send) and a consumer can decode a track to PCM (receive).
 `ADAMO_BUILD_AUDIO` **implies `ADAMO_BUILD_VIDEO`** — the `Robot` handle is shared

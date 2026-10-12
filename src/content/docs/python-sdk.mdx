@@ -224,6 +224,41 @@ session.fabric_synced() -> bool
 
 `True` once the first fabric time sync has completed (typically under 100 ms after connect).
 
+### `Session.audio_receiver`
+
+```python
+session.audio_tracks(robot: str) -> list[str]
+
+session.audio_receiver(
+    robot: str,
+    track: str,
+    *,
+    sample_rate = AudioSampleRate.Hz48000,     # decoder output rate
+    channels: AudioChannels | None = None,     # None follows the sender
+    max_reorder_delay_ms: float = 40,
+    max_queued_frames: int = 50,
+) -> AudioReceiver
+
+session.play_audio(
+    robot: str,
+    track: str,
+    *,
+    output = AudioOutput.Default(),            # Alsa(device) or Gstreamer(sink)
+    max_latency_ms: float = 150,               # the queue follows measured jitter up to this
+    sample_rate = AudioSampleRate.Hz48000,
+    max_reorder_delay_ms: float = 40,
+) -> AudioPlayback
+```
+
+Decode one robot's audio track. `receiver.recv(timeout=None)` returns the next
+`AudioFrame` in capture order and raises `TimeoutError` on timeout;
+`frame.samples` is an int16 NumPy array shaped `(frames, channels)`, and
+`frame.concealed` marks frames synthesized by Opus loss concealment.
+`receiver.stats()` returns decoded, repaired, FEC-rebuilt, concealed, late
+and dropped frame counts. `play_audio` plays a track on a speaker; its
+`stats()` adds frames played and skipped and the current target latency.
+See [Receiving audio](/audio/#receiving-audio).
+
 ### `Session.close`
 
 ```python
@@ -476,29 +511,28 @@ adamo.FaceBlur(
 robot.attach_audio(
     name: str,
     *,
-    source_type: str = "auto",   # "auto" | "alsa" | "pipeline" | "test"
-    device: str | None = None,   # ALSA device, e.g. "plughw:1,0"
-    pipeline: str | None = None, # GStreamer source string (source_type="pipeline")
-    codec: str = "opus",
-    bitrate_kbps: int = 64,
-    sample_rate: int = 48000,
-    channels: int = 2,           # ceiling, not a target — a mono source stays mono
-    frame_ms: int = 20,          # 2 (=2.5 ms), 5, 10, 20, 40, 60
-    inband_fec: bool = False,
-    dtx: bool = False,
-    allow_missing: bool = False, # keep the robot running if the source is absent
+    input = AudioInput.Default(),           # Alsa(device), Gstreamer(pipeline) or TestTone()
+    sample_rate = AudioSampleRate.Hz48000,  # Hz8000, Hz12000, Hz16000, Hz24000 or Hz48000
+    channels = AudioChannels.Mono,          # Stereo is a ceiling that never upmixes
+    frame_duration = AudioFrameDuration.Ms10,  # Ms2_5, Ms5, Ms10, Ms20, Ms40 or Ms60
+    bitrate_kbps: int = 48,                 # 6 to 510
+    application = AudioApplication.LowDelay(),  # Voice(inband_fec=False) or Music(inband_fec=False)
+    dtx: bool = False,                      # silence costs a few bytes every 200 ms
 ) -> None
+
+robot.audio(name: str, *, sample_rate, channels, frame_duration, bitrate_kbps, application, dtx) -> AudioTrack
+robot.audio_tracks() -> list[str]
+robot.audio_receiver(track: str, *, sample_rate, channels, max_reorder_delay_ms, max_queued_frames) -> AudioReceiver
+robot.play_audio(track: str, *, output=AudioOutput.Default(), max_latency_ms=150, sample_rate, max_reorder_delay_ms) -> AudioPlayback
 ```
 
-Attach a microphone track, captured and Opus-encoded by the SDK and published on
-`{robot.name}/audio/{name}`. Audio is **send-only** in the Python SDK (consume it
-from the browser or the C/C++ SDK, matching video). See [Streaming Audio](/audio/)
-for source types and hardware notes.
-
-`source_type="pipeline"` requires `pipeline=` and raises `ValueError` otherwise.
-An audio-only robot (no video tracks) still drives the capture pipeline from
-`run()`. Requires `adamo` 0.4.48+; the Linux x86_64 wheel supports
-`source_type="alsa"` only, while the aarch64 wheel supports every source type.
+`AudioInput.Default()` captures the default input (ALSA `default` on Linux,
+Core Audio on macOS). The track is Opus-encoded and published on
+`{robot.name}/audio/{name}`. `robot.audio()` returns an [`AudioTrack`](#audiotrack)
+for PCM your code produces. `audio_tracks`, `audio_receiver` and `play_audio`
+receive tracks published on this robot, such as an operator's microphone;
+`AudioOutput` is `Default()`, `Alsa(device)` or `Gstreamer(sink)`. See
+[Streaming Audio](/audio/).
 
 ### Pub/sub
 
@@ -635,6 +669,19 @@ Supported `pixel_format` values:
 | `I420`, `NV12` | 1.5 |
 
 Non-contiguous numpy arrays are copied to contiguous before sending.
+
+---
+
+## `AudioTrack`
+
+Returned from `robot.audio()`. Push interleaved int16 PCM to feed the Opus encoder.
+
+| Attribute / method | Type | Description |
+|--------------------|------|-------------|
+| `name` | `str` | Track name. |
+| `sample_rate`, `channels` | `int` | The PCM format `send` expects. |
+| `send(samples, capture_time_us=None)` | `None` | Push a C-contiguous `numpy.int16` array or little-endian bytes holding any whole number of frames. `capture_time_us` is when the first sample was captured (UNIX µs); by default, now. Blocks while 64 chunks wait for the encoder. The first call starts the robot's runtime when `run()` is not driving it. |
+| `close()` | `None` | End the track; subsequent `send()` raises `RuntimeError`. |
 
 ---
 
