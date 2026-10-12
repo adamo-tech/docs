@@ -8,7 +8,7 @@ import { Aside } from "@astrojs/starlight/components";
 The `adamo` Python package runs a robot: it streams hardware-encoded video, delivers operator control to callbacks, publishes and subscribes on other keys in your organization, keeps robot state, and lists and downloads recordings. It is the canonical Rust SDK compiled as a Python extension, so the Rust and Python SDKs share one implementation. Python 3.8+.
 
 <Aside type="caution" title="Changed in adamo 1.0">
-The 1.0 package is robot-side only. `adamo.connect()` and the standalone session (`get`, liveliness), `Robot.publish` / `subscribe` / `send` / `recv` / `log`, `attach_audio`, the ROS options, `adamo.operate`, and `adamo.data` are no longer part of the Python SDK. Publish on other keys from the robot's own connection with `robot.session.put` and `robot.session.publisher` (1.0.6+). Use the [Rust](/rust-sdk/), [C](/c-sdk/), or [TypeScript](/typescript-sdk/) SDK for operators.
+The 1.0 package is robot-side only. `adamo.connect()` and the standalone session (`get`, liveliness), `Robot.publish` / `subscribe` / `send` / `recv` / `log`, the ROS options, `adamo.operate`, and `adamo.data` are no longer part of the Python SDK. Publish on other keys from the robot's own connection with `robot.session.put` and `robot.session.publisher` (1.0.6+). Use the [Rust](/rust-sdk/), [C](/c-sdk/), or [TypeScript](/typescript-sdk/) SDK for operators.
 </Aside>
 
 ## Install
@@ -37,6 +37,9 @@ import adamo
 |--------|-------------|
 | `Robot` | A robot: video tracks, operator control, subscriptions, state, recording. |
 | `VideoTrack` | Push handle returned by `Robot.video`. |
+| `AudioTrack` | Push handle returned by `Robot.audio`. |
+| `AudioInput` / `AudioOutput` | Audio capture sources and playback outputs. |
+| `AudioSampleRate` / `AudioChannels` / `AudioFrameDuration` / `AudioApplication` | Opus encoder settings. |
 | `Session` | The robot's connection, from `robot.session`: publish and subscribe on other keys. |
 | `Publisher` | Persistent publisher returned by `Session.publisher`. |
 | `Priority` | Named priority levels (`REAL_TIME`, `INTERACTIVE_HIGH`, ..., `BACKGROUND`). |
@@ -179,6 +182,37 @@ Receive operator control sent to this robot on `{robot}/control/{channel}`. `cha
 robot.control_stats() -> tuple[int, int, int, int]   # received, delivered, dropped stale, undecodable
 ```
 
+### Audio
+
+```python
+robot.attach_audio(
+    name: str,
+    *,
+    input = AudioInput.Default(),           # Alsa(device), Gstreamer(pipeline) or TestTone()
+    sample_rate = AudioSampleRate.Hz48000,  # Hz8000, Hz12000, Hz16000, Hz24000 or Hz48000
+    channels = AudioChannels.Mono,          # Stereo is a ceiling that never upmixes
+    frame_duration = AudioFrameDuration.Ms10,  # Ms2_5, Ms5, Ms10, Ms20, Ms40 or Ms60
+    bitrate_kbps: int = 48,                 # 6 to 510
+    application = AudioApplication.LowDelay(),  # Voice(inband_fec=False) or Music(inband_fec=False)
+    dtx: bool = False,                      # silence costs a few bytes every 200 ms
+) -> None
+
+robot.audio(name: str, *, sample_rate, channels, frame_duration, bitrate_kbps, application, dtx) -> AudioTrack
+robot.audio_tracks() -> list[str]
+robot.audio_receiver(track: str, *, sample_rate, channels, max_reorder_delay_ms, max_queued_frames) -> AudioReceiver
+robot.play_audio(track: str, *, output=AudioOutput.Default(), max_latency_ms=150, sample_rate, max_reorder_delay_ms) -> AudioPlayback
+```
+
+`AudioInput.Default()` captures the default input (ALSA `default` on Linux,
+Core Audio on macOS). The track is Opus-encoded and published on
+`{robot.name}/audio/{name}`. `robot.audio()` returns an [`AudioTrack`](#audiotrack)
+for PCM your code produces. `audio_tracks`, `audio_receiver` and `play_audio`
+receive tracks published on this robot, such as an operator's microphone;
+`AudioOutput` is `Default()`, `Alsa(device)` or `Gstreamer(sink)`.
+`receiver.recv(timeout=None)` returns the next `AudioFrame` in capture order;
+`frame.samples` is an int16 NumPy array shaped `(frames, channels)`. See
+[Streaming Audio](/audio/).
+
 ### State and task runs
 
 ```python
@@ -281,6 +315,19 @@ track.close() -> None
 `send` takes `bytes`, `bytearray`, a memoryview, or a C-contiguous NumPy `uint8` array (`uint16` for `GRAY16_LE`) of exactly `frame_len` bytes; a wrong size or a non-contiguous array raises `ValueError` (use `numpy.ascontiguousarray(frame)`). A newer frame replaces one the encoder has not read yet. If the encoder or transport fails, the next `send` raises `RuntimeError`.
 
 Supported `pixel_format` values: `NV12`, `NV21`, `I420`, `YUY2`, `UYVY`, `BGRA`, `RGBA`, `BGRX`, `RGBX`, `RGB`, `BGR`, `GRAY8`, `GRAY16_LE`.
+
+---
+
+## `AudioTrack`
+
+Returned from `robot.audio()`. Push interleaved int16 PCM to feed the Opus encoder.
+
+| Attribute / method | Type | Description |
+|--------------------|------|-------------|
+| `name` | `str` | Track name. |
+| `sample_rate`, `channels` | `int` | The PCM format `send` expects. |
+| `send(samples, capture_time_us=None)` | `None` | Push a C-contiguous `numpy.int16` array or little-endian bytes holding any whole number of frames. `capture_time_us` is when the first sample was captured (UNIX µs); by default, now. Blocks while 64 chunks wait for the encoder. The first call starts the robot's runtime when `run()` is not driving it. |
+| `close()` | `None` | End the track; subsequent `send()` raises `RuntimeError`. |
 
 ---
 
