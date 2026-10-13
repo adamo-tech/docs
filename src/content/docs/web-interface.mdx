@@ -29,12 +29,6 @@ This is where you operate a robot. The main area is a camera grid showing all ac
 
 Video streams display in a configurable grid layout. If the robot has multiple tracks (e.g., "front", "rear", "depth"), they all appear simultaneously. Lidar tracks render as interactive 3D point clouds instead of video.
 
-### Local Connections
-
-At [app.adamohq.com](https://app.adamohq.com), the robot's **Connection** menu lets you choose **Automatic**, **Local only (TCP)**, or **Relay only**. Local only keeps video and controls on the LAN and pauses them if the connection fails. It requires a compatible robot SDK, browser permission, and access through the robot computer's firewall.
-
-Follow [Local Connection Setup](/direct-connection/) for the address, port, firewall commands, and checks to run when one computer connects but a phone cannot.
-
 ### Stereo / VR
 
 Stereo video tracks have a "View Stereo" button that launches an immersive WebXR VR view. Head pose and VR controller positions are tracked and forwarded to the robot as control topics (see [Control](/control/)).
