@@ -1,103 +1,159 @@
 ---
-title: "Direct Connection (P2P)"
-description: "Lower-latency video by connecting the browser straight to the robot, skipping the relay"
+title: "Local Connection Setup"
+description: "Connect directly to a robot over LAN using TCP, with browser, firewall, and troubleshooting steps"
 ---
 
-import { Tabs, TabItem } from "@astrojs/starlight/components";
+**Local only (TCP)** connects video and controls directly between your browser and the robot over WebSockets. It works without UDP access. If the local connection fails, video and controls pause until it reconnects; they do not switch to the relay.
 
-By default, video travels **browser → Adamo router → robot**. A direct connection (peer-to-peer) sends it **straight between the browser and the robot** over WebTransport, cutting out the router hop for lower latency.
+This guide covers the Connection menu at [app.adamohq.com](https://app.adamohq.com). Hosted sign-in, robot discovery, and authentication still require internet access. For use without the cloud, see [Offline viewing](#offline-viewing).
 
-It's **additive and automatic**: the browser uses the direct path when one is available and silently falls back to the relay when it isn't — so nothing breaks, you just get lower latency where the network allows it.
+:::note[SDK compatibility]
+The robot needs an SDK build with the local TCP server. The TCP implementation is currently on the SDK's `feat/local-websocket-tcp` branch; an older WebTransport-only publisher cannot serve this mode. Updating the web app alone is insufficient.
+:::
 
-## When it's used
+## Quick setup
 
-A direct connection is used only when **all** of these hold — otherwise the session stays on the relay, which always works:
+1. Start the robot publisher and note its **LAN IP address and local port**.
+2. Connect the operator's computer or phone to the robot's LAN. Avoid guest Wi-Fi that isolates devices.
+3. On the robot computer, allow incoming **TCP** connections to that port from the operator's LAN. See [Firewall setup](#firewall-setup).
+4. Open the robot at [app.adamohq.com](https://app.adamohq.com), open **Connection**, and select **Local only (TCP)**.
+5. Allow local network access when the browser asks. Leave **Robot LAN IP** blank for discovery, or enter an address such as `192.168.1.50:17447` and click **Connect locally**.
+6. Check that the Connection menu shows **Local TCP · IP:port** and video starts. Test from a second device before considering setup complete.
 
-- **The robot opts in** to serving P2P (see below). Robots don't serve it by default.
-- **A direct network path exists** between your browser and the robot: the same LAN, the same [Tailscale](https://tailscale.com) tailnet, or a robot with a publicly reachable IP. Robots behind symmetric CGNAT (for example Starlink) usually can't be reached directly and stay on the relay.
-- **You're on Chrome / a Chromium browser.** The direct path pins a self-signed certificate, which only Chromium supports; Safari and Firefox fall back to the relay.
+The address and port above are examples. Use the values for your running publisher.
 
-## Enable it on the robot
+| Connection mode | Behavior |
+| --- | --- |
+| Automatic | Attempts a direct connection and uses the relay when unavailable. |
+| Local only (TCP) | Requires a local TCP connection; pauses video and controls when unavailable. |
+| Relay only | Sends video and controls through the relay. |
 
-The robot has to opt in. Add one call to the robot you already have (see [Quickstart](/quickstart/)):
+The app saves the choice and manual address for this robot in this browser.
 
-<Tabs syncKey="lang">
-<TabItem label="Python" icon="seti:python">
+## Find the robot address and port
+
+Use the Wi-Fi or Ethernet address of the **computer running the publisher**. On Linux, `ip -4 addr` shows interface addresses; choose the interface connected to the operator's LAN.
+
+| Where the browser runs | Example address |
+| --- | --- |
+| On the publisher computer | `127.0.0.1:17447` or its LAN IP |
+| On a phone or another computer | `192.168.1.50:17447` — the publisher's LAN IP |
+
+`127.0.0.1` and `localhost` always refer to the device running the browser. On a phone, they refer to the phone. `0.0.0.0` is a listening address, not an address to enter in the app.
+
+Compatible cloud-connected SDK publishers start the local listener automatically on Unix systems. The OS chooses an available port, which can change after a restart. In an existing Python publisher, print it after creating the robot:
 
 ```python
-import adamo
-
-robot = adamo.Robot(api_key="ak_...", name="my-arm", p2p=True)
-robot.attach_video("main", device="/dev/video0")
-robot.run()
+print("Local TCP port:", robot.local_port)
 ```
 
-</TabItem>
-<TabItem label="Rust" icon="seti:rust">
+In Rust, use `robot.session().local_port()`. If no port is reported, check the publisher's startup logs for a local listener error. There is no universal port to open for every publisher.
+
+### Choose a fixed port in Rust
+
+A fixed port keeps firewall rules valid across restarts. Create the session explicitly and enable the listener before running the robot:
 
 ```rust
-use adamo::Robot;
+use adamo::{Robot, Session};
 
 fn main() -> adamo::Result<()> {
-    let mut robot = Robot::new_default("ak_...", Some("my-arm"))?;
-    robot.enable_p2p(443)?; // 0 → default port 443
-    robot.attach_v4l2("main", "/dev/video0", 1280, 720, 30, 4000, false)?;
+    let api_key = std::env::var("ADAMO_API_KEY")
+        .expect("Set ADAMO_API_KEY before starting the publisher");
+    let session = Session::open_default(&api_key)?;
+    let mut robot = Robot::from_session(session, Some("my-arm"))?;
+    robot.enable_p2p(17447)?;
+    // Attach your existing video tracks and controls here.
     robot.run()
 }
 ```
 
-</TabItem>
-<TabItem label="C" icon="seti:c">
+`enable_p2p` starts both the TCP and UDP listeners on this port. Passing `0` selects an available port. Calling it after `Robot::new_default` does not change an already-running listener's port.
 
-```c
-adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-arm");
-adamo_robot_enable_p2p(robot, 443); // 0 → default port 443
-// ... attach video ...
-adamo_robot_run(robot);
-```
+## Firewall setup
 
-</TabItem>
-<TabItem label="Config / CLI" icon="seti:shell">
+**Browser permission and firewall access are separate.** The browser permission lets the website attempt a local connection. The robot computer's firewall must also let that connection reach the publisher. A successful connection on the publisher computer does not test incoming access from other devices.
 
-If you run the `adamo-network` binary against a YAML config, pass `--p2p` (and optionally `--p2p-port`, default 443):
+Run these commands on the **robot computer**, if it uses UFW. Replace `192.168.1.0/24` with your operator LAN subnet and `17447` with the publisher's actual port:
 
 ```sh
-adamo-network --config robot.yaml --p2p
+sudo ufw status verbose
+sudo ufw allow proto tcp from 192.168.1.0/24 to any port 17447 comment 'Adamo local TCP'
+sudo ufw status numbered
 ```
 
-Or set it in the config file:
+Only add the rule if this firewall is active and does not already permit the connection. For a single operator, you can use that device's IP instead of the whole subnet. See the [Ubuntu firewall guide](https://ubuntu.com/server/docs/how-to/security/firewalls/) for UFW syntax.
 
-```yaml
-p2p: true
-p2p_port: 443
+To remove this example rule later:
+
+```sh
+sudo ufw delete allow proto tcp from 192.168.1.0/24 to any port 17447
 ```
 
-</TabItem>
-</Tabs>
+For another firewall, allow the same inbound TCP port from the operator's LAN. On managed networks, give those details to your administrator. Local TCP does not need a UDP rule, public router port forwarding, or a disabled firewall.
 
-The P2P listener is additive — the robot keeps its normal relay connection, so operators who can't reach it directly still see video over the relay.
+If the publisher runs in a container or VM, its TCP port must also be reachable through the host. Guest Wi-Fi, client isolation, and VLAN rules can block device-to-device traffic even when both devices have internet access.
 
-## Use it in the browser
+## Browser permissions
 
-Nothing to configure. Open the robot on [operate.adamohq.com](https://operate.adamohq.com) in Chrome and it connects directly when it can.
+Use an up-to-date Chrome or Chromium browser with local WebSocket access support. Chrome added local network permission prompts for WebSockets in [Chrome 147](https://developer.chrome.com/release-notes/147#local-network-access-restrictions-for-websockets). Browser support varies; a permission toggle alone does not establish compatibility with this mode.
 
-- Chrome may show a one-time **"allow local network access"** prompt the first time — click **Allow** (it persists for the site).
-- To confirm you're direct, open the [Control Panel](/web-interface/#control-panel) latency breakdown: the path shows **`you ↔ robot (direct)`** instead of the router hops.
+Allow **Local network access** for `app.adamohq.com` in the browser's site settings, then reload the page. If your operating system also asks whether the browser may access the local network, allow that too. Start with the robot's private IP address rather than a custom hostname.
 
-## Best results: Tailscale
+Local TCP uses `ws://`: it is authenticated, but the WebSocket transport is unencrypted. Use it on a trusted LAN. The browser may show a mixed-content or “Not secure” indicator while it is active; that indicator alone does not mean the hosted app's HTTPS certificate has expired.
 
-The most reliable way to get direct connections across different networks is to put **both the robot and the machine running your browser on the same [Tailscale](https://tailscale.com) tailnet**. The robot then advertises its tailnet address as a candidate, and the connection works **regardless of NAT** — including symmetric CGNAT / Starlink, where a raw direct connection can't be established. The robot must be reachable on its P2P port over the tailnet's ACLs.
+## Test from another device
 
-## Force the relay
+On the robot computer, verify the TCP listener is running, substituting its actual port:
 
-Direct connections fall back to the relay automatically, but you can also force relay-only for a browser session — run this in the browser console and reload:
-
-```js
-localStorage.setItem('adamo_p2p', '0')
+```sh
+ss -ltn 'sport = :17447'
 ```
 
-## Notes
+The listener should bind to the LAN address or `0.0.0.0`, rather than only `127.0.0.1`.
 
-- Direct connections are **authenticated and org-scoped**, and teleop minutes are **metered**, exactly like the relay.
-- If a direct connection drops mid-session, video continues over the relay.
-- P2P carries **video** (and teleop) directly; discovery, fleet presence, and the robot list still go through the Adamo network as usual.
+Then, on the **phone or second computer**, open this address in the browser, using the robot's IP and port:
+
+```text
+http://192.168.1.50:17447/.well-known/adamo
+```
+
+A JSON response means the TCP server is reachable. It is connection metadata, not a video page. From a second computer's terminal, you can also check for `HTTP 200`:
+
+```sh
+curl --connect-timeout 3 --max-time 5 -o /dev/null -w 'HTTP %{http_code}\n' \
+  http://192.168.1.50:17447/.well-known/adamo
+```
+
+This test checks network reachability. It does not test the hosted app's browser permission, WebSocket support, or authentication. Return to the app and select **Retry connection** to test those.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Works on the robot computer, fails on a phone | Use the robot's LAN IP. Check its inbound TCP firewall rule, guest Wi-Fi, and device isolation. Test the HTTP endpoint from the phone. |
+| HTTP endpoint times out | Check IP, port, publisher process, firewall, and network isolation. Browser permission cannot open the robot's firewall. |
+| HTTP endpoint responds, but Local TCP fails | Check browser support and permissions, reload the app, and confirm the publisher has the compatible SDK build. |
+| “Local unavailable” | This is a connection failure, not a confirmed firewall diagnosis. Follow the reachability test first. Video and controls remain paused in Local only mode. |
+| Connection says “Relay” | Select Local only (TCP) to require LAN. Automatic can fall back to the relay. |
+| Stops working after a publisher restart | Recheck the selected port and manual address. Use a fixed port if firewall rules depend on it. |
+| Log says “no compatible authenticated LAN candidate” | The direct connection attempt found no usable authenticated candidate. The message alone does not identify a firewall problem; check the chosen mode and TCP reachability. |
+
+If you need help, share the browser and OS versions, SDK build/version, connection mode, robot IP and port, exact error, and whether the second-device HTTP test succeeds. Redact API keys, pairing keys, and tokens from logs and screenshots.
+
+## Offline viewing
+
+Hosted **Local only (TCP)** still uses cloud sign-in and discovery. For a separate offline video viewer, open [app.adamohq.com/local.html](https://app.adamohq.com/local.html) while online so the page and assets can be cached in that browser. Verify it reloads and connects with internet access disconnected before relying on it offline.
+
+With a compatible SDK, start a local publisher without an API key:
+
+```python
+import adamo
+
+robot = adamo.Robot.local("my-arm", port=17447)
+print("Local port:", robot.local_port)
+print("Pairing key:", robot.local_pairing_key)
+# Attach your existing video tracks here.
+robot.run()
+```
+
+Enter the robot's LAN IP and port and its pairing key in the standalone viewer. Keep the key private; use the current key from the publisher. The same firewall and browser requirements apply. This page is a video viewer, not the full hosted teleoperation interface, and clearing browser storage removes its offline cache.
