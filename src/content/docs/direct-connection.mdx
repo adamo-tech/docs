@@ -13,7 +13,7 @@ It's **additive and automatic**: the browser uses the direct path when one is av
 
 A direct connection is used only when **all** of these hold — otherwise the session stays on the relay, which always works:
 
-- **The robot opts in** to serving P2P (see below). Robots don't serve it by default.
+- **The robot serves P2P** (see below) and **its firewall allows the direct port** (see [Open the robot's firewall](#open-the-robots-firewall)).
 - **A direct network path exists** between your browser and the robot: the same LAN, the same [Tailscale](https://tailscale.com) tailnet, or a robot with a publicly reachable IP. Robots behind symmetric CGNAT (for example Starlink) usually can't be reached directly and stay on the relay.
 - **You're on Chrome / a Chromium browser.** The direct path pins a self-signed certificate, which only Chromium supports; Safari and Firefox fall back to the relay.
 
@@ -40,7 +40,7 @@ use adamo::Robot;
 
 fn main() -> adamo::Result<()> {
     let mut robot = Robot::new_default("ak_...", Some("my-arm"))?;
-    robot.enable_p2p(443)?; // 0 → default port 443
+    robot.enable_p2p(17447)?; // the UDP port operators open in the firewall
     robot.attach_v4l2("main", "/dev/video0", 1280, 720, 30, 4000, false)?;
     robot.run()
 }
@@ -51,7 +51,7 @@ fn main() -> adamo::Result<()> {
 
 ```c
 adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-arm");
-adamo_robot_enable_p2p(robot, 443); // 0 → default port 443
+adamo_robot_enable_p2p(robot, 17447); // the UDP port operators open in the firewall
 // ... attach video ...
 adamo_robot_run(robot);
 ```
@@ -76,6 +76,50 @@ p2p_port: 443
 </Tabs>
 
 The P2P listener is additive — the robot keeps its normal relay connection, so operators who can't reach it directly still see video over the relay.
+
+## Open the robot's firewall
+
+A direct connection is an **inbound** connection to the robot, so the robot's own firewall has to let it in. The relay connection is outbound and unaffected, which is why a robot with a closed firewall still works fine over the relay — it just never goes direct.
+
+Hosted robots listen for direct connections on **UDP port 17447**. The SDK prints the port it ended up on at startup:
+
+```
+adamo: direct connections listen on UDP port 17447 (and TCP 17447 for offline pairing); open the UDP port in the robot's firewall for operators on its network
+```
+
+If 17447 is already taken on the host (for example by another robot process), the SDK tries 17448, 17449, and so on, so check the printed port rather than assuming. To pin a different port, set `ADAMO_DIRECT_PORT` in the robot's environment.
+
+On Ubuntu / Debian with `ufw`, allow the port:
+
+```sh
+sudo ufw allow 17447/udp
+```
+
+To limit the rule to operators on the robot's LAN, restrict it to your subnet instead (adjust `192.168.1.0/24` to match your network):
+
+```sh
+sudo ufw allow proto udp from 192.168.1.0/24 to any port 17447
+```
+
+Other firewalls follow the same idea — allow inbound UDP on the robot's direct port:
+
+```sh
+# firewalld (Fedora / RHEL)
+sudo firewall-cmd --permanent --add-port=17447/udp && sudo firewall-cmd --reload
+
+# nftables / iptables
+sudo iptables -I INPUT -p udp --dport 17447 -j ACCEPT
+```
+
+Offline pairing (robots running without an Adamo account, see the SDK's `Robot.local`) also uses **TCP** on the same port; open `17447/tcp` as well only if you use it.
+
+A few things that look like a firewall problem but aren't:
+
+- **The browser's "local network access" prompt** (Chrome) only lets the page *attempt* a local connection. Allowing it does not open anything on the robot — the robot-side rule above is still required.
+- **Wi-Fi client isolation.** Many guest and office networks stop devices on the same Wi-Fi from talking to each other at all. If a wired laptop connects directly but a phone on the Wi-Fi stays on the relay with the firewall open, this is usually the cause. Connect both through the same switch or use [Tailscale](#best-results-tailscale).
+- **Different networks.** The direct path needs a route from the browser to the robot; across networks that means Tailscale or a publicly reachable IP, not a firewall change.
+
+To check which path you're on, see [Use it in the browser](#use-it-in-the-browser).
 
 ## Use it in the browser
 
