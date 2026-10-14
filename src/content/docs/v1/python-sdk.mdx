@@ -8,7 +8,7 @@ import { Aside } from "@astrojs/starlight/components";
 The `adamo` Python package runs a robot: it streams hardware-encoded video, delivers operator control to callbacks, publishes and subscribes on other keys in your organization, keeps robot state, and lists and downloads recordings. It is the canonical Rust SDK compiled as a Python extension, so the Rust and Python SDKs share one implementation. Python 3.8+.
 
 <Aside type="caution" title="Changed in adamo 1.0">
-The 1.0 package is robot-side only. `adamo.connect()` and the standalone session (`get`, liveliness), `Robot.publish` / `subscribe` / `send` / `recv` / `log`, the ROS options, `adamo.operate`, and `adamo.data` are no longer part of the Python SDK. Publish on other keys from the robot's own connection with `robot.session.put` and `robot.session.publisher` (1.0.6+). Use the [Rust](/v1/rust-sdk/), [C](/v1/c-sdk/), or [TypeScript](/v1/typescript-sdk/) SDK for operators.
+The 1.0 package primarily provides robot-side APIs. The older standalone session APIs (`get`, liveliness), `Robot.publish` / `subscribe` / `send` / `recv` / `log`, the ROS options, `adamo.operate`, and `adamo.data` are no longer part of the Python SDK. Publish on other keys from the robot's own connection with `robot.session.put` and `robot.session.publisher` (1.0.6+). From 1.0.9, `adamo.connect()` provides a shared client session for pub/sub and media reception; see [Receiving video](#receiving-video). Use the [Rust](/v1/rust-sdk/), [C](/v1/c-sdk/), or [TypeScript](/v1/typescript-sdk/) SDK for operator control.
 </Aside>
 
 ## Install
@@ -40,6 +40,9 @@ import adamo
 | `AudioTrack` | Push handle returned by `Robot.audio`. |
 | `AudioInput` / `AudioOutput` | Audio capture sources and playback outputs. |
 | `AudioSampleRate` / `AudioChannels` / `AudioFrameDuration` / `AudioApplication` | Opus encoder settings. |
+| `connect` / `ClientSession` | Shared client connection for pub/sub and media reception (1.0.9+). |
+| `VideoReceiver` / `VideoFrame` | Receive decoded video and access its image or CPU RGBA pixels. |
+| `VideoOutput` / `VideoImage` | Request an output format and memory location; inspect or export the decoded image. |
 | `Session` | The robot's connection, from `robot.session`: publish and subscribe on other keys. |
 | `Publisher` | Persistent publisher returned by `Session.publisher`. |
 | `Priority` | Named priority levels (`REAL_TIME`, `INTERACTIVE_HIGH`, ..., `BACKGROUND`). |
@@ -402,6 +405,123 @@ subscriber.close()
 Supports the context-manager protocol.
 
 ---
+
+## Receiving video
+
+Starting with SDK **1.0.9**, a Python video receiver can return decoded images
+in **CUDA memory**. This lets a perception or inference pipeline consume video
+on the GPU without downloading frames to NumPy and uploading them again.
+Both AV1 and H.264 receivers support CUDA NV12 and CUDA RGBA output.
+
+Open a shared client session with `adamo.connect()`. It reads `ADAMO_API_KEY`
+by default, or accepts an API key explicitly. Select the robot and track, and
+set `codec` to match the publisher's encoded stream:
+
+```python
+session.video_receiver(
+    robot: str,
+    track: str,
+    *,
+    max_queued_frames: int = 1,
+    codec: str = "h264",          # "h264" or "av1"
+    output: adamo.VideoOutput | None = None,
+) -> adamo.VideoReceiver
+```
+
+`receiver.recv(timeout=5.0)` waits up to five seconds for a decoded frame and
+raises `TimeoutError` if none arrives. Both the session and receiver support
+context managers; closing the session also closes its receivers.
+
+### Receive NV12 in CUDA memory
+
+Use NV12 when your downstream GPU processing accepts the decoder's native
+YUV format. Pass `output=adamo.VideoOutput(format="nv12", memory="cuda")`
+and consume **`frame.image`** through DLPack:
+
+```python
+import adamo
+import torch
+
+with adamo.connect() as session:
+    with session.video_receiver(
+        "my-robot",
+        "head",
+        codec="av1",  # or "h264"; must match the publisher
+        output=adamo.VideoOutput(
+            format="nv12",
+            memory="cuda",
+            device_ordinal=0,
+        ),
+    ) as receiver:
+        frame = receiver.recv(timeout=5.0)
+        nv12 = torch.utils.dlpack.from_dlpack(frame.image)
+        # CUDA uint8 tensor: (height * 3 // 2, width)
+```
+
+`device_ordinal` selects the NVIDIA GPU used for the output; its default is
+`0`. NV12 is a semi-planar format: the first `height` rows contain luma (Y),
+followed by `height // 2` rows of interleaved U/V chroma. This tensor is not an
+RGB image. The image wrapper exposes `width`, `height`, `planes`,
+`color_matrix`, and `color_range`, as well as color primaries and transfer
+function metadata, for consumers that perform their own conversion.
+
+### Receive RGBA in CUDA memory
+
+If your pipeline expects color channels rather than YUV planes, request
+`format="rgba"` with the same `memory="cuda"` setting:
+
+```python
+import adamo
+import torch
+
+with adamo.connect() as session:
+    with session.video_receiver(
+        "my-robot",
+        "head",
+        codec="av1",
+        output=adamo.VideoOutput(
+            format="rgba",
+            memory="cuda",
+            device_ordinal=0,
+        ),
+    ) as receiver:
+        frame = receiver.recv(timeout=5.0)
+        rgba_gpu = torch.utils.dlpack.from_dlpack(frame.image)
+        # CUDA uint8 tensor: (height, width, 4), in RGBA order
+```
+
+NVDEC decodes to NV12, then the SDK's embedded CUDA kernel converts NV12 to
+RGBA on the GPU. There is no CPU readback in this path. The output has four
+channels with alpha set to `255`; conversion handles supported BT.601/BT.709
+full- and limited-range SDR video. It does not perform HDR tone mapping.
+The CUDA conversion kernel ships with the SDK, so you do not need NVCC or
+NVRTC to use it.
+
+### Copies, CPU access, and requirements
+
+DLPack export stays on the GPU, but it makes **one independent device-to-device
+copy per export**. This keeps the decoded frame immutable while allowing the
+consumer's tensor to be modified. The exported tensor owns its allocation and
+remains valid after the frame or receiver is closed. Reuse the tensor rather
+than exporting the same image repeatedly; `copy=False` and cross-device
+DLPack export are not supported.
+
+`frame.rgba` remains available as a compatibility API: it materializes a
+cached, read-only CPU NumPy `uint8` array of shape `(height, width, 4)`. For
+CUDA NV12 output, accessing it converts to RGBA on the GPU and downloads the
+result; for CUDA RGBA output, it downloads the existing RGBA pixels. Use
+`frame.image` for a GPU pipeline to avoid that readback. Omitting `output`
+keeps the default CPU RGBA behavior.
+
+CUDA reception requires Linux, an NVIDIA GPU and driver with NVDEC support
+for the selected codec, and a CUDA-enabled PyTorch installation for the
+examples above. CUDA output is an explicit requirement: if the backend or
+requested format/memory route is unavailable, receiver construction fails
+rather than silently returning CPU pixels. Stream-specific restrictions can
+also produce errors when the encoded headers arrive. The current NVIDIA
+path supports progressive 8-bit 4:2:0 SDR, low-delay streams; H.264 streams
+with B-frames or frame reordering are unsupported. This NVDEC path does not
+provide the Jetson Orin V4L2/NVMM decoder backend.
 
 ## `StateStore`
 
