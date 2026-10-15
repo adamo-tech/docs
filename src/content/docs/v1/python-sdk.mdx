@@ -478,7 +478,7 @@ recordings.list(
 recordings.download(recordings: list[RecordingInfo], directory=".") -> list[Path]
 ```
 
-`list` returns recordings that overlap `start`..`end`, oldest first. `download` writes each recording to `{directory}/{device}/{name}.rrd` with its `.json` entry beside it, skipping files already there. Each `RecordingInfo` carries `id`, `device`, `session_id`, `display_name`, `description`, `tags`, `controller`, `started_at`, `ended_at`, `frame_count`, `cameras`, `tasks`, `size_bytes`, and `complete`.
+`list` returns recordings that overlap `start`..`end`, oldest first. `download` writes each recording to `{directory}/{device}/{name}.rrd` with its `.json` entry beside it, skipping files already there. A download that fails is retried with a fresh link, resuming from the bytes already written, with 1, 2, 4 and up to 30 s between attempts for up to 5 minutes, unless the recordings API refuses it (400, 401, 403 or 404). Each `RecordingInfo` carries `id`, `device`, `session_id`, `display_name`, `description`, `tags`, `controller`, `started_at`, `ended_at`, `frame_count`, `cameras`, `tasks`, `size_bytes`, and `complete`.
 
 ---
 
