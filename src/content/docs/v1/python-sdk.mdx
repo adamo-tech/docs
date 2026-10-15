@@ -515,9 +515,8 @@ keeps the default CPU RGBA behavior.
 
 CUDA reception requires Linux, an NVIDIA GPU and driver with NVDEC support
 for the selected codec, and a CUDA-enabled PyTorch installation for the
-examples above. CUDA output is an explicit requirement: if the backend or
-requested format/memory route is unavailable, receiver construction fails
-rather than silently returning CPU pixels. Stream-specific restrictions can
+examples above. If the requested backend or output format/memory combination is unavailable,
+`session.video_receiver(...)` raises an exception. It does not automatically fall back to CPU output. Stream-specific restrictions can
 also produce errors when the encoded headers arrive. The current NVIDIA
 path supports progressive 8-bit 4:2:0 SDR, low-delay streams; H.264 streams
 with B-frames or frame reordering are unsupported. This NVDEC path does not
