@@ -1,0 +1,125 @@
+---
+title: "Training Policies"
+description: "Fine-tune a robot policy on Adamo's GPUs with Tinker's training API, from a loop that runs on your machine"
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The Python SDK trains policies on Adamo's GPUs with the API of [Tinker](https://tinker-docs.thinkingmachines.ai): your training loop runs on your machine and sends batches, and the model and its optimizer stay on the server's GPU. Requires SDK 1.0.10 or later.
+
+```python
+import adamo
+from adamo import types
+
+service_client = adamo.ServiceClient()   # authenticates with ADAMO_API_KEY
+training_client = service_client.create_lora_training_client(base_model="nvidia/GR00T-N1.7")
+
+for step in range(2000):
+    data = next_batch()   # a list of types.Datum
+    forward_backward_future = training_client.forward_backward(data, "flow_matching")
+    optim_step_future = training_client.optim_step(types.AdamParams(learning_rate=1e-4))
+    forward_backward_future.result()
+    optim_step_future.result()
+
+weights = training_client.save_weights_for_sampler(name="stack-v1").result()
+```
+
+## How calls run
+
+`forward_backward` adds the gradients of a batch, and `optim_step` applies AdamW to the gradients added since the last step, then clears them. Both return an `APIFuture` as soon as the server has queued the call. The server runs calls in the order they were made, so queue the next step before waiting on the current one and the GPU always has work.
+
+- `future.result(timeout=None)` waits for the result. A `timeout` raises `TimeoutError` and leaves the call running; call `result()` again to keep waiting.
+- `await future.result_async()` and the `*_async` methods (`forward_backward_async`, `optim_step_async`, ...) serve async code. Each `*_async` method returns the `APIFuture` once the call is queued.
+- Several `forward_backward` calls before one `optim_step` add up their gradients, for a larger effective batch.
+- A call the server rejects as invalid raises `ValueError` with the server's reason, such as an unknown camera name. Network and server errors are retried for up to 5 minutes, and each retry prints its cause.
+
+`adamo.ServiceClient(base_url=None, api_key=None)` connects to Adamo's training server; `base_url` or the `ADAMO_TRAINING_URL` environment variable points it at another one. The server starts a GPU on the first call, so `create_lora_training_client` can take about a minute.
+
+## Data
+
+Tinker trains language models on tokens. A robot's `types.Datum` holds what the robot saw and did at one frame instead:
+
+```python
+types.Datum(
+    model_input=types.ModelInput(chunks=[
+        types.ImageChunk(data=png_bytes, format="png", name="head"),
+        types.StateChunk(name="left_arm", data=joint_positions),
+        types.TextChunk(text="put the plastic bottles in the bin"),
+    ]),
+    loss_fn_inputs={"left_arm": action_chunk},
+)
+```
+
+| Field | Holds |
+|---|---|
+| `ImageChunk(data, format, name)` | One camera image, encoded: `format` is `"png"` or `"jpeg"` and must match the bytes. `name` is the camera. |
+| `StateChunk(name, data)` | One state array, such as an arm's joint positions. |
+| `TextChunk(text)` | The task prompt. |
+| `loss_fn_inputs` | The actions from this frame on, keyed by action name. |
+
+Arrays can be NumPy arrays, torch tensors or `types.TensorData`; floats are sent as float32. `training_client.get_info().model_data` reports the names and sizes the model expects.
+
+## GR00T N1.7
+
+`nvidia/GR00T-N1.7` is NVIDIA's [GR00T N1.7](https://huggingface.co/nvidia/GR00T-N1.7-3B) vision-language-action model, trained with its flow-matching loss (`loss_fn="flow_matching"`).
+
+<Aside type="note">
+GR00T fine-tunes its projector and diffusion action head with the vision-language backbone frozen, not with LoRA. `create_lora_training_client` keeps Tinker's name; its `rank` is ignored and `seed` seeds the run.
+</Aside>
+
+### Inputs
+
+Every datum carries each camera, state and action the model was configured with, exactly once, and one prompt:
+
+| Input | Shape | Type | Notes |
+|---|---|---|---|
+| `ImageChunk`, one per camera | `[H, W, 3]` when decoded | PNG or JPEG bytes | RGB, any resolution: GR00T resizes and crops each image itself. |
+| `StateChunk`, one per state name | `[state_dims[name]]` | float32 | Raw values, such as radians. The server normalizes them. |
+| `TextChunk` | | string | Exactly one per datum. |
+| `loss_fn_inputs[name]`, one per action name | `[action_horizon, action_dims[name]]` | float32 | Absolute targets for this frame and the next `action_horizon - 1`. Where an episode ends sooner, repeat its last action. |
+
+Send absolute actions, in the robot's own units. The server normalizes them and, for the actions its model predicts relative to the current state, such as arm joints, subtracts the state itself. A gripper stays absolute.
+
+A datum whose names or shapes do not match fails with a `ValueError` that names the expected ones, before anything runs on the GPU.
+
+### Outputs
+
+| Call | Result |
+|---|---|
+| `forward_backward(data, "flow_matching")` | `ForwardBackwardOutput`: `metrics["loss:mean"]` is the batch's mean flow-matching loss, and `loss_fn_outputs` holds one `{"loss": TensorData}` of shape `[1]` per datum. |
+| `optim_step(adam_params)` | `OptimStepResponse`: `metrics` holds `grad_norm` (before clipping), `learning_rate` and the model's `step`. |
+| `save_weights_for_sampler(name)` | `SaveWeightsForSamplerResponse.path`: the weights a GR00T policy loads, about 12 GB. |
+| `save_state(name)` | `SaveWeightsResponse.path`: the weights and AdamW state, about 24 GB, for `load_state(path)` (weights only) or `load_state_with_optimizer(path)`. |
+| `get_info()` | `GetInfoResponse.model_data`: `action_horizon` and the `image_names`, `state_dims` and `action_dims` above. |
+
+A trained GR00T policy predicts `[action_horizon, action_dims[name]]` absolute actions for each action name from one frame of images, state and prompt, the same shapes as `loss_fn_inputs`.
+
+`AdamParams` takes Tinker's defaults: `learning_rate=1e-4`, `beta1=0.9`, `beta2=0.95`, `eps=1e-12`, `weight_decay=0.0` and `grad_clip_norm=0.0`, where 0 turns clipping off. GR00T's own fine-tuning uses `weight_decay=1e-5` and `grad_clip_norm=1.0`.
+
+### Example: the ABC sim
+
+The ABC sim's bimanual robot, two six-joint arms each with a gripper, uses:
+
+| Input | Names | Shape |
+|---|---|---|
+| Cameras | `head`, `wrist_left`, `wrist_right` | `[224, 224, 3]` in its recordings |
+| State | `left_arm`, `right_arm` | `[6]` joint positions, radians |
+| | `left_gripper`, `right_gripper` | `[1]`, 0 closed to 1 open |
+| Actions | the same four names | `[40, 6]` and `[40, 1]` |
+
+```python
+import numpy as np
+
+ARMS = {"left_arm": slice(0, 6), "left_gripper": slice(6, 7), "right_arm": slice(7, 13), "right_gripper": slice(13, 14)}
+
+def datum(images, state, actions, t, prompt, horizon=40):
+    """images: {camera: PNG bytes}; state: [14] at frame t; actions: [T, 14] for the episode."""
+    window = actions[t:t + horizon]
+    window = np.concatenate([window, np.repeat(window[-1:], horizon - len(window), axis=0)])
+    chunks = [types.ImageChunk(data=png, format="png", name=camera) for camera, png in images.items()]
+    chunks += [types.StateChunk(name=name, data=state[part]) for name, part in ARMS.items()]
+    chunks.append(types.TextChunk(text=prompt))
+    return types.Datum(model_input=types.ModelInput(chunks=chunks), loss_fn_inputs={name: window[:, part] for name, part in ARMS.items()})
+```
+
+At batch 54, one `forward_backward` and `optim_step` takes about 2.4 s, and the loss falls from about 1.1 at step 10 to under 0.1 by step 300.

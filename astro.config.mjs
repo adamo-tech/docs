@@ -2,12 +2,13 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 
 // Sidebar sections for one docs version, whose pages live under `prefix`.
-const sections = (prefix) =>
+// `training` lists the version's pages on training policies.
+const sections = (prefix, training = []) =>
   [
     { label: "Getting Started", items: ["index", "quickstart", "cameras"] },
     {
       label: "Building Robots",
-      items: ["control", "audio", "ros", "data", "recording", "state", "discovery"],
+      items: ["control", "audio", "ros", "data", "recording", ...training, "state", "discovery"],
     },
     { label: "Operating Robots", items: ["web-interface", "direct-connection", "operator"] },
     { label: "SDK References", items: ["python-sdk", "rust-sdk", "c-sdk", "typescript-sdk"] },
@@ -54,7 +55,7 @@ export default defineConfig({
       // group for the version being viewed.
       sidebar: [
         { label: "0.x", items: sections("") },
-        { label: "1.0", items: sections("v1/") },
+        { label: "1.0", items: sections("v1/", ["training"]) },
       ],
     }),
   ],

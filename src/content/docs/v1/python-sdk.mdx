@@ -55,6 +55,8 @@ import adamo
 | `Recording` / `ControllerMask` | What the Adamo data service records for this robot. |
 | `Recordings` / `RecordingInfo` | List and download your organization's recordings. |
 | `Inference` | A cloud policy run started by `Robot.inference`. |
+| `ServiceClient` / `TrainingClient` / `APIFuture` | Train a policy on Adamo's GPUs with Tinker's API (1.0.10+). |
+| `types` | Training data and results: `Datum`, `ModelInput`, `ImageChunk`, `StateChunk`, `TextChunk`, `TensorData`, `AdamParams`, ... |
 | `FaceBlur` | Face masking settings for a video track. |
 | `EncoderSelectionError` / `EncoderLibraryError` | No requested encoder could start. |
 | `xr` | Typed XR tracking messages and `subscribe_xr_control`. |
@@ -301,6 +303,33 @@ adamo.Robot.local(name: str, port: int = 17447, pairing_key: str | None = None) 
 ```
 
 Start a robot locally without cloud login; the SDK manages its certificates. `robot.local_port` and `robot.local_pairing_key` report what it listens on.
+
+---
+
+## Training
+
+```python
+class adamo.ServiceClient:
+    def __init__(self, base_url: str | None = None, api_key: str | None = None): ...
+    def create_lora_training_client(self, base_model: str, rank: int = 32, seed: int | None = None) -> TrainingClient: ...
+
+class adamo.TrainingClient:
+    model_id: str
+    def forward_backward(self, data: list[types.Datum], loss_fn: str) -> APIFuture[types.ForwardBackwardOutput]: ...
+    def optim_step(self, adam_params: types.AdamParams) -> APIFuture[types.OptimStepResponse]: ...
+    def save_state(self, name: str, ttl_seconds: int | None = None) -> APIFuture[types.SaveWeightsResponse]: ...
+    def save_weights_for_sampler(self, name: str, ttl_seconds: int | None = None) -> APIFuture[types.SaveWeightsForSamplerResponse]: ...
+    def load_state(self, path: str) -> APIFuture[types.LoadWeightsResponse]: ...
+    def load_state_with_optimizer(self, path: str) -> APIFuture[types.LoadWeightsResponse]: ...
+    def get_info(self) -> types.GetInfoResponse: ...
+
+class adamo.APIFuture:
+    request_id: str
+    def result(self, timeout: float | None = None): ...
+    async def result_async(self, timeout: float | None = None): ...
+```
+
+Each `TrainingClient` method also has an `*_async` form. `base_url` falls back to `ADAMO_TRAINING_URL`, then to Adamo's training server; `api_key` falls back to `ADAMO_API_KEY`. See [Training Policies](/v1/training/) for the data format and GR00T N1.7's input and output shapes.
 
 ---
 
