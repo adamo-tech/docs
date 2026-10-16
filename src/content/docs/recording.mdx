@@ -20,7 +20,7 @@ import adamo
 
 recording = adamo.Recording(
     adamo.ControllerMask.HUMAN | adamo.ControllerMask.POLICY,
-    mode=adamo.RecordingMode.Episodes(frame_rate=30),
+    mode=adamo.RecordingMode.Episodes(frame_rate=adamo.FrameRate.Fixed(30)),
     topics=["left/joint_pos", "left/joint_cmd"],
 )
 robot = adamo.Robot(name="my-arm", record=recording)
@@ -38,7 +38,7 @@ use adamo::{ControllerMask, FrameRate, Mode, PublisherOptions, Recording, Robot}
 
 let robot = Robot::new_default("ak_...", Some("my-arm"))?.with_recording(Recording {
     controller_mask: ControllerMask::HUMAN | ControllerMask::POLICY,
-    mode: Mode::Episodes { frame_rate: FrameRate::Fixed(NonZeroU32::new(30).unwrap()), min_duration: Duration::from_secs(2) },
+    mode: Mode::Episodes { frame_rate: FrameRate::Fixed { rate: NonZeroU32::new(30).unwrap(), gop: NonZeroU32::new(2).unwrap() }, min_duration: Duration::from_secs(2) },
     topics: vec!["left/joint_pos".to_owned(), "left/joint_cmd".to_owned()],
     ..Recording::default()
 });
@@ -67,7 +67,9 @@ Files are cut into parts after `max_duration` seconds (default 1800) or `max_siz
 
 ### Frame rate
 
-`frame_rate` is a number of frames a second, `FrameRate.Max` (the default) for the rate of the fastest camera, or `FrameRate.Raw` to keep each camera's video as the robot sent it. The data service puts every camera on that one clock as it records, so frame *k* of each camera is at *k* / `frame_rate` seconds into the file. Recordings saved with `FrameRate.Raw` can be downloaded but not exported.
+`frame_rate` is `FrameRate.Fixed(rate)` for a number of frames a second, `FrameRate.Max()` (the default) for the rate of the fastest camera, or `FrameRate.Raw()` to keep each camera's video as the robot sent it. The data service puts every camera on that one clock as it records, so frame *k* of each camera is at *k* / `rate` seconds into the file, re-encoded with a keyframe every `gop` frames (default 2): `FrameRate.Fixed(30, gop=4)`, `FrameRate.Max(gop=4)`. Recordings saved with `FrameRate.Raw()` can be downloaded but not exported.
+
+`gop` is the number of frames from one keyframe to the next. A training loader can only start decoding at a keyframe, so a small `gop` lets it jump to any frame quickly, and a larger one makes smaller files. With `FrameRate.Raw()` the video keeps the keyframes the robot's encoder made.
 
 ### Topics
 
@@ -113,6 +115,8 @@ client.download(recordings, "recordings")
 
 `list` also filters by `end`, `controllers`, `sessions`, `folder` and a `search` over names and notes. The Copy Query button on the Recordings page writes this code for the current filters.
 
+Each recording's `frame_rate` is the clock it was saved on: `FrameRate.Fixed(rate, gop)`, with `FrameRate.Max()` resolved to the rate of the fastest camera, or `FrameRate.Raw()`.
+
 ## Exporting to LeRobot
 
 `pip install "adamo[export]"` (Python 3.12 or newer) adds `Recordings.export`, which writes the recordings as a LeRobot dataset, one episode per recording, and returns the `LeRobotDataset`:
@@ -130,7 +134,7 @@ dataset = client.export(recordings, adamo.Export(
 - `outcomes` selects which Episodes recordings are kept by how their task ended: `"success"` (the default), `"failure"` and `"abort"`.
 - `tasks` maps each task to the prompt written into the dataset, and keeps only the recordings of those tasks, along with recordings that have no task. Without it, every task is kept and its prompt is its name as a sentence.
 
-The video is copied into the dataset as recorded. Recordings exported together must share one frame rate and one set of cameras; any that do not, or that lack a topic in `state` or `action`, are skipped with a warning that names each one and why.
+The video is copied into the dataset as recorded. Recordings exported together must share one frame rate, whatever their `gop`, and one set of cameras; any that do not, or that lack a topic in `state` or `action`, are skipped with a warning that names each one and why.
 
 The dataset goes to `lerobot-{hash of the recordings, config and decoders}` in the current folder unless `output_folder=` says where. An existing folder is opened as it is, so running the same export again is instant. The recordings are downloaded to a temporary folder unless `download_folder=` keeps them.
 
