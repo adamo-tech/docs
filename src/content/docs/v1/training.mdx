@@ -3,8 +3,6 @@ title: "Training Policies"
 description: "Fine-tune a robot policy on Adamo's GPUs with Tinker's training API, from a loop that runs on your machine"
 ---
 
-import { Aside } from "@astrojs/starlight/components";
-
 The Python SDK trains policies on Adamo's GPUs with the API of [Tinker](https://tinker-docs.thinkingmachines.ai): your training loop runs on your machine and sends batches, and the model and its optimizer stay on the server's GPU. Requires SDK 1.0.10 or later.
 
 ```python
@@ -12,12 +10,12 @@ import adamo
 from adamo import types
 
 service_client = adamo.ServiceClient()   # authenticates with ADAMO_API_KEY
-training_client = service_client.create_lora_training_client(base_model="nvidia/GR00T-N1.7")
+training_client = service_client.create_lora_training_client(base_model="nvidia/GR00T-N1.7", rank=32)
 
 for step in range(2000):
     data = next_batch()   # a list of types.Datum
     forward_backward_future = training_client.forward_backward(data, "flow_matching")
-    optim_step_future = training_client.optim_step(types.AdamParams(learning_rate=1e-4))
+    optim_step_future = training_client.optim_step(types.AdamParams(learning_rate=5e-4, grad_clip_norm=1.0))
     forward_backward_future.result()
     optim_step_future.result()
 
@@ -63,9 +61,7 @@ Arrays can be NumPy arrays, torch tensors or `types.TensorData`; floats are sent
 
 `nvidia/GR00T-N1.7` is NVIDIA's [GR00T N1.7](https://huggingface.co/nvidia/GR00T-N1.7-3B) vision-language-action model, trained with its flow-matching loss (`loss_fn="flow_matching"`).
 
-<Aside type="note">
-GR00T fine-tunes its projector and diffusion action head with the vision-language backbone frozen, not with LoRA. `create_lora_training_client` keeps Tinker's name; its `rank` is ignored and `seed` seeds the run.
-</Aside>
+`create_lora_training_client(base_model, rank=32, seed=None)` trains a LoRA of `rank`, at least 1, with alpha twice the rank. The adapters go on the linear layers of the diffusion action head, the vision-language self-attention and the robot's state and action projectors. The vision-language model stays frozen; the position embedding and the vision-language layer norm train in full. `seed` seeds the adapters. At rank 32, about 41M parameters train.
 
 ### Inputs
 
@@ -88,13 +84,13 @@ A datum whose names or shapes do not match fails with a `ValueError` that names 
 |---|---|
 | `forward_backward(data, "flow_matching")` | `ForwardBackwardOutput`: `metrics["loss:mean"]` is the batch's mean flow-matching loss, and `loss_fn_outputs` holds one `{"loss": TensorData}` of shape `[1]` per datum. |
 | `optim_step(adam_params)` | `OptimStepResponse`: `metrics` holds `grad_norm` (before clipping), `learning_rate` and the model's `step`. |
-| `save_weights_for_sampler(name)` | `SaveWeightsForSamplerResponse.path`: the weights a GR00T policy loads, about 12 GB. |
-| `save_state(name)` | `SaveWeightsResponse.path`: the weights and AdamW state, about 24 GB, for `load_state(path)` (weights only) or `load_state_with_optimizer(path)`. |
+| `save_weights_for_sampler(name)` | `SaveWeightsForSamplerResponse.path`: the full model with the LoRA merged in, about 12 GB, which a GR00T policy loads. |
+| `save_state(name)` | `SaveWeightsResponse.path`: the trained weights (the LoRA adapters, position embedding, layer norm and projectors) and their AdamW state, about 470 MB, for `load_state(path)` (weights only) or `load_state_with_optimizer(path)`. A GR00T policy cannot load it on its own. |
 | `get_info()` | `GetInfoResponse.model_data`: `action_horizon` and the `image_names`, `state_dims` and `action_dims` above. |
 
 A trained GR00T policy predicts `[action_horizon, action_dims[name]]` absolute actions for each action name from one frame of images, state and prompt, the same shapes as `loss_fn_inputs`.
 
-`AdamParams` takes Tinker's defaults: `learning_rate=1e-4`, `beta1=0.9`, `beta2=0.95`, `eps=1e-12`, `weight_decay=0.0` and `grad_clip_norm=0.0`, where 0 turns clipping off. GR00T's own fine-tuning uses `weight_decay=1e-5` and `grad_clip_norm=1.0`.
+`AdamParams` takes Tinker's defaults: `learning_rate=1e-4`, `beta1=0.9`, `beta2=0.95`, `eps=1e-12`, `weight_decay=0.0` and `grad_clip_norm=0.0`, where 0 turns clipping off. A rank-32 LoRA of GR00T trains well with `learning_rate=5e-4` and `grad_clip_norm=1.0`.
 
 ### Example: the ABC sim
 
@@ -122,4 +118,4 @@ def datum(images, state, actions, t, prompt, horizon=40):
     return types.Datum(model_input=types.ModelInput(chunks=chunks), loss_fn_inputs={name: window[:, part] for name, part in ARMS.items()})
 ```
 
-At batch 54, one `forward_backward` and `optim_step` takes about 2.4 s, and the loss falls from about 1.1 at step 10 to under 0.1 by step 300.
+The server starts this robot's projectors from those of a pretrained GR00T embodiment with a similar layout, so its loss starts low. A rank-32 LoRA at batch 54 and `learning_rate=5e-4` takes about 3.7 s per `forward_backward` and `optim_step`, and its loss falls from about 0.12 at step 10 to about 0.04 by step 50.
