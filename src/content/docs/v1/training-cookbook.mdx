@@ -1,0 +1,202 @@
+---
+title: "Cookbook: Train on Your Recordings"
+description: "Download a folder of recordings and fine-tune GR00T N1.7 on them as a LoRA, end to end, in one commented script"
+---
+
+This script takes the ABC sim's recordings from the last 7 days, turns them into training examples and trains a rank-64 LoRA of GR00T N1.7 for 500 steps at batch 256 on Adamo's GPUs. It uses the calls from [Recording and Exporting Data](/v1/recording/) and [Training Policies](/v1/training/); swap in your robot's folder, cameras, joint layout and prompt to train on your own data.
+
+The ABC sim records at `FrameRate.Raw()`, so its recordings can be downloaded but not exported as a LeRobot dataset. The script reads the downloaded `.rrd` files itself, so it also works for recordings that `export` skips. For recordings saved at a fixed frame rate, `export` followed by sampling frames from the dataset does the same as steps 2 and 3.
+
+## What it does
+
+1. **Download.** `Recordings.list(folder="abc-sim")` finds every recording under `abc-sim/`, its date subfolders included, and `download` saves each as a `.rrd` with a `.json` description beside it.
+2. **Read.** Each `.rrd` is a [Rerun](https://rerun.io) recording. Every camera is an h264 stream under `video/<camera>`, and every topic is a column of payloads stamped with `capture_time`. The sim publishes its joints on `proprioception/joints` (where the arms are) and `action/joints` (where the operator commanded them), each a big-endian timestamp followed by 14 float32s.
+3. **Line up.** The head camera's frames set the timeline. Each frame takes each wrist camera's next frame and the newest joint sample at or before it. The head camera is a side-by-side stereo pair, so the script keeps the left eye. Images shrink to 224×224 JPEGs to keep uploads small; GR00T resizes and crops them again itself.
+4. **Build examples.** A `types.Datum` holds the three images, the four state arrays and the prompt at frame `t`, and the commanded joints for frames `t` to `t + 39` as targets. Near the end of a recording, the last action repeats.
+5. **Train.** Each step uploads 256 frames drawn at random from every recording. The loop queues the next step before waiting on the current one, so the GPU always has work.
+6. **Save.** A checkpoint every 100 steps (about 470 MB, for resuming) and, at the end, the merged model (about 12 GB) that a GR00T policy loads.
+
+## The script
+
+Requires Python 3.12 or newer and SDK 1.0.10 or later, and reads `ADAMO_API_KEY` from the environment.
+
+```bash
+pip install "adamo[export]>=1.0.10" pillow
+export ADAMO_API_KEY=...
+python train_abc_sim.py
+```
+
+```python title="train_abc_sim.py"
+# Download the ABC sim's recordings and fine-tune GR00T N1.7 on them as a LoRA.
+#
+#   pip install "adamo[export]>=1.0.10" pillow
+#   export ADAMO_API_KEY=...
+#   python train_abc_sim.py
+
+import io
+import json
+import queue
+import struct
+import threading
+from datetime import datetime, timedelta, timezone
+
+import av
+import numpy as np
+import pyarrow
+import rerun.chunk
+from PIL import Image
+
+import adamo
+from adamo import types
+
+STEPS = 500
+RANK = 64
+BATCH_SIZE = 256
+PROMPT = "sim put the plastic bottles in the bin"
+CAMERAS = ("head", "wrist_left", "wrist_right")
+# The 14 joint values the sim publishes, split into the names GR00T trains on.
+ARMS = {"left_arm": slice(0, 6), "left_gripper": slice(6, 7), "right_arm": slice(7, 13), "right_gripper": slice(13, 14)}
+
+# 1. Find and download the recordings. `folder` matches everything under it, so
+#    "abc-sim" takes in abc-sim/2026-10-14, abc-sim/2026-10-16 and so on. The
+#    Recordings page's Copy Query button writes this call for its current filters.
+recordings_client = adamo.Recordings()
+recordings = recordings_client.list(start=datetime.now(timezone.utc) - timedelta(days=7), folder="abc-sim")
+paths = recordings_client.download(recordings, "recordings")  # skips files already downloaded
+print(f"downloaded {len(paths)} recordings")
+
+
+# 2. Read one recording. A .rrd file is a Rerun recording: each camera is an h264
+#    stream at video/<camera>, and each topic is a column of payloads stamped
+#    with `capture_time`. The sim's joint topics hold a big-endian uint64
+#    timestamp then 14 float32s (">Q14f").
+def byte_strings(column):
+    """A column of Rerun blobs (one list of bytes per row) as a list of bytes."""
+    blobs = column.flatten()
+    offsets, data = blobs.offsets.to_numpy(), blobs.values.to_numpy()
+    return [data[start:stop].tobytes() for start, stop in zip(offsets[:-1], offsets[1:])]
+
+
+def read_recording(path):
+    videos = {camera: {"times": [], "samples": []} for camera in CAMERAS}
+    topics = {"proprioception/joints": {}, "action/joints": {}}
+    for chunk in rerun.chunk.RrdReader(path).stream():
+        parts = chunk.entity_path.strip("/").split("/")
+        batch = chunk.to_record_batch()
+        if "capture_time" not in batch.schema.names:
+            continue
+        times = batch.column("capture_time").cast(pyarrow.int64()).to_numpy() // 1000  # ns to us
+        if parts[0] == "video" and len(parts) == 2 and parts[1] in videos:
+            videos[parts[1]]["times"] += times.tolist()
+            videos[parts[1]]["samples"] += byte_strings(batch.column("VideoStream:sample"))
+        elif "/".join(parts) in topics and "payload" in batch.schema.names:
+            topics["/".join(parts)].update(zip(times.tolist(), byte_strings(batch.column("payload"))))
+    return videos, topics
+
+
+def decode_jpegs(video, left_eye=False):
+    """Decode a camera's h264 stream to 224x224 JPEGs, in capture order."""
+    order = np.argsort(video["times"], kind="stable")
+    decoder = av.CodecContext.create("h264", "r")
+    frames = []
+    packets = [av.Packet(video["samples"][i]) for i in order] + [None]
+    for packet in packets:
+        for frame in decoder.decode(packet):
+            rgb = frame.to_ndarray(format="rgb24")
+            if left_eye:  # the head camera is a side-by-side stereo pair
+                rgb = rgb[:, : rgb.shape[1] // 2]
+            out = io.BytesIO()
+            Image.fromarray(rgb).resize((224, 224), Image.BILINEAR).save(out, format="JPEG", quality=90)
+            frames.append(out.getvalue())
+    return np.asarray(video["times"])[order][: len(frames)], frames
+
+
+def joints_at(messages, times):
+    """The newest joint sample at or before each frame time, as [T, 14]."""
+    stamps = np.array(sorted(messages))
+    values = np.array([struct.unpack(">Q14f", messages[stamp])[1:] for stamp in stamps], np.float32)
+    return values[np.maximum(np.searchsorted(stamps, times, side="right") - 1, 0)]
+
+
+# 3. Turn every recording into an episode: one frame per head-camera frame, with
+#    each camera's nearest frame, the joint state and the commanded joints.
+#    Decoding takes a few seconds a minute of recording; cache it for reruns.
+episodes = []
+for path in paths:
+    if not str(path).endswith(".rrd"):
+        continue
+    videos, topics = read_recording(str(path))
+    times, head = decode_jpegs(videos["head"], left_eye=True)
+    images = {"head": head}
+    for camera in ("wrist_left", "wrist_right"):
+        camera_times, frames = decode_jpegs(videos[camera])
+        nearest = np.clip(np.searchsorted(camera_times, times), 0, len(frames) - 1)
+        images[camera] = [frames[i] for i in nearest]
+    episodes.append({
+        "images": images,
+        "state": joints_at(topics["proprioception/joints"], times),
+        "action": joints_at(topics["action/joints"], times),
+    })
+frames = [(e, t) for e, episode in enumerate(episodes) for t in range(len(episode["state"]))]
+print(f"{len(episodes)} episodes, {len(frames)} frames")
+
+
+# 4. One training example: the images, state and prompt at frame t, and the
+#    next `horizon` commanded joints as targets. Send raw radians and absolute
+#    targets; the server normalizes them.
+def datum(episode, t, horizon):
+    window = episode["action"][t : t + horizon]
+    window = np.concatenate([window, np.repeat(window[-1:], horizon - len(window), axis=0)])  # pad past the end
+    chunks = [types.ImageChunk(data=episode["images"][camera][t], format="jpeg", name=camera) for camera in CAMERAS]
+    chunks += [types.StateChunk(name=name, data=episode["state"][t][part]) for name, part in ARMS.items()]
+    chunks.append(types.TextChunk(text=PROMPT))
+    return types.Datum(model_input=types.ModelInput(chunks=chunks), loss_fn_inputs={name: window[:, part] for name, part in ARMS.items()})
+
+
+# 5. Start a LoRA on Adamo's GPU. The first call starts the GPU, about a minute.
+service_client = adamo.ServiceClient()
+training_client = service_client.create_lora_training_client(base_model="nvidia/GR00T-N1.7", rank=RANK)
+horizon = training_client.get_info().model_data.action_horizon  # 40 for the ABC sim
+
+
+# Build batches on a thread, so the next one is ready when the server asks.
+def batches(out, rng=np.random.default_rng(0)):
+    while True:
+        out.put([datum(episodes[e], t, horizon) for e, t in (frames[i] for i in rng.choice(len(frames), BATCH_SIZE, replace=False))])
+
+
+ready = queue.Queue(maxsize=2)
+threading.Thread(target=batches, args=(ready,), daemon=True).start()
+
+# 6. Train. Alpha is twice the rank, so the rank-32 learning rate carries over.
+#    Queue step n+1 before waiting on step n: the server runs calls in order,
+#    so its GPU never waits for the next upload.
+adam = types.AdamParams(learning_rate=5e-4, grad_clip_norm=1.0)
+queued = (training_client.forward_backward(ready.get(), "flow_matching"), training_client.optim_step(adam))
+for step in range(1, STEPS + 1):
+    # Every 100 steps, save the LoRA and its optimizer (about 470 MB) to resume
+    # from with load_state_with_optimizer. Queued before the next step, it
+    # holds exactly this step's weights.
+    checkpoint = training_client.save_state(f"abc-sim-{step}") if step % 100 == 0 else None
+    following = (training_client.forward_backward(ready.get(), "flow_matching"), training_client.optim_step(adam)) if step < STEPS else None
+    loss = queued[0].result().metrics["loss:mean"]
+    grad_norm = queued[1].result().metrics["grad_norm"]
+    print(json.dumps({"step": step, "loss": round(loss, 4), "grad_norm": round(grad_norm, 3)}))
+    if checkpoint:
+        print("checkpoint:", checkpoint.result().path)
+    queued = following
+
+# 7. Save the full model with the LoRA merged in (about 12 GB), which a GR00T
+#    policy loads.
+print("weights:", training_client.save_weights_for_sampler(name="abc-sim").result().path)
+```
+
+On the ABC sim's 29 recordings (about 76,000 frames), a step takes about 3.8 s and the 500 steps about 35 minutes. The loss falls from about 0.20 at step 1 to about 0.04 by step 100 and 0.02 by step 500.
+
+## Adapting it
+
+- **Another robot.** Change `CAMERAS`, `ARMS` and the topic names in `read_recording` to match your recordings; a recording's `.json` lists its `cameras` and `topics`. `training_client.get_info().model_data` reports the image, state and action names the model expects, and a datum that does not match fails with a `ValueError` naming them.
+- **JSON topics.** If your robot publishes JSON numbers instead of packed floats, replace `struct.unpack` in `joints_at` with `json.loads`.
+- **Several tasks.** Give each episode its own prompt, such as the recording's task, and pass it to `datum` instead of `PROMPT`.
+- **Batch size.** A batch is a list of datums of any length. Several `forward_backward` calls before one `optim_step` add up their gradients, for a batch larger than one request.
+- **Resuming.** `training_client.load_state_with_optimizer(path)` with a checkpoint's path continues from that step.

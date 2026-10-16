@@ -55,7 +55,7 @@ export default defineConfig({
       // group for the version being viewed.
       sidebar: [
         { label: "0.x", items: sections("") },
-        { label: "1.0", items: sections("v1/", ["training"]) },
+        { label: "1.0", items: sections("v1/", ["training", "training-cookbook"]) },
       ],
     }),
   ],
