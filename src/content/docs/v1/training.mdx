@@ -62,6 +62,14 @@ adamo.LoraTraining(base_model: str, rank: int = 32, norm_stats: dict[str, NormSt
 | `save_weights(name, ttl_seconds=None)` | Stores the trained weights with their normalization stats and mapping. The result is a `ModelWeights` whose `path` is `adamo://training_runs/<run>/model_weights/<name>`. |
 | `save_state(name, ttl_seconds=None)` | Stores the weights and the optimizer state. The result's `path` goes to `LoraTraining.from_state(path)`. |
 | `LoraTraining.from_state(path)` | Starts a run from a saved training state. |
+| `action_horizon` | The number of steps in an action chunk of the base model. |
+| `id` | The run's id. |
+
+| Call | Result |
+|------|--------|
+| `forward_backward` | `loss`, the mean flow-matching loss over the datums of the call, and `metrics["example_count"]`, the number of datums whose gradients are summed since the last `optim_step`. |
+| `optim_step` | `None`. |
+| `save_weights`, `save_state` | A `ModelWeights` with `path`, and `expires_at`, which is `None` when kept forever. |
 
 Each method returns at once with a future, and `result()` waits for it. The worker queues calls and runs them in the order they were made, so you can make as many as you like before waiting on any: send at least the next `forward_backward` and `optim_step` before waiting on the current ones, so the GPU always has work queued. The worker prepares the next batch while the GPU works on the current one. Results are kept for the whole run, so a future can be waited on at any time. `result(timeout=None)` raises `TimeoutError` if the timeout passes first, and the call keeps running. In async code, `await future.result_async(timeout=None)` waits without blocking the event loop, and `forward_backward_async`, `optim_step_async`, `save_weights_async` and `save_state_async` return the future to await: `future = await training.forward_backward_async(data)`. A large `forward_backward` goes to the worker in several requests, and its result covers the whole batch. A call that cannot reach the worker is sent again for up to 5 minutes. Once a `forward_backward`, `optim_step` or `set_norm_stats` call fails, no later call runs, and their futures say which call failed. A failed save stops nothing.
 
@@ -94,11 +102,16 @@ with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", norm_stats=nor
         training.optim_step(adamo.AdamParams(learning_rate=2.5e-5)).result()
 ```
 
+| Input | Shape | Type | Notes |
+|-------|-------|------|-------|
+| `images[key]` | (height, width, 3) | `uint8`, floats in 0..1 in either channel order, or PNG or JPEG bytes | The worker decodes PNG and JPEG bytes, which are usually smaller to send than arrays. `physical-intelligence/pi0.5` takes up to three images, in the order of the image keys: the main camera, then the left wrist camera, then the right wrist camera. A run with fewer cameras costs less per step, as only the cameras given are computed. |
+| `state[key]` | (size,) | floats | Raw values, such as radians. |
+| `loss_fn_inputs[key]` | (`training.action_horizon`, size) | floats | Raw actions of this frame and the next ones at `frame_rate`. Where an episode ends sooner, repeat its last action, as `adamo.Dataset` does. |
+| `prompt` | | `str` | The task. |
+| `frame_rate` | | `int` | The frames a second of the state and actions. |
+
 - The keys of `images`, `state` and `loss_fn_inputs` are the robot's track and topic names. Saved weights keep them, which is how `robot.inference` knows what to read and where to publish.
-- An image is `uint8` with shape (height, width, 3), or floats in 0..1 in either channel order.
-- `physical-intelligence/pi0.5` takes up to three images, in the order of the image keys: the main camera, then the left wrist camera, then the right wrist camera. A run with fewer cameras costs less per step, as only the cameras given are computed.
-- State and action values are raw. The worker scales them with the run's `NormStats`, the 1st and 99th percentile of each key per dimension, and scales the same way at inference.
-- An action chunk has shape (50, size) for `physical-intelligence/pi0.5`: the actions of the next 50 frames at `frame_rate`.
+- The worker scales state and actions with the run's `NormStats`, the 1st and 99th percentile of each key per dimension, and scales the same way at inference.
 - A run keeps one set of keys, one frame rate and one set of normalization stats. A datum with other keys, or a second, different set of stats, raises.
 - One `forward_backward` request is limited to 512 MB.
 
