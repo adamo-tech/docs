@@ -601,6 +601,63 @@ pub fn detect_encoder() -> Result<&'static str>;
 
 Returns the best available H.264 encoder for the host (NVENC, VA-API, VideoToolbox, x264) or `"none"` if no encoder is available.
 
+### `VideoReceiver`
+
+Subscribes to one of a robot's video tracks and decodes it to images, for inference and perception clients. Each receiver decodes every picture on its own worker thread, then keeps only the newest `max_queued_frames` decoded images (1 to 64). A slow consumer drops whole decoded images, never encoded frames, so it still gets the most recent picture without decode artifacts.
+
+```rust
+use adamo::video_receiver::{VideoFrame, VideoImageFrame, VideoOutput, VideoReceiver};
+
+impl VideoReceiver {
+    /// An H.264 track, decoded to CPU RGBA.
+    pub fn subscribe(session: Arc<Session>, robot: &str, track: &str, max_queued_frames: usize) -> Result<Self>;
+    /// The codec must match the publisher's: `VideoCodec::H264` or `VideoCodec::Av1`.
+    pub fn subscribe_with_codec(session: Arc<Session>, robot: &str, track: &str, max_queued_frames: usize, codec: VideoCodec) -> Result<Self>;
+    /// Requests an exact output format and memory, such as NV12 or RGBA in CUDA memory.
+    pub fn subscribe_with_output(session: Arc<Session>, robot: &str, track: &str, max_queued_frames: usize, codec: VideoCodec, output: VideoOutput) -> Result<Self>;
+
+    /// The oldest queued image as CPU RGBA, or `None` after `timeout`.
+    pub fn recv(&self, timeout: Duration) -> Result<Option<VideoFrame>>;
+    /// The oldest queued image in the requested output, without copying it to the CPU.
+    pub fn recv_image(&self, timeout: Duration) -> Result<Option<VideoImageFrame>>;
+    /// Stops the decoder worker; also runs on drop.
+    pub fn close(&self) -> Result<()>;
+}
+
+pub struct VideoFrame {
+    pub rgba: Vec<u8>,          // tightly packed RGBA, width × height × 4 bytes
+    pub width: u32,
+    pub height: u32,
+    pub sequence: u64,          // frame number from the robot's encoder
+    pub capture_time_us: u64,   // capture time stamped by the robot
+    pub keyframe: bool,
+}
+
+pub struct VideoOutput {
+    pub capability: adamo::io::video::VideoFrameCapability, // default: RGBA in CPU memory
+    pub device_ordinal: u32,                                // CUDA device; default 0
+}
+```
+
+`VideoCodec` is `adamo::media::video::VideoCodec`. `VideoImageFrame` has the same fields as `VideoFrame`, but in place of `rgba` it carries `image`, an `adamo::io::video::RawFrame` that keeps GPU storage. `to_rgba()` or `into_rgba()` converts it to a CPU `VideoFrame` when needed. Requires the `video` feature.
+
+```rust
+use std::{sync::Arc, time::Duration};
+use adamo::{Session, video_receiver::VideoReceiver};
+
+let session = Arc::new(Session::open_default(&std::env::var("ADAMO_API_KEY")?)?);
+let receiver = VideoReceiver::subscribe(session.clone(), "my-robot", "head", 1)?;
+loop {
+    match receiver.recv(Duration::from_secs(5)) {
+        Ok(Some(frame)) => { /* frame.rgba: frame.width × frame.height × 4 bytes */ }
+        Ok(None) => eprintln!("no frame from my-robot/head in 5 s"),
+        Err(error) => eprintln!("{error}"), // see below for which errors recover
+    }
+}
+```
+
+The `subscribe` calls return an error if the requested codec, output format or memory has no decoder on this host. They never fall back silently to a different output. If a picture fails to decode, `recv` returns that error once. The receiver then resets its decoder and asks the robot for a keyframe, so the next calls deliver frames again. If the worker itself stops, every later `recv` returns an error that says to close and reopen the receiver. The CUDA output paths have the same requirements and limits as in [Python](/v1/python-sdk/#copies-cpu-access-and-requirements).
+
 ---
 
 ## Audio: `feature = "audio"`
