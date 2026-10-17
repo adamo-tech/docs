@@ -20,7 +20,10 @@ for step in range(2000):
     optim_step_future.result()
 
 weights = training_client.save_weights_for_sampler(name="stack-v1").result()
+training_client.save_state(name="stack-v1").result()   # what robot.inference(lora="stack-v1") runs
 ```
+
+To run what you trained on a robot, pass the same name to `robot.inference`: see [Running a trained policy](#running-a-trained-policy).
 
 ## How calls run
 
@@ -85,7 +88,7 @@ A datum whose names or shapes do not match fails with a `ValueError` that names 
 | `forward_backward(data, "flow_matching")` | `ForwardBackwardOutput`: `metrics["loss:mean"]` is the batch's mean flow-matching loss, and `loss_fn_outputs` holds one `{"loss": TensorData}` of shape `[1]` per datum. |
 | `optim_step(adam_params)` | `OptimStepResponse`: `metrics` holds `grad_norm` (before clipping), `learning_rate` and the model's `step`. |
 | `save_weights_for_sampler(name)` | `SaveWeightsForSamplerResponse.path`: the full model with the LoRA merged in, about 12 GB, which a GR00T policy loads. |
-| `save_state(name)` | `SaveWeightsResponse.path`: the trained weights (the LoRA adapters, position embedding, layer norm and projectors) and their AdamW state, about 470 MB, for `load_state(path)` (weights only) or `load_state_with_optimizer(path)`. A GR00T policy cannot load it on its own. |
+| `save_state(name)` | `SaveWeightsResponse.path`: the trained weights (the LoRA adapters, position embedding, layer norm and projectors) and their AdamW state, about 470 MB, for `load_state(path)` (weights only) or `load_state_with_optimizer(path)`. [Hosted inference](#running-a-trained-policy) runs it by `name`. |
 | `get_info()` | `GetInfoResponse.model_data`: `action_horizon` and the `image_names`, `state_dims` and `action_dims` above. |
 
 A trained GR00T policy predicts `[action_horizon, action_dims[name]]` absolute actions for each action name from one frame of images, state and prompt, the same shapes as `loss_fn_inputs`.
@@ -119,3 +122,53 @@ def datum(images, state, actions, t, prompt, horizon=40):
 ```
 
 The server starts this robot's projectors from those of a pretrained GR00T embodiment with a similar layout, so its loss starts low. A rank-32 LoRA at batch 54 and `learning_rate=5e-4` takes about 3.7 s per `forward_backward` and `optim_step`, and its loss falls from about 0.12 at step 10 to about 0.04 by step 50.
+
+## Running a trained policy
+
+`robot.inference(prompt, lora=name)` runs GR00T N1.7 with the LoRA you saved with `save_state(name)` against a live robot. The policy runs on Adamo's GPUs: it watches the robot's cameras and publishes actions on its control channel, and nothing runs on your machine. Requires SDK 1.0.11 or later.
+
+```python
+import time
+import adamo
+
+training_client.save_state(name="abc-sim-r64-b256-500").result()
+
+with adamo.Robot(name="abc-sim") as robot:
+    with robot.inference("sim put the plastic bottles in the bin", lora="abc-sim-r64-b256-500") as run:
+        while True:
+            status = run.status()
+            if status["policy_error"]:
+                raise RuntimeError(status["policy_error"])
+            if status["run"]:
+                print("actions published:", status["run"]["actions_published"])
+            else:
+                print("policy", status["policy"], "- waiting to start")
+            time.sleep(5)
+```
+
+Leaving the `with` block stops the run and releases the robot. `inference` returns as soon as the service accepts the request; `status()` and `stop()` work as for any [cloud inference](/v1/python-sdk/#cloud-inference) run.
+
+- `lora` names a `save_state` checkpoint of this account's GR00T LoRA training. Use the name you saved it under, not the returned `path`. A `save_weights_for_sampler` save is a full model and cannot be run this way.
+- `lora` on its own selects GR00T. `policy="gr00t"` without `lora` runs the base GR00T N1.7 weights, which have not been trained on your robot.
+- Switching to another LoRA, even during a run, takes a fraction of a second. The first run of a prompt the policy has not seen compiles for about a minute first. After a cold start, the policy loads and compiles for up to about 10 minutes before the run starts.
+- The policy predicts a 40-step chunk in about 23 ms, executes 20 steps of it at 30 Hz, and asks for the next chunk 8 steps before they run out.
+
+The hosted GR00T policy is set up for [the ABC sim's layout](#example-the-abc-sim), and expects the robot to publish:
+
+| Stream | Key | Format |
+|---|---|---|
+| Cameras | `{robot}/head`, `{robot}/wrist_left`, `{robot}/wrist_right` video tracks | `head` is a side-by-side stereo pair, and the policy uses its left half. Each image is letterboxed to 224×224, as in the recordings. |
+| State | `{robot}/action/joints` | The joint target the robot applies: a big-endian u64 timestamp in µs, then 14 big-endian float32s, `[left_arm × 6, left_gripper, right_arm × 6, right_gripper]`. |
+| Actions | `{robot}/control/joint_state` | Published by the policy as JointState JSON, 14 absolute joint targets in the same order. |
+
+The ABC sim publishes all of these. `uv run --project sim/abc sim/abc/main.py --inference --lora abc-sim-r64-b256-500` in the [adamo repository](https://github.com/adamo-tech/adamo) starts the sim and the policy together.
+
+Over HTTP, with your organization API key:
+
+```bash
+API=https://api.adamohq.com/api/inference
+curl -X POST $API/start -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
+  -d '{"robot_name": "abc-sim", "prompt": "sim put the plastic bottles in the bin", "policy": "gr00t", "lora": "abc-sim-r64-b256-500"}'
+curl "$API/status?policy=gr00t" -H "X-API-Key: $ADAMO_API_KEY"
+curl -X POST "$API/stop?policy=gr00t" -H "X-API-Key: $ADAMO_API_KEY"
+```
