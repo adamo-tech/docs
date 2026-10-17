@@ -239,10 +239,12 @@ Pass `record=True` (or a `Recording`) to the constructor to have the Adamo data 
 ### Cloud inference
 
 ```python
-robot.inference(prompt: str) -> Inference
+robot.inference(prompt: str, *, policy: str | None = None, lora: str | None = None) -> Inference
 ```
 
-Run the hosted policy against this robot. It watches the robot's cameras and publishes actions on its control channel. `inference` returns as soon as the service accepts the request.
+Run a hosted policy against this robot. It watches the robot's cameras and publishes actions on its control channel. `inference` returns as soon as the service accepts the request.
+
+`policy` is `"abc"` (ABC-DiT, the default) or `"gr00t"` (GR00T N1.7). GR00T runs the LoRA you trained and saved with `save_state(name)`, named by `lora`; `lora` on its own selects GR00T. See [Running a trained policy](/v1/training/#running-a-trained-policy). Starting one policy stops a run of the other that this robot started. `policy` and `lora` require SDK 1.0.11 or later.
 
 After a cold start the policy compiles first (under a minute). The service starts the run as soon as the policy is ready, so follow it with `Inference.status()`:
 
@@ -283,6 +285,8 @@ curl -X POST $API/start -H "X-API-Key: $ADAMO_API_KEY" \
 curl $API/status -H "X-API-Key: $ADAMO_API_KEY"
 curl -X POST $API/stop -H "X-API-Key: $ADAMO_API_KEY"
 ```
+
+`/start` also takes `"policy"` and `"lora"`, and `/status` and `/stop` take `?policy=gr00t` for a GR00T run.
 
 ### Lifecycle
 
