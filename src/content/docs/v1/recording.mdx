@@ -133,7 +133,7 @@ dataset = client.export(recordings, adamo.Export(
 
 The video is copied into the dataset as recorded, except for a single eye of a stereo track, which is cropped and encoded again. Recordings exported together must share one frame rate and, without `images`, one set of cameras; any that do not, or that lack a topic in `state` or `action`, are skipped with a warning that names each one and why. So is a recording that still cannot be downloaded after its retries; the export raises a `ValueError` only when none can be.
 
-The dataset goes to `lerobot-{hash of the recordings, config and decoders}` in the current folder unless `output_folder=` says where. An existing folder is opened as it is, so running the same export again is instant. The recordings are downloaded to a temporary folder unless `download_folder=` keeps them.
+The dataset goes to `lerobot-{hash of the recordings, config and decoders}` in the current folder unless `output_folder=` says where. An existing folder is opened as it is, so running the same export again is instant. A dataset missing a recording that could not be downloaded is saved under the hash of the recordings it holds, so the next export downloads the missing one again. The recordings are downloaded to a temporary folder unless `download_folder=` keeps them.
 
 The Export Dataset button on the Recordings page writes this code for the current filters, with the state, action, outcomes and prompts you pick.
 
