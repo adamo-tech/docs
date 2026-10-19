@@ -55,8 +55,9 @@ import adamo
 | `Recording` / `ControllerMask` | What the Adamo data service records for this robot. |
 | `Recordings` / `RecordingInfo` | List and download your organization's recordings. |
 | `Inference` | A cloud policy run started by `Robot.inference`. |
-| `ServiceClient` / `TrainingClient` / `APIFuture` | Train a policy on Adamo's GPUs with Tinker's API (1.0.10+). |
-| `types` | Training data and results: `Datum`, `ModelInput`, `ImageChunk`, `StateChunk`, `TextChunk`, `TensorData`, `AdamParams`, ... |
+| `LoraTraining` / `Dataset` | A LoRA run on a hosted base model, and a dataset built on Adamo from recordings. See [Training and Running Policies](/v1/training/). |
+| `Datum` / `ModelInput` / `FramePointer` / `NormStats` / `AdamParams` | What a training loop sends: examples, their normalization stats and optimizer settings. |
+| `ModelWeights` | Weights saved by a training run, which `Robot.inference` runs by `path`. |
 | `FaceBlur` | Face masking settings for a video track. |
 | `EncoderSelectionError` / `EncoderLibraryError` | No requested encoder could start. |
 | `xr` | Typed XR tracking messages and `subscribe_xr_control`. |
@@ -239,54 +240,18 @@ Pass `record=True` (or a `Recording`) to the constructor to have the Adamo data 
 ### Cloud inference
 
 ```python
-robot.inference(prompt: str, *, policy: str | None = None, lora: str | None = None) -> Inference
+robot.inference(policy: str, **arguments) -> Inference
 ```
 
-Run a hosted policy against this robot. It watches the robot's cameras and publishes actions on its control channel. `inference` returns as soon as the service accepts the request.
-
-`policy` is `"abc"` (ABC-DiT, the default) or `"gr00t"` (GR00T N1.7). GR00T runs the LoRA you trained and saved with `save_state(name)`, named by `lora`; `lora` on its own selects GR00T. See [Running a trained policy](/v1/training/#running-a-trained-policy). Starting one policy stops a run of the other that this robot started. `policy` and `lora` require SDK 1.0.11 or later.
-
-After a cold start the policy compiles first (under a minute). The service starts the run as soon as the policy is ready, so follow it with `Inference.status()`:
-
-| Key | Meaning |
-| --- | --- |
-| `policy` | `"compiling"` after a cold start, then `"ready"`. |
-| `policy_error` | Why the policy failed to load, or `None`. |
-| `start_pending` | The start is still waiting for the policy to be ready. |
-| `run` | The live run's progress (cameras, actions published, inference latency), or `None` when nothing is running. |
-| `last_stop` | How the previous run ended. |
-
-`Inference.stop()` stops the run, and cancels the start if it is still waiting. It is idempotent. Leaving a `with robot.inference(...)` block, `robot.close()`, or the robot being collected also stops it. Starting again while a start is pending raises `ValueError`.
+Run a policy against this robot. `policy` is the path of weights saved by a training run, or the name of a model Adamo serves, and the other arguments go to the policy, most often `prompt`. It reads the robot's cameras and state and publishes actions on its control channels. `inference` returns as soon as the service accepts the request; the run then waits for a GPU and for the policy to load.
 
 ```python
-import time
-import adamo
-
-with adamo.Robot(name="abc-sim") as robot:
-    with robot.inference("put the plastic bottles in the bin") as run:
-        while True:
-            status = run.status()
-            if status["policy_error"]:
-                raise RuntimeError(status["policy_error"])
-            if status["run"]:
-                print("actions published:", status["run"]["actions_published"])
-            else:
-                print("policy", status["policy"], "- waiting to start")
-            time.sleep(5)
+with adamo.Robot(name="yam-london") as robot:
+    with robot.inference("adamo://training_runs/<run>/model_weights/stack-v1", prompt="stack the cubes") as run:
+        run.wait()
 ```
 
-The same calls are available over HTTP with your organization API key, for use without the SDK:
-
-```bash
-API=https://api.adamohq.com/api/inference
-curl -X POST $API/start -H "X-API-Key: $ADAMO_API_KEY" \
-  -H 'content-type: application/json' \
-  -d '{"robot_name": "abc-sim", "prompt": "put the plastic bottles in the bin"}'
-curl $API/status -H "X-API-Key: $ADAMO_API_KEY"
-curl -X POST $API/stop -H "X-API-Key: $ADAMO_API_KEY"
-```
-
-`/start` also takes `"policy"` and `"lora"`, and `/status` and `/stop` take `?policy=gr00t` for a GR00T run.
+`Inference.status()` returns a dict, `wait()` blocks until the run stops, and `stop()` ends it. See [Training and Running Policies](/v1/training/#running-a-policy-on-a-robot) for the keys a policy reads and writes, the control messages it publishes, and the HTTP calls.
 
 ### Lifecycle
 
@@ -307,33 +272,6 @@ adamo.Robot.local(name: str, port: int = 17447, pairing_key: str | None = None) 
 ```
 
 Start a robot locally without cloud login; the SDK manages its certificates. `robot.local_port` and `robot.local_pairing_key` report what it listens on.
-
----
-
-## Training
-
-```python
-class adamo.ServiceClient:
-    def __init__(self, base_url: str | None = None, api_key: str | None = None): ...
-    def create_lora_training_client(self, base_model: str, rank: int = 32, seed: int | None = None) -> TrainingClient: ...
-
-class adamo.TrainingClient:
-    model_id: str
-    def forward_backward(self, data: list[types.Datum], loss_fn: str) -> APIFuture[types.ForwardBackwardOutput]: ...
-    def optim_step(self, adam_params: types.AdamParams) -> APIFuture[types.OptimStepResponse]: ...
-    def save_state(self, name: str, ttl_seconds: int | None = None) -> APIFuture[types.SaveWeightsResponse]: ...
-    def save_weights_for_sampler(self, name: str, ttl_seconds: int | None = None) -> APIFuture[types.SaveWeightsForSamplerResponse]: ...
-    def load_state(self, path: str) -> APIFuture[types.LoadWeightsResponse]: ...
-    def load_state_with_optimizer(self, path: str) -> APIFuture[types.LoadWeightsResponse]: ...
-    def get_info(self) -> types.GetInfoResponse: ...
-
-class adamo.APIFuture:
-    request_id: str
-    def result(self, timeout: float | None = None): ...
-    async def result_async(self, timeout: float | None = None): ...
-```
-
-Each `TrainingClient` method also has an `*_async` form. `base_url` falls back to `ADAMO_TRAINING_URL`, then to Adamo's training server; `api_key` falls back to `ADAMO_API_KEY`. See [Training Policies](/v1/training/) for the data format and GR00T N1.7's input and output shapes.
 
 ---
 
@@ -660,7 +598,7 @@ recordings.list(
 recordings.download(recordings: list[RecordingInfo], directory=".") -> list[Path]
 ```
 
-`list` returns recordings that overlap `start`..`end`, oldest first. `download` writes each recording to `{directory}/{device}/{name}.rrd` with its `.json` entry beside it, skipping files already there. Each `RecordingInfo` carries `id`, `device`, `session_id`, `display_name`, `description`, `tags`, `controller`, `started_at`, `ended_at`, `frame_count`, `cameras`, `tasks`, `size_bytes`, and `complete`.
+`list` returns recordings that overlap `start`..`end`, oldest first. `download` writes each recording to `{directory}/{device}/{name}.rrd` with its `.json` entry beside it, skipping files already there. A download that fails is retried with a fresh link, resuming from the bytes already written, with 1, 2, 4 and up to 30 s between attempts for up to 5 minutes, unless the recordings API refuses it (400, 401, 403 or 404). Each `RecordingInfo` carries `id`, `device`, `session_id`, `display_name`, `description`, `tags`, `controller`, `started_at`, `ended_at`, `frame_count`, `cameras`, `tasks`, `size_bytes`, and `complete`.
 
 ---
 

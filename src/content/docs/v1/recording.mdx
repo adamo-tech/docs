@@ -129,10 +129,11 @@ dataset = client.export(recordings, adamo.Export(
 - `state` and `action` name recorded topics, or fields inside a JSON topic (`"arm/state.position"`), concatenated in that order. Each is sampled at every video frame: a frame holds the latest value sent at or before it.
 - `outcomes` selects which Episodes recordings are kept by how their task ended: `"success"` (the default), `"failure"` and `"abort"`.
 - `tasks` maps each task to the prompt written into the dataset, and keeps only the recordings of those tasks, along with recordings that have no task. Without it, every task is kept and its prompt is its name as a sentence.
+- `images` names the camera tracks to keep, such as `["front", "zed.left"]`. `zed.left` and `zed.right` are the two eyes of a side-by-side stereo track. Without it, every camera is kept whole.
 
-The video is copied into the dataset as recorded. Recordings exported together must share one frame rate and one set of cameras; any that do not, or that lack a topic in `state` or `action`, are skipped with a warning that names each one and why.
+The video is copied into the dataset as recorded, except for a single eye of a stereo track, which is cropped and encoded again. Recordings exported together must share one frame rate and, without `images`, one set of cameras; any that do not, or that lack a topic in `state` or `action`, are skipped with a warning that names each one and why. So is a recording that still cannot be downloaded after its retries; the export raises a `ValueError` only when none can be.
 
-The dataset goes to `lerobot-{hash of the recordings, config and decoders}` in the current folder unless `output_folder=` says where. An existing folder is opened as it is, so running the same export again is instant. The recordings are downloaded to a temporary folder unless `download_folder=` keeps them.
+The dataset goes to `lerobot-{hash of the recordings, config and decoders}` in the current folder unless `output_folder=` says where. An existing folder is opened as it is, so running the same export again is instant. A dataset missing a recording that could not be downloaded is saved under the hash of the recordings it holds, so the next export downloads the missing one again. The recordings are downloaded to a temporary folder unless `download_folder=` keeps them.
 
 The Export Dataset button on the Recordings page writes this code for the current filters, with the state, action, outcomes and prompts you pick.
 
