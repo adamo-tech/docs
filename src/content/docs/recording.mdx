@@ -59,7 +59,7 @@ joint_pos.put(b"[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]")?;
 
 | Mode | For | Files |
 |---|---|---|
-| `RecordingMode.Episodes(frame_rate, min_duration=2.0)` (default) | Training control policies | One per task, from its start to its stop or abort. Tasks shorter than `min_duration` seconds are left out. |
+| `RecordingMode.Episodes(frame_rate, min_duration=2.0)` | Training control policies | One per task, from its start to its stop or abort. Tasks shorter than `min_duration` seconds are left out. |
 | `RecordingMode.Continuous(frame_rate)` | Training video models | One per stretch of recorded time. |
 | `RecordingMode.Interventions(pre_roll=5.0, post_roll=0.0, frame_rate)` | Auditing | One whenever the controller changes, with `pre_roll` seconds before it and `post_roll` seconds after. |
 
@@ -67,7 +67,7 @@ Files are cut into parts after `max_duration` seconds (default 1800) or `max_siz
 
 ### Frame rate
 
-`frame_rate` is `FrameRate.Fixed(rate)` for a number of frames a second, `FrameRate.Max()` (the default) for the rate of the fastest camera, or `FrameRate.Raw()` to keep each camera's video as the robot sent it. The data service puts every camera on that one clock as it records, so frame *k* of each camera is at *k* / `rate` seconds into the file, re-encoded with a keyframe every `gop` frames (default 2): `FrameRate.Fixed(30, gop=4)`, `FrameRate.Max(gop=4)`. Recordings saved with `FrameRate.Raw()` can be downloaded but not exported.
+`frame_rate` is `FrameRate.Fixed(rate)` for a number of frames a second, `FrameRate.Max()` (the default when a mode is given without one) for the rate of the fastest camera, or `FrameRate.Raw()` to keep each camera's video as the robot sent it. The data service puts every camera on that one clock as it records, so frame *k* of each camera is at *k* / `rate` seconds into the file, re-encoded with a keyframe every `gop` frames (default 2): `FrameRate.Fixed(30, gop=4)`, `FrameRate.Max(gop=4)`. Recordings saved with `FrameRate.Raw()` can be downloaded but not exported.
 
 `gop` is the number of frames from one keyframe to the next. A training loader can only start decoding at a keyframe, so a small `gop` lets it jump to any frame quickly, and a larger one makes smaller files. With `FrameRate.Raw()` the video keeps the keyframes the robot's encoder made.
 
