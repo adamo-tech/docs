@@ -53,7 +53,7 @@ adamo.Dataset(recordings: list[RecordingInfo], export: Export)
 adamo.LoraTraining(base_model: str, rank: int = 32, norm_stats: dict[str, NormStats] | None = None, seed: int | None = None)
 ```
 
-`LoraTraining` starts a LoRA run and waits until its worker is ready, which includes getting a GPU and loading the base model. The base models are `physical-intelligence/pi0.5` (Physical Intelligence's `pi05_base`, 50-step action chunks), `robocurve/pi0.5-yam` (pi0.5 fully fine-tuned by robocurve on AllenAI's MolmoAct2 bimanual YAM data, 16-step action chunks, Gemma license), and `nvidia/GR00T-N1.7` (NVIDIA's GR00T N1.7 3B, 40-step action chunks). `rank` sets both of a pi0.5 model's adapters. On `nvidia/GR00T-N1.7`, `rank` sets the adapters of its action head, and the vision-language model stays frozen. GR00T sees each camera letterboxed to 224×224. A GR00T run whose state and actions are each 14 values, two arms of six joints then a gripper, starts from the bimanual YAM embodiment GR00T was pretrained on. Its arms predict actions relative to the current state when `norm_stats` has a `relative_action` entry, the 1st and 99th percentiles of each chunk step's action minus the state (40 × 14 values, flattened), and absolute actions otherwise; its grippers are always absolute. Leaving the `with` block frees the GPU, and weights that were not saved by then are gone.
+`LoraTraining` starts a LoRA run and waits until its worker is ready, which includes getting a GPU and loading the base model. The base models are `physical-intelligence/pi0.5` (Physical Intelligence's `pi05_base`, 50-step action chunks), `robocurve/pi0.5-yam` (pi0.5 fully fine-tuned by robocurve on AllenAI's MolmoAct2 bimanual YAM data, 16-step action chunks, Gemma license), and `nvidia/GR00T-N1.7` (NVIDIA's GR00T N1.7 3B, 40-step action chunks). `rank` sets both of a pi0.5 model's adapters. On `nvidia/GR00T-N1.7`, `rank` sets the adapters of its action head, and the vision-language model stays frozen. GR00T sees each camera letterboxed to 224×224. A GR00T run whose state and actions are each 14 values, two arms of six joints then a gripper, starts from the bimanual YAM embodiment GR00T was pretrained on. Its arms predict actions relative to the current state when `norm_stats` has a `relative_action` entry, the 1st and 99th percentiles of each chunk step's action minus the state (40 × 14 values, flattened), and absolute actions otherwise; its grippers are always absolute. Leaving the `with` block frees the GPU, and weights that were not saved by then are gone; see [When a run ends](#when-a-run-ends).
 
 | Method | Description |
 |--------|-------------|
@@ -78,6 +78,25 @@ Each method returns at once with a future, and `result()` waits for it. The work
 `seed` sets the adapters' initial weights and the training noise, and is random when left out. A run started with `from_state` keeps the seed of the run that saved it.
 
 Saved model weights and training states are kept until `ttl_seconds` runs out, and forever with `ttl_seconds=None`. A name can be used once per run.
+
+### When a run ends
+
+A run ends and frees its GPU when its `with` block ends or `stop()` is called, and also when its client hasn't reached the worker for 10 minutes. While a `LoraTraining` is open, the SDK checks in with the worker every 30 s, so time spent between calls, such as collecting rollouts or evaluating, keeps the run. A client that is killed, loses its network or sleeps for 10 minutes loses its run, and its next call raises with the reason.
+
+Weights and optimizer state that were not saved are gone when a run ends, so save a training state every few hundred steps, and continue from the latest one with `LoraTraining.from_state` after a crash or a lost connection:
+
+```python
+with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as training:
+    for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
+        forward_backward_future = training.forward_backward(data, loss_fn="flow_matching")
+        optim_step_future = training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
+        forward_backward_future.result()
+        optim_step_future.result()
+        if (step + 1) % 500 == 0:
+            training.save_state(f"stack-v1/step-{step + 1}")
+```
+
+A later script continues from the latest one with `adamo.LoraTraining.from_state("stack-v1/step-1500")`.
 
 ## Your own data
 
