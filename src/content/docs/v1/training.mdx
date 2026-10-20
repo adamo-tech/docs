@@ -22,7 +22,7 @@ with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as tr
         optim_step_future = training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
         forward_backward_future.result()
         optim_step_future.result()
-    weights = training.save_weights(name="stack-v1", ttl_seconds=30 * 24 * 3600).result()
+    weights = training.save_weights("stack-v1", ttl_seconds=30 * 24 * 3600).result()
 
 with adamo.Robot(name="yam-london") as robot:
     with robot.inference(weights.path, prompt="stack the cubes") as run:
@@ -59,9 +59,9 @@ adamo.LoraTraining(base_model: str, rank: int = 32, norm_stats: dict[str, NormSt
 |--------|-------------|
 | `forward_backward(data, loss_fn="flow_matching")` | Adds the gradients of a list of `Datum` to the run's gradient sum. The result has `loss` and `metrics`. `"flow_matching"` is the only `loss_fn`. |
 | `optim_step(adam_params)` | Applies AdamW to the mean of the summed gradients and clears them. Several `forward_backward` calls before one `optim_step` act as one larger batch. |
-| `save_weights(name, ttl_seconds=None)` | Stores the trained weights with their normalization stats and mapping. The result is a `ModelWeights` whose `path` is `adamo://training_runs/<run>/model_weights/<name>`. |
-| `save_state(name, ttl_seconds=None)` | Stores the weights and the optimizer state. The result's `path` goes to `LoraTraining.from_state(path)`. |
-| `LoraTraining.from_state(path)` | Starts a run from a saved training state. |
+| `save_weights(path, ttl_seconds=None, override=False)` | Stores the trained weights with their normalization stats and mapping at `path`, which `robot.inference(path)` runs. |
+| `save_state(path, ttl_seconds=None, override=False)` | Stores the weights and the optimizer state at `path`, which `LoraTraining.from_state(path)` resumes and `robot.inference(path)` also runs. |
+| `LoraTraining.from_state(path)` | Starts a run from the training state saved at `path`. |
 | `action_horizon` | The number of steps in an action chunk of the base model. |
 | `id` | The run's id. |
 
@@ -69,7 +69,7 @@ adamo.LoraTraining(base_model: str, rank: int = 32, norm_stats: dict[str, NormSt
 |------|--------|
 | `forward_backward` | `loss`, the mean flow-matching loss over the datums of the call, and `metrics["example_count"]`, the number of datums whose gradients are summed since the last `optim_step`. |
 | `optim_step` | `None`. |
-| `save_weights`, `save_state` | A `ModelWeights` with `path`, and `expires_at`, which is `None` when kept forever. |
+| `save_weights`, `save_state` | A `ModelWeights` with `path`, the path it was saved at, and `expires_at`, which is `None` when kept forever. |
 
 Each method returns at once with a future, and `result()` waits for it. The worker queues calls and runs them in the order they were made, so you can make as many as you like before waiting on any: send at least the next `forward_backward` and `optim_step` before waiting on the current ones, so the GPU always has work queued. The worker prepares the next batch while the GPU works on the current one. Results are kept for the whole run, so a future can be waited on at any time. `result(timeout=None)` raises `TimeoutError` if the timeout passes first, and the call keeps running. In async code, `await future.result_async(timeout=None)` waits without blocking the event loop, and `forward_backward_async`, `optim_step_async`, `save_weights_async` and `save_state_async` return the future to await: `future = await training.forward_backward_async(data)`. A large `forward_backward` goes to the worker in several requests, and its result covers the whole batch. A call that cannot reach the worker is sent again for up to 5 minutes. Once a `forward_backward`, `optim_step` or `set_norm_stats` call fails, no later call runs, and their futures say which call failed. A failed save stops nothing.
 
@@ -77,7 +77,7 @@ Each method returns at once with a future, and `result()` waits for it. The work
 
 `seed` sets the adapters' initial weights and the training noise, and is random when left out. A run started with `from_state` keeps the seed of the run that saved it.
 
-Saved model weights and training states are kept until `ttl_seconds` runs out, and forever with `ttl_seconds=None`. A name can be used once per run.
+Saved model weights and training states are kept until `ttl_seconds` runs out, and forever with `ttl_seconds=None`. A path is any name you choose, such as `stack-v1` or `yam/pi0.5/step-3000`, and is unique in your organization. Saving at a path that is already taken asks ``"`stack-v1` already exists, do you want to replace it? This action is irreversible. [y/N]"``, and raises `FileExistsError` unless the answer is yes, also when the script has no terminal to ask in. `override=True` replaces it without asking. The names of models Adamo serves, such as `physical-intelligence/pi0.5`, are reserved.
 
 ### When a run ends
 
@@ -140,7 +140,7 @@ with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", norm_stats=nor
 robot.inference(policy: str, **arguments) -> Inference
 ```
 
-`policy` is the path of weights saved by a training run, or the name of a model Adamo serves. The other arguments go to the policy, most often `prompt`. ModelWeights carry their mapping. A model name without its own mapping takes it as arguments:
+`policy` is the path your organization saved weights or a training state at, or the name of a model Adamo serves. The other arguments go to the policy, most often `prompt`. ModelWeights carry their mapping. A model name without its own mapping takes it as arguments:
 
 ```python
 robot.inference(
@@ -185,7 +185,7 @@ The same calls are available over HTTP with your organization API key:
 ```bash
 API=https://api.adamohq.com/api/inference
 curl -X POST $API/start -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
-  -d '{"robot_name": "yam-london", "policy": "adamo://training_runs/<run>/model_weights/stack-v1", "arguments": {"prompt": "stack the cubes"}}'
+  -d '{"robot_name": "yam-london", "policy": "stack-v1", "arguments": {"prompt": "stack the cubes"}}'
 curl "$API/status?inference_id=$INFERENCE_ID" -H "X-API-Key: $ADAMO_API_KEY"
 curl -X POST $API/stop -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
   -d "{\"inference_id\": \"$INFERENCE_ID\"}"
