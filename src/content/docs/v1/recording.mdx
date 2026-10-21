@@ -20,7 +20,7 @@ import adamo
 
 recording = adamo.Recording(
     adamo.ControllerMask.HUMAN | adamo.ControllerMask.POLICY,
-    mode=adamo.RecordingMode.Episodes(frame_rate=30),
+    mode=adamo.RecordingMode.Episodes(frame_rate=adamo.FrameRate.Fixed(30)),
     topics=["left/joint_pos", "left/joint_cmd"],
 )
 robot = adamo.Robot(name="my-arm", record=recording)
@@ -38,7 +38,7 @@ use adamo::{ControllerMask, FrameRate, Mode, PublisherOptions, Recording, Robot}
 
 let robot = Robot::new_default("ak_...", Some("my-arm"))?.with_recording(Recording {
     controller_mask: ControllerMask::HUMAN | ControllerMask::POLICY,
-    mode: Mode::Episodes { frame_rate: FrameRate::Fixed(NonZeroU32::new(30).unwrap()), min_duration: Duration::from_secs(2) },
+    mode: Mode::Episodes { frame_rate: FrameRate::Fixed { rate: NonZeroU32::new(30).unwrap(), gop: NonZeroU32::new(2).unwrap() }, min_duration: Duration::from_secs(2) },
     topics: vec!["left/joint_pos".to_owned(), "left/joint_cmd".to_owned()],
     ..Recording::default()
 });
@@ -48,6 +48,8 @@ joint_pos.put(b"[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]")?;
 
 </TabItem>
 </Tabs>
+
+This example records at a fixed 30 frames a second so the episodes can be [exported to LeRobot](#exporting-to-lerobot). `adamo.Recording()` on its own records human and policy sessions continuously, with each camera's video as the robot sent it (see [Frame rate](#frame-rate)).
 
 ### When it records
 
@@ -59,15 +61,27 @@ joint_pos.put(b"[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]")?;
 
 | Mode | For | Files |
 |---|---|---|
-| `RecordingMode.Episodes(frame_rate, min_duration=2.0)` (default) | Training control policies | One per task, from its start to its stop or abort. Tasks shorter than `min_duration` seconds are left out. |
-| `RecordingMode.Continuous(frame_rate)` | Training video models | One per stretch of recorded time. |
+| `RecordingMode.Episodes(frame_rate, min_duration=2.0)` | Training control policies | One per task, from its start to its stop or abort. Tasks shorter than `min_duration` seconds are left out. |
+| `RecordingMode.Continuous(frame_rate)` (default) | Training video models | One per stretch of recorded time. |
 | `RecordingMode.Interventions(pre_roll=5.0, post_roll=0.0, frame_rate)` | Auditing | One whenever the controller changes, with `pre_roll` seconds before it and `post_roll` seconds after. |
 
 Files are cut into parts after `max_duration` seconds (default 1800) or `max_size` bytes (default 1.5 GB).
 
 ### Frame rate
 
-`frame_rate` is a number of frames a second, `FrameRate.Max` (the default) for the rate of the fastest camera, or `FrameRate.Raw` to keep each camera's video as the robot sent it. The data service puts every camera on that one clock as it records, so frame *k* of each camera is at *k* / `frame_rate` seconds into the file. Recordings saved with `FrameRate.Raw` can be downloaded but not exported.
+`frame_rate` is one of:
+
+| Frame rate | Video in the file | Exports to LeRobot |
+|---|---|---|
+| `FrameRate.Raw()` (default) | Each camera's video as the robot sent it, at its own rate and with the keyframes the robot's encoder made. | No |
+| `FrameRate.Fixed(rate, gop=2)` | Every camera on one clock of `rate` frames a second. | Yes |
+| `FrameRate.Max(gop=2)` | Every camera on one clock at the rate of the fastest camera. | Yes |
+
+`FrameRate.Raw()` is the default for `adamo.Recording()` and for every mode given without a `frame_rate`, so `RecordingMode.Episodes()` records raw video too. The data service stores the video without decoding or re-encoding it, so nothing is lost to a second encode and recording costs no extra processing. Cameras keep their own timing, though, so a raw recording can be downloaded and viewed but not exported as a dataset: `Recordings.export` skips raw recordings with a warning, and raises a `ValueError` when every recording is raw.
+
+To record data for training a policy, give a clock instead: `RecordingMode.Episodes(frame_rate=adamo.FrameRate.Fixed(30))`. The data service then re-encodes every camera onto that one clock as it records, so frame *k* of each camera is at *k* / `rate` seconds into the file, with a keyframe every `gop` frames: `FrameRate.Fixed(30, gop=4)`, `FrameRate.Max(gop=4)`. A training loader can only start decoding at a keyframe, so a small `gop` lets it jump to any frame quickly, and a larger one makes smaller files.
+
+In Rust the same choices are `FrameRate::Raw`, `FrameRate::Fixed { rate, gop }` and `FrameRate::Max { gop }`; `Recording::default()` is `Mode::Continuous { frame_rate: FrameRate::Raw }`.
 
 ### Topics
 
@@ -111,7 +125,7 @@ recordings = client.list(
 client.download(recordings, "recordings")
 ```
 
-`list` also filters by `end`, `controllers`, `sessions`, `folder` and a `search` over names and notes. The Copy Query button on the Recordings page writes this code for the current filters.
+`list` also filters by `end`, `controllers`, `sessions`, `folder` and a `search` over names and notes. Each recording's `frame_rate` is the clock it was saved on: `FrameRate.Raw()`, or `FrameRate.Fixed(rate, gop)`, with `FrameRate.Max()` resolved to the rate of the fastest camera. The Copy Query button on the Recordings page writes this code for the current filters.
 
 ## Exporting to LeRobot
 
@@ -131,7 +145,7 @@ dataset = client.export(recordings, adamo.Export(
 - `tasks` maps each task to the prompt written into the dataset, and keeps only the recordings of those tasks, along with recordings that have no task. Without it, every task is kept and its prompt is its name as a sentence.
 - `images` names the camera tracks to keep, such as `["front", "zed.left"]`. `zed.left` and `zed.right` are the two eyes of a side-by-side stereo track. Without it, every camera is kept whole.
 
-The video is copied into the dataset as recorded, except for a single eye of a stereo track, which is cropped and encoded again. Recordings exported together must share one frame rate and, without `images`, one set of cameras; any that do not, or that lack a topic in `state` or `action`, are skipped with a warning that names each one and why. So is a recording that still cannot be downloaded after its retries; the export raises a `ValueError` only when none can be.
+Only recordings saved on a clock, with `FrameRate.Fixed` or `FrameRate.Max`, can be exported; see [Frame rate](#frame-rate). The video is copied into the dataset as recorded, except for a single eye of a stereo track, which is cropped and encoded again. Recordings exported together must share one frame rate and, without `images`, one set of cameras; any that do not, or that lack a topic in `state` or `action`, are skipped with a warning that names each one and why. So is a recording that still cannot be downloaded after its retries; the export raises a `ValueError` only when none can be.
 
 The dataset goes to `lerobot-{hash of the recordings, config and decoders}` in the current folder unless `output_folder=` says where. An existing folder is opened as it is, so running the same export again is instant. A dataset missing a recording that could not be downloaded is saved under the hash of the recordings it holds, so the next export downloads the missing one again. The recordings are downloaded to a temporary folder unless `download_folder=` keeps them.
 
