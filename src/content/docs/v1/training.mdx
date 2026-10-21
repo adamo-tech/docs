@@ -34,10 +34,10 @@ Every call authenticates with your organization API key, from `ADAMO_API_KEY`.
 ## Datasets
 
 ```python
-adamo.Dataset(recordings: list[RecordingInfo], export: Export)
+adamo.Dataset(recordings: list[RecordingInfo], export: Export, cache_ttl_seconds: int | None = 86400)
 ```
 
-`adamo.Dataset` builds a LeRobot dataset from recordings on Adamo and waits until it is ready. It applies the same checks as [`Recordings.export`](/v1/recording/#exporting-to-lerobot) and skips recordings with the same warnings, including those raised while the dataset was built on Adamo. A build where a recording could not be downloaded fails and says which one, and creating the dataset again retries it. It downloads no video: a batch refers to each frame by a `FramePointer`, and the training worker reads the pixels. The same recordings and export are built once and reused for 7 days, then built again on the next request. Its calls to Adamo are retried on network errors and 408, 409, 429 and 5xx answers, with 1, 2, 4 and up to 30 s between attempts for up to 5 minutes.
+`adamo.Dataset` builds a LeRobot dataset from recordings on Adamo and waits until it is ready. It applies the same checks as [`Recordings.export`](/v1/recording/#exporting-to-lerobot) and skips recordings with the same warnings, including those raised while the dataset was built on Adamo. A build where a recording could not be downloaded fails and says which one, and creating the dataset again retries it. It downloads no video: a batch refers to each frame by a `FramePointer`, and the training worker reads the pixels. The same recordings and export are built once and reused for 7 days, then built again on the next request. Training keeps the dataset next to its GPUs for `cache_ttl_seconds`, a day by default, so every run after the first reads it without downloading it again; `None` keeps no copy. A cached dataset counts towards the organization's storage until it expires, and creating it again with another `cache_ttl_seconds` sets a new expiry from now. Its calls to Adamo are retried on network errors and 408, 409, 429 and 5xx answers, with 1, 2, 4 and up to 30 s between attempts for up to 5 minutes.
 
 `Export(images=...)` names the camera tracks to keep. A side-by-side stereo track has one eye per key, `zed.left` and `zed.right`. Without `images`, every track is kept whole.
 
