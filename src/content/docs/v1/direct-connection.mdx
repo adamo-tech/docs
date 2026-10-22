@@ -106,15 +106,13 @@ Requires SDK **1.0.17** or later on both the robot and the receiver.
 
 ### Stream from the robot
 
-`adamo.Robot.local()` starts the robot without signing in. It listens on port **17447**: UDP for video and TCP for pairing. Print the pairing key so you can hand it to the receiver:
+Run your usual robot script **without an API key**. When neither `api_key` nor `ADAMO_API_KEY` is set, `adamo.Robot()` warns and starts as a local robot instead of connecting to the relay. The same script therefore streams through the relay when the key is set and locally when it isn't:
 
 ```python
 import adamo
 import numpy as np
 
-robot = adamo.Robot.local("my-arm")
-print("port:", robot.local_port)
-print("pairing key:", robot.local_pairing_key)
+robot = adamo.Robot(name="my-arm")  # local when ADAMO_API_KEY is not set
 
 track = robot.video("front", pixel_format="BGR", width=640, height=360, fps=30)
 frame = np.zeros((360, 640, 3), dtype=np.uint8)
@@ -122,9 +120,21 @@ for _ in adamo.Rate(30):
     track.send(frame)  # or a frame from your camera
 ```
 
+The local robot listens on port **17447**: UDP for video and TCP for pairing. At startup it prints the pairing key to hand to the receiver:
+
+```
+adamo: warning: no API key was found (pass api_key or set ADAMO_API_KEY), so my-arm is running locally without the cloud. It will not appear on operate.adamohq.com, and recording and inference are unavailable.
+adamo: connect on this network with address <this machine's IP>:17447 and pairing key <pairing key>
+adamo: from Python: adamo.connect_local("<ip>:17447", "<pairing key>")
+```
+
+An API key that is set but invalid is still an error; the robot only runs locally when no key is present at all.
+
+To always run locally, whether or not a key is set, use `adamo.Robot.local()`. It also takes a different `port` and a fixed `pairing_key`, and reports them as `robot.local_port` and `robot.local_pairing_key`.
+
 Hardware-attached tracks (`robot.attach_video(...)` then `robot.run()`) work the same way as on a cloud robot.
 
-The pairing key is generated when the robot starts, so a new key is printed on each run. To keep the same key across restarts, generate one once and pass it back in:
+The pairing key is generated when the robot starts, so a new key is printed on each run. To keep the same key across restarts, pass the first run's key back in with `Robot.local()`:
 
 ```python
 robot = adamo.Robot.local("my-arm", pairing_key="<key printed on the first run>")
