@@ -462,6 +462,8 @@ pub struct VideoOptions {
     pub fps: u32,
     pub keyframe_distance: f64,
     pub stereo: bool,
+    pub stereo_left: bool,            // left eye of a two-track stereo pair
+    pub stereo_right: bool,           // right eye of a two-track stereo pair
     pub backend: VideoBackend,
     pub shm_publish: Option<String>,
     pub passthrough: bool,
@@ -470,7 +472,9 @@ pub struct VideoOptions {
 ```
 
 `VideoOptions::default()` produces a 1280×720, 30 fps H.264 track at
-2000 kbit/s with adaptive bitrate enabled. Builder helpers include
+2000 kbit/s with adaptive bitrate enabled. `stereo_left` and `stereo_right`
+mark the two eyes of the robot's one two-track stereo pair; see
+[Stereo Cameras](/v1/cameras/#stereo-cameras). Builder helpers include
 `with_source_format`, `with_encoder`, `with_backend`, `with_shm_publish`, and
 `with_passthrough`.
 

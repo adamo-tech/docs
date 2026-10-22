@@ -121,6 +121,37 @@ adamo_robot_attach_video_v4l2(robot, "rear",  "/dev/video2", 1280, 720,  15, 200
 </TabItem>
 </Tabs>
 
+## Stereo Cameras
+
+A headset shows stereo video in two ways:
+
+- **One packed track.** Both eyes share one frame, side by side or top/bottom. Set `stereo=True` with `stereo_layout`, and give `width` and `height` for the whole frame.
+- **Two eye tracks.** Each eye is its own track: mark one `stereo_left=True` and the other `stereo_right=True`. Each eye gets its own encoder and decoder, so a high-resolution pair avoids the H.264 limits a large packed frame hits on some headsets, notably the Meta Quest browser. The headset pairs the eyes' frames by capture time and shows them as one stereo view.
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+robot.attach_video("head_left",  device="/dev/video0", width=1280, height=720, stereo_left=True)
+robot.attach_video("head_right", device="/dev/video2", width=1280, height=720, stereo_right=True)
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+let eye = VideoOptions { width: 1280, height: 720, ..VideoOptions::default() };
+robot.attach_v4l2_with_options("head_left", "/dev/video0", &VideoOptions { stereo_left: true, ..eye.clone() })?;
+robot.attach_v4l2_with_options("head_right", "/dev/video2", &VideoOptions { stereo_right: true, ..eye })?;
+```
+
+</TabItem>
+</Tabs>
+
+A robot carries one eye pair. Both eyes need the same `width`, `height`, `fps`, `codec`, and bitrate settings. Eye tracks adapt their bitrate only, not resolution or frame rate. `run()` names a missing or mismatched eye before anything streams. While streaming, both eyes encode at the lower of the bitrates their links allow and restart from keyframes together, so one eye never blurs or freezes on its own. If one eye stops delivering frames, the headset shows the other eye to both eyes until it returns.
+
+For eyes you render or capture yourself with `robot.video(...)`, send both eyes of one moment back to back so their capture times match.
+
 ## Shared Memory (iceoryx2)
 
 Use shared memory when frames come from somewhere V4L2 can't see — a custom driver, a Python perception loop, an external bridge, or your own SDK code rendering frames in process.
