@@ -107,6 +107,12 @@ Audio is not put on the frame clock. Each track is kept as the Opus packets it s
 
 In Episodes mode, the files follow the tasks the operator runs from the task list in the web app (Settings, Tasks, "Show task list"). Starting a task opens a file, and stopping it with Success or Failure, or aborting it, closes it with that outcome. The signals are published on `{robot}/tasks/signal`; see [Task Signals](/v1/control/#task-signals).
 
+### How to reduce recording size
+
+- **Raise the GOP.** The data service encodes each camera with a keyframe every `gop` frames, 2 by default, and keyframes are the largest frames. `FrameRate.Fixed(30, gop=30)` or `FrameRate.Max(gop=30)` is the main lever on size. A frame far from its keyframe takes longer to decode when it is read on its own, as training reads frames.
+- **Keep the robot's video.** `FrameRate.Raw()` saves each camera as the robot sent it, without encoding it again. These recordings can be downloaded but not exported.
+- **Leave out unattended time.** Keep `UNATTENDED` out of `controller_mask`, as the default does, and call `robot.stop_recording()` once a recording started with `robot.start_recording()` is no longer needed.
+
 ## Finding recordings
 
 `adamo.Recordings` reads the recordings of the organization of your API key (`ADAMO_API_KEY`):
