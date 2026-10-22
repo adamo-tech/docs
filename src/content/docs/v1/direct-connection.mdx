@@ -98,6 +98,89 @@ Direct connections fall back to the relay automatically, but you can also force 
 localStorage.setItem('adamo_p2p', '0')
 ```
 
+## Fully local: no API key or relay
+
+A robot can also stream with **no Adamo account, API key, or internet connection**. Use this on an isolated network, on a bench, or between two processes on the same machine. The robot serves video itself, and a receiver connects to it with the robot's address and a **pairing key**. Nothing goes through the Adamo network.
+
+Requires SDK **1.0.17** or later on both the robot and the receiver.
+
+### Stream from the robot
+
+`adamo.Robot.local()` starts the robot without signing in. It listens on port **17447**: UDP for video and TCP for pairing. Print the pairing key so you can hand it to the receiver:
+
+```python
+import adamo
+import numpy as np
+
+robot = adamo.Robot.local("my-arm")
+print("port:", robot.local_port)
+print("pairing key:", robot.local_pairing_key)
+
+track = robot.video("front", pixel_format="BGR", width=640, height=360, fps=30)
+frame = np.zeros((360, 640, 3), dtype=np.uint8)
+for _ in adamo.Rate(30):
+    track.send(frame)  # or a frame from your camera
+```
+
+Hardware-attached tracks (`robot.attach_video(...)` then `robot.run()`) work the same way as on a cloud robot.
+
+The pairing key is generated when the robot starts, so a new key is printed on each run. To keep the same key across restarts, generate one once and pass it back in:
+
+```python
+robot = adamo.Robot.local("my-arm", pairing_key="<key printed on the first run>")
+```
+
+Treat the pairing key like a password: anyone on the network who has it can watch the robot's video and send it control messages.
+
+### Receive in another process
+
+Connect with the robot's address and pairing key, then open a video receiver exactly as you would over the relay:
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+import numpy as np
+
+with adamo.connect_local("192.168.1.20:17447", "<pairing key>") as session:
+    with session.video_receiver("my-arm", "front", max_queued_frames=1) as receiver:
+        while True:
+            frame = receiver.recv(timeout=5.0)
+            rgba = np.asarray(frame.rgba)  # uint8 (height, width, 4)
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use std::{sync::Arc, time::Duration};
+use adamo::{Session, video_receiver::VideoReceiver};
+
+fn main() -> adamo::Result<()> {
+    let session = Arc::new(Session::connect_local("192.168.1.20:17447", "<pairing key>")?);
+    let receiver = VideoReceiver::subscribe(session, "my-arm", "front", 1)?;
+    loop {
+        // None means no frame arrived within the timeout.
+        if let Some(frame) = receiver.recv(Duration::from_secs(5))? {
+            println!("{}x{} seq {}", frame.width, frame.height, frame.sequence);
+        }
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+On the same machine, use `127.0.0.1:17447`. The address can omit the port when the robot uses the default `17447`.
+
+### Things to know
+
+- **Only one local robot per port.** A second `Robot.local()` on the same machine fails with *Address already in use*. Give it another port with `adamo.Robot.local("other-arm", port=17448)`.
+- **The robot's firewall must allow UDP and TCP on its port** for receivers on other machines, for example `sudo ufw allow 17447` with `ufw`.
+- **Local robots are invisible to the cloud.** They don't appear on operate.adamohq.com and can't be recorded by the Adamo data service.
+- **Linux and macOS only** for the receiver.
+
 ## Notes
 
 - Direct connections are **authenticated and org-scoped**, and teleop minutes are **metered**, exactly like the relay.
