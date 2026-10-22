@@ -31,7 +31,7 @@ Video streams display in a configurable grid layout. If the robot has multiple t
 
 ### Stereo / VR
 
-Stereo video tracks have a "View Stereo" button that launches an immersive WebXR VR view. Head pose and VR controller positions are tracked and forwarded to the robot as control topics (see [Control](/v1/control/)).
+Stereo video tracks have a "View Stereo" button that launches an immersive WebXR VR view. A robot that sends its eyes as two tracks (`stereo_left` and `stereo_right`) appears as one stereo view, with frames paired by capture time; see [Stereo Cameras](/v1/cameras/#stereo-cameras). Head pose and VR controller positions are tracked and forwarded to the robot as control topics (see [Control](/v1/control/)).
 
 ![Stereo/VR view button on video tracks](../../../assets/screenshots/stereo-vr-button.png)
 

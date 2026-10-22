@@ -111,6 +111,8 @@ robot.attach_video(
     bitrate_priority: float = 1.0,
     keyframe_distance: float = 2.0,
     stereo: bool = False,
+    stereo_left: bool = False,          # left eye of a two-track stereo pair
+    stereo_right: bool = False,         # right eye of a two-track stereo pair
     backend: str | None = None,         # "auto" or "hw_pipeline"
     allow_missing: bool = False,
     route: str | None = None,           # "auto", "relay", or "local"
@@ -138,6 +140,8 @@ With `allow_missing=True` a track waits for a late or idle source until `close()
 
 `route` selects relay or direct delivery for the track: `"auto"` (default) races a LAN candidate against the relay, `"relay"` never dials one, and `"local"` requires the direct link named by `direct_target`.
 
+`stereo_left=True` and `stereo_right=True` mark the two eyes of the robot's one two-track stereo pair. Both eyes need matching geometry, fps, codec, and bitrate settings. See [Stereo Cameras](/v1/cameras/#stereo-cameras).
+
 Encoded shared-memory input (MJPEG, H.264, H.265) and `passthrough` are not supported by the Python `Robot` in this release.
 
 ### `Robot.video`
@@ -160,6 +164,8 @@ robot.video(
     bitrate_priority: float = 1.0,
     keyframe_distance: float = 2.0,
     stereo: bool = False,
+    stereo_left: bool = False,          # left eye of a two-track stereo pair
+    stereo_right: bool = False,         # right eye of a two-track stereo pair
     backend: str | None = None,   # "auto" or "hw_pipeline"
     allow_missing: bool = False,
     route: str | None = None,
@@ -169,7 +175,7 @@ robot.video(
 ) -> VideoTrack
 ```
 
-Create a track whose frames you push from Python with `track.send(frame)`. The first `send()` starts the robot's runtime on a background thread if you haven't called `robot.run()`. With `adaptive_bitrate` (the default) the encoder follows the congestion forecast between `min_bitrate_kbps` and `max_bitrate_kbps`; `bitrate_priority` weights this track's share when several tracks compete.
+Create a track whose frames you push from Python with `track.send(frame)`. The first `send()` starts the robot's runtime on a background thread if you haven't called `robot.run()`. With `adaptive_bitrate` (the default) the encoder follows the congestion forecast between `min_bitrate_kbps` and `max_bitrate_kbps`; `bitrate_priority` weights this track's share when several tracks compete. `stereo_left` and `stereo_right` work as they do for `attach_video`; send both eyes of one moment back to back.
 
 ### `Robot.on`
 
