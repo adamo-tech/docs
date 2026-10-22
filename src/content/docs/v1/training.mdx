@@ -20,8 +20,10 @@ with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as tr
     for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
         forward_backward_future = training.forward_backward(data, loss_fn="flow_matching")
         optim_step_future = training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
-        forward_backward_future.result()
+        output = forward_backward_future.result()
         optim_step_future.result()
+        if step % 100 == 0:
+            print(step, output.loss)
     weights = training.save_weights("stack-v1", ttl_seconds=30 * 24 * 3600).result()
 
 with adamo.Robot(name="yam-london") as robot:
@@ -57,7 +59,7 @@ adamo.LoraTraining(base_model: str, rank: int = 32, norm_stats: dict[str, NormSt
 
 | Method | Description |
 |--------|-------------|
-| `forward_backward(data, loss_fn="flow_matching")` | Adds the gradients of a list of `Datum` to the run's gradient sum. The result has `loss` and `metrics`. `"flow_matching"` is the only `loss_fn`. |
+| `forward_backward(data, loss_fn="flow_matching")` | Adds the gradients of a list of `Datum` to the run's gradient sum. The result is a `ForwardBackwardOutput` with `.loss` and `.metrics`. `"flow_matching"` is the only `loss_fn`. |
 | `optim_step(adam_params)` | Applies AdamW to the mean of the summed gradients and clears them. Several `forward_backward` calls before one `optim_step` act as one larger batch. |
 | `save_weights(path, ttl_seconds=None, override=False)` | Stores the trained weights with their normalization stats and mapping at `path`, which `robot.inference(path)` runs. |
 | `save_state(path, ttl_seconds=None, override=False)` | Stores the weights and the optimizer state at `path`, which `LoraTraining.from_state(path)` resumes and `robot.inference(path)` also runs. |
@@ -67,7 +69,7 @@ adamo.LoraTraining(base_model: str, rank: int = 32, norm_stats: dict[str, NormSt
 
 | Call | Result |
 |------|--------|
-| `forward_backward` | `loss`, the mean flow-matching loss over the datums of the call, and `metrics["example_count"]`, the number of datums whose gradients are summed since the last `optim_step`. |
+| `forward_backward` | A `ForwardBackwardOutput` with `.loss`, the mean flow-matching loss over the datums of the call, and `.metrics`, a dict whose `"example_count"` is the number of datums whose gradients are summed since the last `optim_step`. |
 | `optim_step` | `None`. |
 | `save_weights`, `save_state` | A `ModelWeights` with `path`, the path it was saved at, and `expires_at`, which is `None` when kept forever. |
 
