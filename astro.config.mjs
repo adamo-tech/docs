@@ -4,7 +4,7 @@ import starlight from "@astrojs/starlight";
 // Sidebar sections for one docs version, whose pages live under `prefix`.
 const sections = (prefix) =>
   [
-    { label: "Getting Started", items: ["index", "quickstart", "cameras"] },
+    { label: "Getting Started", items: ["index", "quickstart", "cameras", ...(prefix ? ["local-streaming"] : [])] },
     {
       label: "Building Robots",
       items: ["control", "audio", "ros", "data", "recording", ...(prefix ? ["training"] : []), "state", "discovery"],
