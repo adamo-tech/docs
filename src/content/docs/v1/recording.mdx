@@ -182,15 +182,15 @@ The Export Dataset button on the Recordings page writes this code for the curren
 
 ### Decoders
 
-A topic whose values are not JSON numbers, such as packed binary or MessagePack, needs a decoder that turns one recorded payload into numbers:
+A topic whose values are not JSON numbers, such as packed binary or MessagePack, needs a decoder that turns one recorded payload into numbers. For a fixed binary layout, `adamo.Struct` takes its [`struct` format](https://docs.python.org/3/library/struct.html#format-strings); any function of the payload's bytes works too:
 
 ```python
-import struct
-
 dataset = client.export(recordings, adamo.Export(state=["proprioception/joints"], action=["left/joint_cmd"]), decoders={
-    "proprioception/joints": lambda payload: struct.unpack(">8x14f", payload),
+    "proprioception/joints": adamo.Struct(">8x14f"),
 })
 ```
+
+`">8x14f"` reads a big-endian 8-byte timestamp, which it skips, then 14 float32s. Only an `adamo.Struct` also decodes a [training dataset](/v1/training/#datasets), which is built on Adamo.
 
 An export that names such a topic without its decoder stops before downloading anything, with a `ValueError` that names the topics missing one.
 
