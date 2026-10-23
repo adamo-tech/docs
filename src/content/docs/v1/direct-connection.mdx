@@ -120,12 +120,12 @@ for _ in adamo.Rate(30):
     track.send(frame)  # or a frame from your camera
 ```
 
-The local robot listens on port **47444**: UDP for video and TCP for pairing. If another process already holds 47444, it moves to a free port instead. At startup it prints the port and pairing key to hand to the receiver:
+The local robot listens on port **17447**: UDP for video and TCP for pairing. If another process already holds 17447, it moves to a free port instead. At startup it prints the port and pairing key to hand to the receiver:
 
 ```
 adamo: warning: no API key was found (pass api_key or set ADAMO_API_KEY), so my-arm is running locally without the cloud. It will not appear on operate.adamohq.com, and recording and inference are unavailable.
-adamo: connect on this network with address <this machine's IP>:47444 and pairing key <pairing key>
-adamo: from Python: adamo.connect_local("<ip>:47444", "<pairing key>")
+adamo: connect on this network with address <this machine's IP>:17447 and pairing key <pairing key>
+adamo: from Python: adamo.connect_local("<ip>:17447", "<pairing key>")
 ```
 
 An API key that is set but invalid is still an error; the robot only runs locally when no key is present at all.
@@ -153,7 +153,7 @@ Connect with the robot's address and pairing key, then open a video receiver exa
 import adamo
 import numpy as np
 
-with adamo.connect_local("192.168.1.20:47444", "<pairing key>") as session:
+with adamo.connect_local("192.168.1.20:17447", "<pairing key>") as session:
     with session.video_receiver("my-arm", "front", max_queued_frames=1) as receiver:
         while True:
             frame = receiver.recv(timeout=5.0)
@@ -168,7 +168,7 @@ use std::{sync::Arc, time::Duration};
 use adamo::{Session, video_receiver::VideoReceiver};
 
 fn main() -> adamo::Result<()> {
-    let session = Arc::new(Session::connect_local("192.168.1.20:47444", "<pairing key>")?);
+    let session = Arc::new(Session::connect_local("192.168.1.20:17447", "<pairing key>")?);
     let receiver = VideoReceiver::subscribe(session, "my-arm", "front", 1)?;
     loop {
         // None means no frame arrived within the timeout.
@@ -182,12 +182,12 @@ fn main() -> adamo::Result<()> {
 </TabItem>
 </Tabs>
 
-On the same machine, use `127.0.0.1:47444`. The address can omit the port when the robot uses the default `47444`.
+On the same machine, use `127.0.0.1:17447`. The address can omit the port when the robot uses the default `17447`.
 
 ### Things to know
 
-- **Only one robot per port.** A second robot on the same machine moves to a free port and prints it. To choose the port yourself, pass it, for example `adamo.Robot(name="other-arm", port=47445)`; a port you choose that is already in use is an error.
-- **The robot's firewall must allow UDP and TCP on its port** for receivers on other machines, for example `sudo ufw allow 47444` with `ufw`.
+- **Only one robot per port.** A second robot on the same machine moves to a free port and prints it. To choose the port yourself, pass it, for example `adamo.Robot(name="other-arm", port=17448)`; a port you choose that is already in use is an error.
+- **The robot's firewall must allow UDP and TCP on its port** for receivers on other machines, for example `sudo ufw allow 17447` with `ufw`.
 - **Local robots are invisible to the cloud.** They don't appear on operate.adamohq.com and can't be recorded by the Adamo data service.
 - **Linux and macOS only** for the receiver.
 

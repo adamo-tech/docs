@@ -74,7 +74,7 @@ class adamo.Robot:
         name: str | None = None,
         protocol: str = "quic",       # "quic", "tcp", or "udp"
         record: bool | Recording = False,
-        port: int | None = None,      # direct connections; 47444, or a free port when it is taken
+        port: int | None = None,      # direct connections; 17447, or a free port when it is taken
         pairing_key: str | None = None,  # reuse a key from robot.local_pairing_key
     ): ...
 ```
@@ -83,7 +83,7 @@ Connects to your organization's router. `protocol="quic"` is the right choice in
 
 With no API key at all (neither `api_key` nor `ADAMO_API_KEY`), the robot warns and runs locally instead: it doesn't reach the relay, and receivers connect with `adamo.connect_local()` using the address and pairing key it prints. See [Fully local](/v1/direct-connection/#fully-local-no-api-key-or-relay).
 
-With or without a key, operators on the robot's network can also connect to it directly on `port`, TCP and UDP. Without `port` the robot uses 47444, or a free port when 47444 is taken; a `port` you pass must be free. A new pairing key is generated on each start unless you pass `pairing_key`; save `robot.local_pairing_key` to keep operators paired across restarts. A malformed `pairing_key` raises an error.
+With or without a key, operators on the robot's network can also connect to it directly on `port`, TCP and UDP. Without `port` the robot uses 17447, or a free port when 17447 is taken; a `port` you pass must be free. A new pairing key is generated on each start unless you pass `pairing_key`; save `robot.local_pairing_key` to keep operators paired across restarts. A malformed `pairing_key` raises an error.
 
 Every key the robot uses is scoped to your organization; you write `{robot}/{topic}` (for example `my-arm/sensors/imu`).
 
