@@ -74,12 +74,16 @@ class adamo.Robot:
         name: str | None = None,
         protocol: str = "quic",       # "quic", "tcp", or "udp"
         record: bool | Recording = False,
+        port: int | None = None,      # direct connections; 17447, or a free port when it is taken
+        pairing_key: str | None = None,  # reuse a key from robot.local_pairing_key
     ): ...
 ```
 
 Connects to your organization's router. `protocol="quic"` is the right choice in every case; `"tcp"` is a diagnostic or telemetry-only fallback for networks that block UDP — don't teleoperate over it. A rejected API key raises `ConnectionError`.
 
-With no API key at all (neither `api_key` nor `ADAMO_API_KEY`), the robot warns and runs locally instead, like `Robot.local()`: it doesn't reach the relay, and receivers connect with `adamo.connect_local()` using the address and pairing key it prints. See [Fully local](/v1/direct-connection/#fully-local-no-api-key-or-relay).
+With no API key at all (neither `api_key` nor `ADAMO_API_KEY`), the robot warns and runs locally instead: it doesn't reach the relay, and receivers connect with `adamo.connect_local()` using the address and pairing key it prints. See [Fully local](/v1/direct-connection/#fully-local-no-api-key-or-relay).
+
+With or without a key, operators on the robot's network can also connect to it directly on `port`, TCP and UDP. Without `port` the robot uses 17447, or a free port when 17447 is taken; a `port` you pass must be free. A new pairing key is generated on each start unless you pass `pairing_key`; save `robot.local_pairing_key` to keep operators paired across restarts. A malformed `pairing_key` raises an error.
 
 Every key the robot uses is scoped to your organization; you write `{robot}/{topic}` (for example `my-arm/sensors/imu`).
 
@@ -276,10 +280,11 @@ robot.close() -> None
 Stop subscriptions, tracks, and the connection. `Robot` supports the context-manager protocol.
 
 ```python
-adamo.Robot.local(name: str, port: int = 17447, pairing_key: str | None = None) -> Robot
+robot.local_port -> int | None
+robot.local_pairing_key -> str | None
 ```
 
-Start a robot locally without cloud login, even when an API key is set; the SDK manages its certificates. `robot.local_port` and `robot.local_pairing_key` report what it listens on. Receive from it with `adamo.connect_local(address, pairing_key)`.
+The port and pairing key the robot listens on for direct connections. Receive from it with `adamo.connect_local(address, pairing_key)`.
 
 ---
 

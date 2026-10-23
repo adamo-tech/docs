@@ -110,7 +110,7 @@ Nothing stops two local viewers from taking control at the same time, so make su
 
 ## Local viewing of a cloud robot
 
-A robot that does have an API key also serves the Local Viewer, alongside operate.adamohq.com. Its port is chosen at startup, so print the link yourself:
+A robot that does have an API key also serves the Local Viewer, alongside operate.adamohq.com. It listens on 17447, or a free port when that is taken, so print the link yourself:
 
 ```python
 robot = adamo.Robot(api_key=os.environ["ADAMO_API_KEY"], name="my-arm")
