@@ -60,7 +60,7 @@ joint_pos.put(b"[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]")?;
 | Mode | For | Files |
 |---|---|---|
 | `RecordingMode.Episodes(frame_rate, min_duration=2.0)` | Training control policies | One per task, from its start to its stop or abort. Tasks shorter than `min_duration` seconds are left out. |
-| `RecordingMode.Continuous(frame_rate)` | Training video models | One per stretch of recorded time. |
+| `RecordingMode.Continuous(frame_rate, post_roll=0.0, idle_timeout=120.0)` | Training video models | One per stretch of recorded time, with `post_roll` seconds after it. A person's time in control after their last input is left out once `idle_timeout` seconds pass without another; `None` keeps it. |
 | `RecordingMode.Interventions(pre_roll=5.0, post_roll=0.0, frame_rate)` | Auditing | One whenever the controller changes, with `pre_roll` seconds before it and `post_roll` seconds after. |
 
 Files are cut into parts after `max_duration` seconds (default 1800) or `max_size` bytes (default 1.5 GB).
