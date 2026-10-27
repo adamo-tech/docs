@@ -1,0 +1,57 @@
+---
+import Sidebar from "@astrojs/starlight/components/Sidebar.astro";
+import { Icon } from "@astrojs/starlight/components";
+import logomarkUrl from "../assets/logomark.svg";
+
+const pageIcons = [
+  ["quickstart", "rocket"],
+  ["cameras", "seti:video"],
+  ["local-streaming", "laptop"],
+  ["control", "setting"],
+  ["audio", "seti:audio"],
+  ["ros", "puzzle"],
+  ["data", "seti:db"],
+  ["recording", "download"],
+  ["training", "star"],
+  ["state", "list-format"],
+  ["discovery", "magnifier"],
+  ["web-interface", "laptop"],
+  ["direct-connection", "random"],
+  ["operator", "setting"],
+  ["python-sdk", "seti:python"],
+  ["rust-sdk", "seti:rust"],
+  ["c-sdk", "seti:c"],
+  ["typescript-sdk", "seti:typescript"],
+  ["default", "open-book"],
+] as const;
+---
+
+<a class="adamo-sidebar-logo" href="/" aria-label="Adamo docs home">
+  <span class="adamo-sidebar-brand">
+    <img src={logomarkUrl.src} alt="" width="25" height="20" />
+    <span>Adamo</span>
+  </span>
+</a>
+<div class="adamo-sidebar-links">
+  <Sidebar><slot /></Sidebar>
+</div>
+
+{pageIcons.map(([page, icon]) => (
+  <template data-sidebar-icon={page}><Icon name={icon} /></template>
+))}
+
+<script is:inline>
+  // Add icons while parsing the sidebar, before its first paint. The rail's
+  // width and content offset come from CSS and never wait for JavaScript.
+  (() => {
+    const pane = document.querySelector(".sidebar-pane");
+    const icons = new Map(Array.from(document.querySelectorAll("[data-sidebar-icon]"))
+      .map((template) => [template.dataset.sidebarIcon, template]));
+    pane?.querySelectorAll(".adamo-sidebar-links .top-level a").forEach((link) => {
+      const slug = new URL(link.href).pathname.split("/").filter(Boolean).at(-1);
+      const icon = (icons.get(slug) ?? icons.get("default"))?.content.cloneNode(true);
+      if (icon) link.prepend(icon);
+    });
+    pane?.setAttribute("data-rail-ready", "");
+  })();
+</script>

@@ -13,23 +13,34 @@ const shouldRenderSearch =
 ---
 
 <div class="adamo-header-shell">
-  <a class="adamo-corner-logo" href="/" aria-label="Adamo docs home">
-    <img src={logoUrl.src} alt="Adamo" width="75" height="13" />
-  </a>
-
   <nav class="adamo-docs-nav" aria-label="Primary">
     <a class="adamo-nav-logo" href="/" aria-label="Adamo docs home">
       <img src={logoUrl.src} alt="" width="75" height="13" />
     </a>
 
     <div class="adamo-nav-group">
-      <select class="adamo-version-select" aria-label="Docs version">
-        {versions.map((version) => (
-          <option value={pathIn(version, Astro.url.pathname)} selected={version === currentVersion}>
-            {version.label}
-          </option>
-        ))}
-      </select>
+      <details class="adamo-version-menu">
+        <summary class="adamo-version-select" aria-label={`Docs version: ${currentVersion.label}`}>
+          {currentVersion.label}
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </summary>
+        <ul class="adamo-version-options" aria-label="Docs version">
+          {versions.map((version) => (
+            <li>
+              <a href={pathIn(version, Astro.url.pathname)} aria-current={version === currentVersion ? "page" : undefined}>
+                {version.label}
+                {version === currentVersion && (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+                    <path d="m5 12 4 4L19 6" />
+                  </svg>
+                )}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </details>
       <a class="adamo-nav-link adamo-nav-link--desktop" href="https://adamohq.com/">Main site</a>
       <a
         class="adamo-nav-link adamo-nav-link--desktop adamo-nav-link--login"
@@ -76,8 +87,16 @@ const shouldRenderSearch =
     }
   }
 
-  document.querySelector<HTMLSelectElement>(".adamo-version-select")?.addEventListener("change", (event) => {
-    window.location.assign((event.target as HTMLSelectElement).value);
+  const versionMenu = document.querySelector<HTMLDetailsElement>(".adamo-version-menu");
+  document.addEventListener("click", (event) => {
+    if (versionMenu && !versionMenu.contains(event.target as Node)) versionMenu.open = false;
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && versionMenu?.open) {
+      const hadFocus = versionMenu.contains(document.activeElement);
+      versionMenu.open = false;
+      if (hadFocus) versionMenu.querySelector("summary")?.focus();
+    }
   });
 
   syncCollapsedState();

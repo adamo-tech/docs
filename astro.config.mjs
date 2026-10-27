@@ -40,6 +40,7 @@ export default defineConfig({
       routeMiddleware: "./src/routeData.ts",
       components: {
         Header: "./src/components/Header.astro",
+        Sidebar: "./src/components/Sidebar.astro",
         ThemeProvider: "./src/components/ThemeProvider.astro",
         ThemeSelect: "./src/components/ThemeSelect.astro",
       },
