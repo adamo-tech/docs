@@ -6,8 +6,6 @@ description: "Fine-tune a hosted VLA on your recordings with a training loop on 
 Adamo fine-tunes a hosted base model on its GPUs while the training loop runs on your machine. Each step sends a batch to `forward_backward` and `optim_step`, in the style of [Tinker](https://tinker-docs.thinkingmachines.ai/). The weights stay on Adamo, and `robot.inference` runs a saved copy on a robot by its path.
 
 ```python
-import itertools
-
 import adamo
 
 episodes = adamo.Recordings().list(folder="yam-london", tasks=["StackCubes"])
@@ -19,7 +17,7 @@ dataset = adamo.Dataset(episodes, adamo.Export(
 ))
 
 with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as training:
-    for data in itertools.islice(dataset.batches(training, batch_size=32), 3000):
+    for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
         training.forward_backward(data, loss_fn="flow_matching")
         training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
     weights = training.save_weights("stack-v1", ttl_seconds=30 * 24 * 3600).result()
@@ -105,7 +103,7 @@ Each method returns at once with a future, and `result()` waits for it. The work
 
 ```python
 in_flight = []
-for step, data in enumerate(itertools.islice(dataset.batches(training, batch_size=32), 3000)):
+for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
     in_flight.append(training.forward_backward(data, loss_fn="flow_matching"))
     training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
     if (step + 1) % 10 == 0:
@@ -129,7 +127,7 @@ Weights and optimizer state that were not saved are gone when a run ends, so sav
 
 ```python
 with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as training:
-    for step, data in enumerate(itertools.islice(dataset.batches(training, batch_size=32), 3000)):
+    for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
         training.forward_backward(data, loss_fn="flow_matching")
         training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
         if (step + 1) % 500 == 0:
