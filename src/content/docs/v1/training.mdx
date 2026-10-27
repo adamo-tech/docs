@@ -18,12 +18,8 @@ dataset = adamo.Dataset(episodes, adamo.Export(
 
 with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as training:
     for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
-        forward_backward_future = training.forward_backward(data, loss_fn="flow_matching")
-        optim_step_future = training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
-        output = forward_backward_future.result()
-        optim_step_future.result()
-        if step % 100 == 0:
-            print(step, output.loss)
+        training.forward_backward(data, loss_fn="flow_matching")
+        training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
     weights = training.save_weights("stack-v1", ttl_seconds=30 * 24 * 3600).result()
 
 with adamo.Robot(name="yam-london") as robot:
@@ -103,7 +99,19 @@ adamo.LoraTraining(base_model: str, rank: int = 32, norm_stats: dict[str, NormSt
 | `optim_step` | `None`. |
 | `save_weights`, `save_state` | A `ModelWeights` with `path`, the path it was saved at, and `expires_at`, which is `None` when kept forever. |
 
-Each method returns at once with a future, and `result()` waits for it. The worker queues calls and runs them in the order they were made, so you can make as many as you like before waiting on any: send at least the next `forward_backward` and `optim_step` before waiting on the current ones, so the GPU always has work queued. The worker prepares the next batch while the GPU works on the current one. Results are kept for the whole run, so a future can be waited on at any time. `result(timeout=None)` raises `TimeoutError` if the timeout passes first, and the call keeps running. In async code, `await future.result_async(timeout=None)` waits without blocking the event loop, and `forward_backward_async`, `optim_step_async`, `save_weights_async` and `save_state_async` return the future to await: `future = await training.forward_backward_async(data)`. A large `forward_backward` goes to the worker in several requests, and its result covers the whole batch. A call that cannot reach the worker is sent again for up to 5 minutes. Once a `forward_backward`, `optim_step` or `set_norm_stats` call fails, no later call runs, and their futures say which call failed. A failed save stops nothing.
+Each method returns at once with a future, and `result()` waits for it. The worker queues calls and runs them in the order they were made, so a training loop does not need to wait on any of them: while the GPU trains on one batch, the worker loads the frames of the next. Waiting on each step before sending the next one leaves the GPU idle while the worker loads frames. To follow the loss, keep the futures and read them every few steps:
+
+```python
+in_flight = []
+for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
+    in_flight.append(training.forward_backward(data, loss_fn="flow_matching"))
+    training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
+    if (step + 1) % 10 == 0:
+        print(step + 1, sum(future.result().loss for future in in_flight) / len(in_flight))
+        in_flight.clear()
+```
+
+Results are kept for the whole run, so a future can be waited on at any time. `result(timeout=None)` raises `TimeoutError` if the timeout passes first, and the call keeps running. In async code, `await future.result_async(timeout=None)` waits without blocking the event loop, and `forward_backward_async`, `optim_step_async`, `save_weights_async` and `save_state_async` return the future to await: `future = await training.forward_backward_async(data)`. A large `forward_backward` goes to the worker in several requests, and its result covers the whole batch. A call that cannot reach the worker is sent again for up to 5 minutes. Once a `forward_backward`, `optim_step` or `set_norm_stats` call fails, no later call runs, and their futures say which call failed. A failed save stops nothing.
 
 `AdamParams(learning_rate, beta1=0.9, beta2=0.95, eps=1e-8, weight_decay=1e-10, grad_clip_norm=1.0)` holds the optimizer settings of one step, so the learning rate can follow any schedule. `grad_clip_norm` clips the gradient's global norm before AdamW, and 0 turns clipping off.
 
@@ -120,10 +128,8 @@ Weights and optimizer state that were not saved are gone when a run ends, so sav
 ```python
 with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as training:
     for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
-        forward_backward_future = training.forward_backward(data, loss_fn="flow_matching")
-        optim_step_future = training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
-        forward_backward_future.result()
-        optim_step_future.result()
+        training.forward_backward(data, loss_fn="flow_matching")
+        training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
         if (step + 1) % 500 == 0:
             training.save_state(f"stack-v1/step-{step + 1}")
 ```
@@ -149,8 +155,8 @@ with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", norm_stats=nor
             )
             for image, state, prompt, chunk in zip(images, states, prompts, actions)
         ]
-        training.forward_backward(data).result()
-        training.optim_step(adamo.AdamParams(learning_rate=2.5e-5)).result()
+        training.forward_backward(data)
+        training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
 ```
 
 | Input | Shape | Type | Notes |
