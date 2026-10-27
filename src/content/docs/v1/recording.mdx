@@ -149,7 +149,7 @@ dataset = client.export(recordings, adamo.Export(
 - `state` and `action` name recorded topics, or fields inside a JSON topic (`"arm/state.position"`), concatenated in that order. Each is sampled at every video frame: a frame holds the latest value sent at or before it.
 - `outcomes` selects which Episodes recordings are kept by how their task ended: `"success"` (the default), `"failure"` and `"abort"`.
 - `tasks` maps each task to the prompt written into the dataset, and keeps only the recordings of those tasks, along with recordings that have no task. Without it, every task is kept and its prompt is its name as a sentence.
-- `images` names the camera tracks to keep, such as `["front", "zed.left"]`. `zed.left` and `zed.right` are the two eyes of a side-by-side stereo track. Without it, every camera is kept whole.
+- `images` names the camera tracks to keep, such as `["front", "zed.left"]`. `zed.left` and `zed.right` are the left and right halves of a side-by-side stereo track, the two eyes; keep a top/bottom track whole. Without it, every camera is kept whole. See [Cameras](/v1/training/#cameras) for every choice and what each picture holds.
 
 - `frame_rate` is the frames a second of the dataset. Without it, the dataset has the rate the recordings were saved at. See [Raw recordings](#raw-recordings).
 
