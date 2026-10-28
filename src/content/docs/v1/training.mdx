@@ -16,7 +16,7 @@ dataset = adamo.Dataset(episodes, adamo.Export(
     images=["zed.left"],
 ))
 
-with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as training:
+with adamo.Training(base_model="physical-intelligence/pi0.5", lora_rank=32) as training:
     for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
         training.forward_backward(data, loss_fn="flow_matching")
         training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
@@ -78,18 +78,18 @@ The shapes are what the training worker reads, before the base model resizes eac
 ## The training loop
 
 ```python
-adamo.LoraTraining(base_model: str, rank: int = 32, norm_stats: dict[str, NormStats] | None = None, seed: int | None = None)
+adamo.Training(base_model: str, lora_rank: int | None = None, norm_stats: dict[str, NormStats] | None = None, seed: int | None = None)
 ```
 
-`LoraTraining` starts a LoRA run and waits until its worker is ready, which includes getting a GPU and loading the base model. The base models are `physical-intelligence/pi0.5` (Physical Intelligence's `pi05_base`, 50-step action chunks), `robocurve/pi0.5-yam` (pi0.5 fully fine-tuned by robocurve on AllenAI's MolmoAct2 bimanual YAM data, 16-step action chunks, Gemma license), `nvidia/GR00T-N1.7` (NVIDIA's GR00T N1.7 3B, 40-step action chunks), and `abc/dit-bottles` ([ABC](https://abc.bot)-DiT trained to put plastic bottles in a bin, 30-step action chunks). `rank` sets both of a pi0.5 model's adapters. On `nvidia/GR00T-N1.7`, `rank` sets the adapters of its action head, and the vision-language model stays frozen. GR00T sees each camera letterboxed to 224×224. A GR00T run whose state and actions are each 14 values, two arms of six joints then a gripper, starts from the bimanual YAM embodiment GR00T was pretrained on. Its arms predict actions relative to the current state when `norm_stats` has a `relative_action` entry, the 1st and 99th percentiles of each chunk step's action minus the state (40 × 14 values, flattened), and absolute actions otherwise; its grippers are always absolute. `abc/dit-bottles` is fine-tuned in full, its vision encoder included, so `rank` changes nothing on it. It takes three cameras, in the order of ABC's overhead camera, left wrist and right wrist, and a state and actions of 14 values, two arms of six joints then a gripper, as absolute joint targets. It keeps the normalization stats of its checkpoint, so it does not use `norm_stats`. Leaving the `with` block frees the GPU, and weights that were not saved by then are gone; see [When a run ends](#when-a-run-ends).
+`Training` starts a run and waits until its worker is ready, which includes getting a GPU and loading the base model. The base models are `physical-intelligence/pi0.5` (Physical Intelligence's `pi05_base`, 50-step action chunks), `robocurve/pi0.5-yam` (pi0.5 fully fine-tuned by robocurve on AllenAI's MolmoAct2 bimanual YAM data, 16-step action chunks, Gemma license), `nvidia/GR00T-N1.7` (NVIDIA's GR00T N1.7 3B, 40-step action chunks), and `abc/dit-bottles` ([ABC](https://abc.bot)-DiT trained to put plastic bottles in a bin, 30-step action chunks). The pi0.5 and GR00T models train LoRA adapters, of rank `lora_rank`, 32 when left out. `lora_rank` sets both of a pi0.5 model's adapters. On `nvidia/GR00T-N1.7`, it sets the adapters of its action head, and the vision-language model stays frozen. GR00T sees each camera letterboxed to 224×224. A GR00T run whose state and actions are each 14 values, two arms of six joints then a gripper, starts from the bimanual YAM embodiment GR00T was pretrained on. Its arms predict actions relative to the current state when `norm_stats` has a `relative_action` entry, the 1st and 99th percentiles of each chunk step's action minus the state (40 × 14 values, flattened), and absolute actions otherwise; its grippers are always absolute. `abc/dit-bottles` trains all of its weights, its vision encoder included, so it refuses a `lora_rank`. It takes three cameras, in the order of ABC's overhead camera, left wrist and right wrist, and a state and actions of 14 values, two arms of six joints then a gripper, as absolute joint targets. It keeps the normalization stats of its checkpoint, so it does not use `norm_stats`. Leaving the `with` block frees the GPU, and weights that were not saved by then are gone; see [When a run ends](#when-a-run-ends).
 
 | Method | Description |
 |--------|-------------|
 | `forward_backward(data, loss_fn="flow_matching")` | Adds the gradients of a list of `Datum` to the run's gradient sum. The result is a `ForwardBackwardOutput` with `.loss` and `.metrics`. `"flow_matching"` is the only `loss_fn`. |
 | `optim_step(adam_params)` | Applies AdamW to the mean of the summed gradients and clears them. Several `forward_backward` calls before one `optim_step` act as one larger batch. |
 | `save_weights(path, ttl_seconds=None, override=False)` | Stores the trained weights with their normalization stats and mapping at `path`, which `robot.inference(path)` runs. |
-| `save_state(path, ttl_seconds=None, override=False)` | Stores the weights and the optimizer state at `path`, which `LoraTraining.from_state(path)` resumes and `robot.inference(path)` also runs. |
-| `LoraTraining.from_state(path)` | Starts a run from the training state saved at `path`. |
+| `save_state(path, ttl_seconds=None, override=False)` | Stores the weights and the optimizer state at `path`, which `Training.from_state(path)` resumes and `robot.inference(path)` also runs. |
+| `Training.from_state(path)` | Starts a run from the training state saved at `path`. |
 | `action_horizon` | The number of steps in an action chunk of the base model. |
 | `id` | The run's id. |
 
@@ -121,12 +121,12 @@ Saved model weights and training states are kept until `ttl_seconds` runs out, a
 
 ### When a run ends
 
-A run ends and frees its GPU when its `with` block ends or `stop()` is called, and also when its client hasn't reached the worker for 10 minutes. While a `LoraTraining` is open, the SDK checks in with the worker every 30 s, so time spent between calls, such as collecting rollouts or evaluating, keeps the run. A client that is killed, loses its network or sleeps for 10 minutes loses its run, and its next call raises with the reason.
+A run ends and frees its GPU when its `with` block ends or `stop()` is called, and also when its client hasn't reached the worker for 10 minutes. While a `Training` is open, the SDK checks in with the worker every 30 s, so time spent between calls, such as collecting rollouts or evaluating, keeps the run. A client that is killed, loses its network or sleeps for 10 minutes loses its run, and its next call raises with the reason.
 
-Weights and optimizer state that were not saved are gone when a run ends, so save a training state every few hundred steps, and continue from the latest one with `LoraTraining.from_state` after a crash or a lost connection:
+Weights and optimizer state that were not saved are gone when a run ends, so save a training state every few hundred steps, and continue from the latest one with `Training.from_state` after a crash or a lost connection:
 
 ```python
-with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as training:
+with adamo.Training(base_model="physical-intelligence/pi0.5", lora_rank=32) as training:
     for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
         training.forward_backward(data, loss_fn="flow_matching")
         training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
@@ -134,7 +134,7 @@ with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as tr
             training.save_state(f"stack-v1/step-{step + 1}")
 ```
 
-A later script continues from the latest one with `adamo.LoraTraining.from_state("stack-v1/step-1500")`.
+A later script continues from the latest one with `adamo.Training.from_state("stack-v1/step-1500")`.
 
 ## Your own data
 
@@ -146,7 +146,7 @@ norm_stats = {
     "control/joint_cmd.positions": adamo.NormStats(q01=action_q01, q99=action_q99),
 }
 
-with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", norm_stats=norm_stats) as training:
+with adamo.Training(base_model="physical-intelligence/pi0.5", norm_stats=norm_stats) as training:
     for images, states, prompts, actions in loader:
         data = [
             adamo.Datum(
