@@ -12,7 +12,8 @@ npm run build
 
 ## Versions
 
-The site root serves the 0.x docs from `src/content/docs/`. The 1.0 docs live in
+The site root redirects to the 1.0 docs at `/v1/`. The 0.x docs retain their
+unprefixed URLs, with their introduction at `/v0/`. The 1.0 docs live in
 `src/content/docs/v1/` and are served under `/v1/`. `src/versions.ts` lists the
 versions for the header's version selector, which switches to the same page in
 the other version; `src/routeData.ts` limits the sidebar and previous/next links

@@ -13,12 +13,13 @@ const sections = (prefix) =>
     { label: "SDK References", items: ["python-sdk", "rust-sdk", "c-sdk", "typescript-sdk"] },
   ].map(({ label, items }) => ({
     label,
-    // A version's index page has the slug "v1", not "v1/index".
-    items: items.map((slug) => (prefix && slug === "index" ? prefix.slice(0, -1) : prefix + slug)),
+    // Version introductions live at /v0/ and /v1/.
+    items: items.map((slug) => (slug === "index" ? (prefix ? prefix.slice(0, -1) : "v0") : prefix + slug)),
   }));
 
 export default defineConfig({
   site: "https://docs.adamohq.com",
+  redirects: { "/": "/v1/" },
   integrations: [
     starlight({
       title: "Adamo",
