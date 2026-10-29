@@ -5,11 +5,11 @@ description: "Record a robot's cameras and topics, then export the recordings as
 
 import { Tabs, TabItem } from "@astrojs/starlight/components";
 
-The Adamo data service records a robot's cameras and the topics it publishes. Recordings appear on the Recordings page of [app.adamohq.com](https://app.adamohq.com), and the Python SDK lists, downloads and exports them as [LeRobot](https://github.com/huggingface/lerobot) datasets.
+The Adamo data service records your robot's cameras and topics. Find your recordings on the [Recordings page](https://operate.adamohq.com/#/recordings) in our web app, and use the Python SDK to list, download and export them as [LeRobot](https://github.com/huggingface/lerobot) datasets.
 
 ## Recording a robot
 
-A robot says what to record with its `Recording`:
+Give the robot a `Recording` to say what to record:
 
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
@@ -17,6 +17,7 @@ A robot says what to record with its `Recording`:
 ```python
 import json
 import adamo
+from i2rt.robots.get_robot import get_yam_robot
 
 recording = adamo.Recording(
     adamo.ControllerMask.HUMAN | adamo.ControllerMask.POLICY,
@@ -25,7 +26,14 @@ recording = adamo.Recording(
 )
 robot = adamo.Robot(name="my-arm", record=recording)
 joint_pos = robot.session.publisher("my-arm/left/joint_pos", reliable=True)
-joint_pos.put(json.dumps([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]).encode())
+joint_cmd = robot.session.publisher("my-arm/left/joint_cmd", reliable=True)
+
+arm = get_yam_robot(channel="can0")
+command = arm.get_joint_pos()
+for _ in adamo.Rate(30):
+    arm.command_joint_pos(command)
+    joint_pos.put(json.dumps(arm.get_joint_pos().tolist()).encode())
+    joint_cmd.put(json.dumps(command.tolist()).encode())
 ```
 
 </TabItem>
@@ -34,7 +42,7 @@ joint_pos.put(json.dumps([0.1, 0.2, 0.3, 0.4, 0.5, 0.6]).encode())
 ```rust
 use std::num::NonZeroU32;
 use std::time::Duration;
-use adamo::{ControllerMask, FrameRate, Mode, PublisherOptions, Recording, Robot};
+use adamo::{ControllerMask, FrameRate, Mode, PublisherOptions, Rate, Recording, Robot};
 
 let robot = Robot::new_default("ak_...", Some("my-arm"))?.with_recording(Recording {
     controller_mask: ControllerMask::HUMAN | ControllerMask::POLICY,
@@ -43,79 +51,111 @@ let robot = Robot::new_default("ak_...", Some("my-arm"))?.with_recording(Recordi
     ..Recording::default()
 });
 let joint_pos = robot.publisher("my-arm/left/joint_pos", PublisherOptions { reliable: true, ..PublisherOptions::default() })?;
-joint_pos.put(b"[0.1, 0.2, 0.3, 0.4, 0.5, 0.6]")?;
+let joint_cmd = robot.publisher("my-arm/left/joint_cmd", PublisherOptions { reliable: true, ..PublisherOptions::default() })?;
+
+let mut rate = Rate::new(30.0);
+loop {
+    arm.command_joint_positions(&command);
+    joint_pos.put(&serde_json::to_vec(&arm.joint_positions())?)?;
+    joint_cmd.put(&serde_json::to_vec(&command)?)?;
+    rate.sleep();
+}
 ```
 
 </TabItem>
 </Tabs>
 
-This example records at a fixed 30 frames a second, so the episodes are ready for training as they are recorded. `adamo.Recording()` on its own records human and policy sessions continuously, with each camera's video as the robot sent it (see [Frame rate](#frame-rate)).
+This records one episode per task, at 30 frames a second, ready for training. In Rust, `arm` and `command` stand for your arm's driver and the command you send it. `adamo.Recording()` on its own records continuously, with each camera's video as the robot sent it.
 
 ### When it records
 
-`controller_mask` selects the time to record: sessions in which a person (`HUMAN`) or a policy (`POLICY`) controls the robot, and time when nobody does (`UNATTENDED`). The default is `HUMAN | POLICY`. `robot.start_recording()` records the robot whether or not anyone is in control, until `robot.stop_recording()`.
+Record only the time you need. `controller_mask` picks it:
+
+| Flag | Records while |
+|------|---------------|
+| `HUMAN` | A teleoperator controls the robot. |
+| `POLICY` | A policy controls the robot. |
+| `UNATTENDED` | Nobody controls the robot. |
+
+The default is `HUMAN | POLICY`. To record regardless of who is in control, call `robot.start_recording()`, then `robot.stop_recording()`.
 
 ### Modes
 
-`mode` says what the recording is for:
+Adamo supports three recording modes, set with `mode`:
 
-| Mode | For | Files |
-|---|---|---|
-| `RecordingMode.Episodes(frame_rate, min_duration=2.0)` | Training control policies | One per task, from its start to its stop or abort. Tasks shorter than `min_duration` seconds are left out. |
-| `RecordingMode.Continuous(frame_rate)` (default) | Training video models | One per stretch of recorded time. |
-| `RecordingMode.Interventions(pre_roll=5.0, post_roll=0.0, frame_rate)` | Auditing | One whenever the controller changes, with `pre_roll` seconds before it and `post_roll` seconds after. |
+| Mode | Description |
+|---|---|
+| `RecordingMode.Episodes(frame_rate, min_duration=2.0)` | Creates one recording file per episode, from the start of a task to its end. Tasks shorter than `min_duration` seconds are left out. |
+| `RecordingMode.Continuous(frame_rate, post_roll=0.0, idle_timeout=120.0)` (default) | Creates one recording file per stretch of recorded time, with `post_roll` seconds after it. |
+| `RecordingMode.Interventions(pre_roll=5.0, post_roll=0.0, frame_rate)` | Creates one recording file whenever the controller changes, with `pre_roll` seconds before it and `post_roll` seconds after. |
 
-Files are cut into parts after `max_duration` seconds (default 1800) or `max_size` bytes (default 1.5 GB).
+- In Continuous mode, a teleoperator's time in control after their last input is left out once `idle_timeout` seconds pass without another. `idle_timeout=None` keeps it.
+- Files are cut into parts after `max_duration` seconds (default 1800) or `max_size` bytes (default 1.5 GB).
 
 ### Frame rate
 
-`frame_rate` is one of:
+A training example pairs a picture from every camera with the state and action of the same moment, so training needs every camera on one clock. `frame_rate` sets that clock:
 
-| Frame rate | Video in the file | Exporting to LeRobot | Training with `adamo.Dataset` |
-|---|---|---|---|
-| `FrameRate.Raw()` (default) | Each camera's video as the robot sent it, at its own rate and with the keyframes the robot's encoder made. | Resampled onto one clock and encoded again | Not yet |
-| `FrameRate.Fixed(rate, gop=2)` | Every camera on one clock of `rate` frames a second. | Copied as it is | Yes |
-| `FrameRate.Max(gop=2)` | Every camera on one clock at the rate of the fastest camera. | Copied as it is | Yes |
+| Frame rate | Video in the file |
+|---|---|
+| `FrameRate.Raw()` (default) | Each camera as the robot sent it, at its own rate. |
+| `FrameRate.Fixed(rate, gop=2)` | Every camera on one clock of `rate` frames a second. |
+| `FrameRate.Max(gop=2)` | Every camera on one clock at the rate of the fastest camera. |
 
-`FrameRate.Raw()` is the default for `adamo.Recording()` and for every mode given without a `frame_rate`, so `RecordingMode.Episodes()` records raw video too. The data service stores the video without decoding or re-encoding it, so nothing is lost to a second encode and recording costs no extra processing. Cameras keep their own timing, though, so [`Recordings.export`](#raw-recordings) puts them on one clock when it exports, which decodes and encodes the video again and takes longer than copying it. Training with [`adamo.Dataset`](/v1/training/) does not use raw recordings yet: it skips them with a warning.
+To record for training, give a clock:
 
-To record data for training a policy, give a clock: `RecordingMode.Episodes(frame_rate=adamo.FrameRate.Fixed(30))`. The data service then re-encodes every camera onto that one clock as it records, so frame *k* of each camera is at *k* / `rate` seconds into the file, with a keyframe every `gop` frames: `FrameRate.Fixed(30, gop=4)`, `FrameRate.Max(gop=4)`. A training loader can only start decoding at a keyframe, so a small `gop` lets it jump to any frame quickly, and a larger one makes smaller files.
+```python
+adamo.RecordingMode.Episodes(frame_rate=adamo.FrameRate.Fixed(30))
+```
 
-In Rust the same choices are `FrameRate::Raw`, `FrameRate::Fixed { rate, gop }` and `FrameRate::Max { gop }`; `Recording::default()` is `Mode::Continuous { frame_rate: FrameRate::Raw }`.
+The data service then encodes every camera onto that clock as it records, so frame *k* of each camera is at *k* / `rate` seconds. `gop` is the number of frames between keyframes (see [Reducing recording size](#reducing-recording-size)).
+
+`FrameRate.Raw()` is usually the most compact way to store video, but it must be put on one clock and encoded again before training, which `Recordings.export` does for you.
+
+In Rust, the choices are `FrameRate::Raw`, `FrameRate::Fixed { rate, gop }` and `FrameRate::Max { gop }`.
 
 ### Topics
 
-`topics` are the keys, relative to the robot, that it publishes on with a put or a [persistent publisher](/v1/data/#persistent-publisher): `"left/joint_pos"` records `my-arm/left/joint_pos`. Each value is stamped with the time it was sent, on the same clock as the video frames, and recorded next to the frames of that moment. Each file also starts with the latest value of every topic sent before it, so a topic sent once, or more slowly than a task lasts, is in every file. Payloads are recorded as they are, in any format: values that are JSON numbers or arrays of numbers export directly, and anything else exports through a decoder (see [Decoders](#decoders)).
+`topics` adds the data you want to record alongside the cameras and controls, such as joint states and actions. Name each topic relative to the robot: `"left/joint_pos"` records `my-arm/left/joint_pos`.
+
+- Each value is stamped with the time it was sent, on the same clock as the video.
+- Each file starts with the latest value of every topic, so a topic sent once is in every file.
+- Payloads are recorded as they are. JSON numbers and arrays of numbers export directly. Anything else needs a [decoder](#decoders).
+- Cameras and the `control/`, `tasks/` and `recording/` keys are always recorded. Naming one of them in `topics` warns and is ignored.
 
 ### ROS topics
 
-With [ROS](/v1/ros/) enabled, `record_ros` records native ROS topics. Each message is decoded to JSON and published on the robot's key for that topic, without its leading slash, as one of the topics it records:
+If your robot already runs [ROS](/v1/ros/), record its topics directly instead of publishing them again. `record_ros` records native ROS topics as JSON:
 
 ```python
 robot.record_ros(["/joint_states", "/gripper/state"], max_age=1.0)
 ```
 
-`/joint_states` is recorded as `joint_states`, and its fields export as `joint_states.position`. Messages older than `max_age` seconds when they are read are skipped. Custom message types need their `.msg` definitions in `definitions={"package/msg/Type": msg_text}`. Call it once, with every ROS topic to record.
+- `/joint_states` is recorded as `joint_states`, and its fields export as `joint_states.position`.
+- Messages older than `max_age` seconds are skipped.
+- Custom message types need their `.msg` definitions: `definitions={"package/msg/Type": msg_text}`.
+- Call it once, with every ROS topic to record.
 
 ### Audio
 
-`record_audio=True` (`record_audio: true` in Rust) also records every [audio track](/v1/audio/) on the robot: the ones it publishes, under the names it gave them, and each operator's microphone, as the track `operator-{session id}`. It is off by default.
+Record audio to train models on sound, such as voice models. `record_audio=True` records every [audio track](/v1/audio/) on the robot: its own tracks, and each operator's microphone as `operator-{session id}`. It is off by default.
 
-Audio is not put on the frame clock. Each track is kept as the Opus packets it sent, one every 10 ms by default, under `audio/{track}` in the file, each at its capture time on the same clock as the video frames and topics. The track's metadata (sample rate, channels, frame duration) is under `audio/{track}/meta`. A recording lists its tracks in `audio_tracks`. See [Exporting audio](#exporting-audio) to decode them.
+Audio keeps its own timing. Each track is stored as the Opus packets it sent, at their capture times on the video's clock, under `audio/{track}`. A recording lists its tracks in `audio_tracks`. See [Exporting audio](#exporting-audio) to decode them.
 
 ### Tasks
 
-In Episodes mode, the files follow the tasks the operator runs from the task list in the web app (Settings, Tasks, "Show task list"). Starting a task opens a file, and stopping it with Success or Failure, or aborting it, closes it with that outcome. The signals are published on `{robot}/tasks/signal`; see [Task Signals](/v1/control/#task-signals).
+Tasks turn teleoperation into labelled episodes, each with a prompt and an outcome. In Episodes mode, files follow the tasks the operator runs from the web app's task list (Settings, Tasks, "Show task list"). Starting a task opens a file. Stopping it with Success or Failure, or aborting it, closes the file with that outcome. See [Task Signals](/v1/control/#task-signals).
 
-### How to reduce recording size
+### Reducing recording size
 
-- **Raise the GOP.** The data service encodes each camera with a keyframe every `gop` frames, 2 by default, and keyframes are the largest frames. `FrameRate.Fixed(30, gop=30)` or `FrameRate.Max(gop=30)` is the main lever on size. A frame far from its keyframe takes longer to decode when it is read on its own, as training reads frames.
-- **Keep the robot's video.** `FrameRate.Raw()` saves each camera as the robot sent it, without encoding it again. These recordings can be downloaded but not exported.
-- **Leave out unattended time.** Keep `UNATTENDED` out of `controller_mask`, as the default does, and call `robot.stop_recording()` once a recording started with `robot.start_recording()` is no longer needed.
+To store more hours of data:
+
+- **Raise the GOP.** Keyframes are the largest frames, so `FrameRate.Fixed(30, gop=30)` makes much smaller files. A small `gop` lets a training loader jump to any frame quickly, since a frame far from its keyframe takes longer to decode on its own.
+- **Leave out unattended time.** Keep `UNATTENDED` out of `controller_mask`, and call `robot.stop_recording()` once you no longer need a recording you started.
 
 ## Finding recordings
 
-`adamo.Recordings` reads the recordings of the organization of your API key (`ADAMO_API_KEY`):
+Select the recordings to download, export or train on. `adamo.Recordings` reads your organization's recordings, using your `ADAMO_API_KEY`:
 
 ```python
 from datetime import datetime, timedelta, timezone
@@ -131,79 +171,67 @@ recordings = client.list(
 client.download(recordings, "recordings")
 ```
 
-`list` also filters by `end`, `controllers`, `sessions`, `folder` and a `search` over names and notes. Each recording's `frame_rate` is the clock it was saved on: `FrameRate.Raw()`, or `FrameRate.Fixed(rate, gop)`, with `FrameRate.Max()` resolved to the rate of the fastest camera. The Copy Query button on the Recordings page writes this code for the current filters.
+`list` also filters by `end`, `controllers`, `sessions`, `folder`, and `search` over names and notes. Each recording's `frame_rate` is the clock it was saved on.
+
+The Copy Query button on the [Recordings page](https://operate.adamohq.com/#/recordings) writes this code for the current filters.
 
 ## Exporting to LeRobot
 
-`pip install "adamo[export]"` (Python 3.12 or newer) adds `Recordings.export`, which writes the recordings as a LeRobot dataset, one episode per recording, and returns the `LeRobotDataset`:
+Export your recordings to train outside Adamo, with LeRobot's training scripts or your own code. To train on Adamo, skip the export and use [`adamo.Dataset`](/v1/training/#datasets).
+
+`Recordings.export` writes recordings as a LeRobot dataset, one episode per recording, and returns the `LeRobotDataset`. It needs `pip install "adamo[export]"` and Python 3.12 or newer.
 
 ```python
 dataset = client.export(recordings, adamo.Export(
     state=["left/joint_pos", "left/gripper_pos"],
     action=["left/joint_cmd"],
-    outcomes=["success", "failure"],
+    outcomes=["success"],
     tasks={"PickUpCube": "Pick up the cube."},
 ))
 ```
 
-- `state` and `action` name recorded topics, or fields inside a JSON topic (`"arm/state.position"`), concatenated in that order. Each is sampled at every video frame: a frame holds the latest value sent at or before it.
-- `outcomes` selects which Episodes recordings are kept by how their task ended: `"success"` (the default), `"failure"` and `"abort"`.
-- `tasks` maps each task to the prompt written into the dataset, and keeps only the recordings of those tasks, along with recordings that have no task. Without it, every task is kept and its prompt is its name as a sentence.
-- `images` names the camera tracks to keep, such as `["front", "zed.left"]`. `zed.left` and `zed.right` are the left and right halves of a side-by-side stereo track, the two eyes; keep a top/bottom track whole. Without it, every camera is kept whole. See [Cameras](/v1/training/#cameras) for every choice and what each picture holds.
+| `Export` field | Description |
+|-------|-------------|
+| `state`, `action` | Recorded topics, or fields of a JSON topic such as `"arm/state.position"`, concatenated in order. Each frame holds the latest value sent at or before it. |
+| `outcomes` | Keeps only episodes that ended this way: `"success"`, `"failure"` or `"abort"`. Every outcome is kept by default. |
+| `tasks` | Maps each task to its prompt, and keeps only those tasks. Without it, every task is kept, and `PickUpCube` becomes the prompt `"Pick up cube."`. Recordings without a task are always kept, with an empty prompt. |
+| `images` | The camera tracks to keep, such as `["front", "zed.left"]`. Every camera is kept by default. See [Choosing cameras](/v1/training/#choosing-cameras). |
+| `frame_rate` | The dataset's frames per second. Defaults to the rate the recordings were saved at. |
 
-- `frame_rate` is the frames a second of the dataset. Without it, the dataset has the rate the recordings were saved at. See [Raw recordings](#raw-recordings).
+The Export Dataset button on the [Recordings page](https://operate.adamohq.com/#/recordings) writes this code for the current filters.
 
-The video of a recording saved at the dataset's rate is copied into it as recorded, except for a single eye of a stereo track, which is cropped and encoded again. Recordings exported together must share one set of cameras when `images` is not given; any that do not, or that lack a topic in `state` or `action`, are skipped with a warning that names each one and why. So is a recording that still cannot be downloaded after its retries; the export raises a `ValueError` only when none can be.
+### Output folder
 
-Recordings saved at different fixed rates cannot be exported together without `frame_rate`: the export raises a `ValueError` that names the rates. With `frame_rate`, each recording saved at another rate is resampled to it.
+The dataset goes to `lerobot-{hash}` in the current folder, or to `output_folder=`. The hash covers the recordings, the export and the decoders, so running the same export again opens the existing dataset instantly.
 
-### Raw recordings
-
-Recordings saved with `FrameRate.Raw()` are exported like the others. Each camera of a raw recording has its own frame times and keyframes, and drops frames on its own, so the export puts every camera on one clock first:
-
-- The clock runs at `frame_rate`. Without it, it runs at the rate of the other recordings exported with it, or, when every recording is raw, at the rate of the fastest camera of the first one: the `fps` it was configured with, as `FrameRate.Max()` picks it, or for a camera without one, the typical time between its frames.
-- It starts at the first time every camera has a keyframe and stops at the last time every camera has a frame, so each frame of the dataset has a picture from every camera.
-- Each frame of the dataset shows each camera's latest picture at or before its time, the same rule `state` and `action` follow. A frame the robot dropped repeats the picture before it.
-- The pictures are encoded again with H.264, with a keyframe every 2 frames, as the data service does when it records on a clock. On a desktop CPU, a minute of 1080p stereo video took about 40 seconds, so a large raw export takes much longer than one copied as recorded.
-
-```python
-dataset = client.export(recordings, adamo.Export(
-    state=["left/joint_pos"],
-    action=["left/joint_cmd"],
-    frame_rate=30,
-))
-```
-
-Training with [`adamo.Dataset`](/v1/training/) does not resample yet: it leaves raw recordings out with a warning, and `frame_rate` there raises a `ValueError`. To train on data you are about to record, record it with `FrameRate.Fixed`.
-
-The dataset goes to `lerobot-{hash of the recordings, config and decoders}` in the current folder unless `output_folder=` says where. An existing folder is opened as it is, so running the same export again is instant. A dataset missing a recording that could not be downloaded is saved under the hash of the recordings it holds, so the next export downloads the missing one again. The recordings are downloaded to a temporary folder unless `download_folder=` keeps them.
-
-The Export Dataset button on the Recordings page writes this code for the current filters, with the state, action, outcomes and prompts you pick.
+The recordings are downloaded to a temporary folder, or to `download_folder=` to keep them.
 
 ### Decoders
 
-A topic whose values are not JSON numbers, such as packed binary or MessagePack, needs a decoder that turns one recorded payload into numbers. For a fixed binary layout, `adamo.Struct` takes its [`struct` format](https://docs.python.org/3/library/struct.html#format-strings); any function of the payload's bytes works too:
+Binary payloads, such as packed structs or MessagePack, are smaller to send than JSON, but the export cannot read them on its own. Give each such topic a decoder that turns a payload into numbers. For a fixed binary layout, `adamo.Struct` takes a [`struct` format](https://docs.python.org/3/library/struct.html#format-strings):
 
 ```python
-dataset = client.export(recordings, adamo.Export(state=["proprioception/joints"], action=["left/joint_cmd"]), decoders={
-    "proprioception/joints": adamo.Struct(">8x14f"),
+dataset = client.export(recordings, export, decoders={
+    "proprioception/joints": adamo.Struct(">8x14f"),  # skip an 8-byte timestamp, then 14 big-endian float32s
 })
 ```
 
-`">8x14f"` reads a big-endian 8-byte timestamp, which it skips, then 14 float32s. Only an `adamo.Struct` also decodes a [training dataset](/v1/training/#datasets), which is built on Adamo.
+Any function of the payload's bytes also works. Only an `adamo.Struct` decodes a [training dataset](/v1/training/#datasets), which is built on Adamo.
 
-An export that names such a topic without its decoder stops before downloading anything, with a `ValueError` that names the topics missing one.
+A topic without its decoder stops the export before it downloads anything, with a `ValueError` that names the topic.
 
 ## Exporting audio
 
-`Recordings.export_audio` decodes the audio of recordings made with `record_audio=True` into one file per track, for training a voice model:
+To use the audio you recorded with `record_audio=True`, export it as standard audio files. `Recordings.export_audio` writes one file per track:
 
 ```python
 files = client.export_audio(recordings, "audio", tracks=["mic", "operator-*"])
+print(files[0])  # audio/my-arm/{name}/mic.wav
 ```
 
-- Each track goes to `audio/{device}/{name}/{track}.wav`, at 48 kHz. `format=` also takes `"flac"` and `"mp3"`; any other format is a `ValueError`.
-- `tracks` keeps the tracks whose name matches any of its patterns: `"mic"` is the robot's track of that name, and `"operator-*"` is every operator's microphone. Without it, every track is exported. A pattern that matches no track of any recording is named in a warning that lists the tracks the recordings have. When no pattern matches at all, the export stops before downloading anything, with a `ValueError` that lists them.
-- Each file starts at the recording's first video frame, or at its first audio packet when it has no camera, with silence wherever the track sent nothing. The tracks of one recording line up with each other and with its video.
+- Each track goes to `audio/{device}/{name}/{track}.wav`, at 48 kHz. `format=` also takes `"flac"` and `"mp3"`.
+- `tracks` keeps the tracks that match any pattern: `"mic"` is the robot's track of that name, and `"operator-*"` every operator's microphone. Every track is kept by default.
+- A pattern that matches no track warns, and lists the tracks the recordings have. When no pattern matches at all, the export raises a `ValueError` before downloading anything.
+- Each file starts at the recording's first video frame, with silence wherever the track sent nothing, so the tracks line up with each other and with the video.
 
-Recordings without a matching track are skipped. The Export Dataset button on the Recordings page adds this call when the recordings have audio and you tick Export audio.
+Recordings without a matching track are skipped. On the [Recordings page](https://operate.adamohq.com/#/recordings), tick Export audio to add this call to the Export Dataset code.
