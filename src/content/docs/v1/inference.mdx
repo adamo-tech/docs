@@ -12,7 +12,7 @@ robot.inference(policy: str, **arguments) -> Inference
 `robot.inference` runs a policy on Adamo's GPUs and drives your robot with it. `policy` is a path you [saved weights or a state at](/v1/training/#saving-states-and-policies), or the name of a model Adamo serves:
 
 ```python
-with robot.inference("my-fine-tuned-policy", prompt="stack four cubes") as run:
+with robot.inference("my-fine-tuned-policy/final", prompt="stack four cubes") as run:
     run.wait()
 ```
 
@@ -86,7 +86,7 @@ The same calls are available over HTTP with your organization API key:
 ```bash
 API=https://api.adamohq.com/api/inference
 INFERENCE_ID=$(curl -X POST $API/start -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
-  -d '{"robot_name": "yam-london", "policy": "my-fine-tuned-policy", "arguments": {"prompt": "stack four cubes"}}' | jq -r .inference_id)
+  -d '{"robot_name": "yam-london", "policy": "my-fine-tuned-policy/final", "arguments": {"prompt": "stack four cubes"}}' | jq -r .inference_id)
 curl "$API/status?inference_id=$INFERENCE_ID" -H "X-API-Key: $ADAMO_API_KEY"
 curl -X POST $API/stop -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
   -d "{\"inference_id\": \"$INFERENCE_ID\"}"

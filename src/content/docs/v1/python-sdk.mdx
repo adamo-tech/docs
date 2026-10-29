@@ -256,7 +256,7 @@ Run a policy against this robot. `policy` is the path your organization saved we
 
 ```python
 with adamo.Robot(name="yam-london") as robot:
-    with robot.inference("my-fine-tuned-policy", prompt="stack four cubes") as run:
+    with robot.inference("my-fine-tuned-policy/final", prompt="stack four cubes") as run:
         run.wait()
 ```
 
