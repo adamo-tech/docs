@@ -53,10 +53,11 @@ import adamo
 | `StateStore` / `TaskRunner` | Robot state and task runs, from `Robot.state_store()` / `Robot.task_runner()`. |
 | `state_topic(robot, key)` / `state_topic_all(robot)` | `{robot}/state/{key}` and `{robot}/state/**`. |
 | `Recording` / `ControllerMask` | What the Adamo data service records for this robot. |
-| `Recordings` / `RecordingInfo` | List and download your organization's recordings. |
+| `Recordings` / `RecordingInfo` / `Export` / `Struct` | List, download and export your organization's recordings. See [Recording and Exporting Data](/v1/recording/). |
 | `Inference` | A cloud policy run started by `Robot.inference`. |
-| `LoraTraining` / `Dataset` | A LoRA run on a hosted base model, and a dataset built on Adamo from recordings. See [Training and Running Policies](/v1/training/). |
-| `Datum` / `ModelInput` / `FramePointer` / `NormStats` / `AdamParams` | What a training loop sends: examples, their normalization stats and optimizer settings. |
+| `LoraTraining` / `Dataset` | A LoRA run on a hosted base model, and a dataset built on Adamo from recordings. See [Training Policies](/v1/training/). |
+| `Datum` / `ModelInput` / `FramePointer` / `AdamParams` | What a training loop sends: examples and optimizer settings. |
+| `Embodiment` / `Joints` / `Gripper` / `BimanualArms` | The layout of a robot's state and action vectors. |
 | `ModelWeights` | Weights saved by a training run, which `Robot.inference` runs by `path`. |
 | `FaceBlur` | Face masking settings for a video track. |
 | `EncoderSelectionError` / `EncoderLibraryError` | No requested encoder could start. |
@@ -255,11 +256,11 @@ Run a policy against this robot. `policy` is the path your organization saved we
 
 ```python
 with adamo.Robot(name="yam-london") as robot:
-    with robot.inference("stack-v1", prompt="stack the cubes") as run:
+    with robot.inference("my-fine-tuned-policy", prompt="stack four cubes") as run:
         run.wait()
 ```
 
-`Inference.status()` returns a dict, `wait()` blocks until the run stops, and `stop()` ends it. See [Training and Running Policies](/v1/training/#running-a-policy-on-a-robot) for the keys a policy reads and writes, the control messages it publishes, and the HTTP calls.
+`Inference.status()` returns a dict, `wait()` blocks until the run stops, and `stop()` ends it. See [Cloud Inference](/v1/inference/) for the keys a policy reads and writes, the control messages it publishes, and the HTTP calls.
 
 ### Lifecycle
 
@@ -578,17 +579,15 @@ Quaternions are always scalar-last `x, y, z, w`. `XrControlSample.is_stale(max_a
 adamo.Recording(
     controller_mask: ControllerMask = ControllerMask.HUMAN | ControllerMask.POLICY,
     *,
-    pre_roll: float = ...,
-    post_roll: float = ...,
-    split_on_takeover: bool = ...,
-    max_duration: float = ...,
-    max_size: int = ...,
-    on_sample: Callable[[int], dict | None] | None = None,
-    sample_rate: float = ...,
+    mode: RecordingMode.Episodes | RecordingMode.Continuous | RecordingMode.Interventions = RecordingMode.Continuous(),
+    max_duration: float = 1800,
+    max_size: int = 1_500_000_000,
+    topics: list[str] = [],
+    record_audio: bool = False,
 )
 ```
 
-What the Adamo data service records for a robot; pass it as `adamo.Robot(record=...)`. `controller_mask` selects sessions where a person (`HUMAN`) or a policy (`POLICY`) is in control, and time when nobody is (`UNATTENDED`). `on_sample(capture_time_us)` is called `sample_rate` times a second while the robot is recorded; the dict it returns (joint states, actions, anything JSON) is recorded on `recording/data` with that capture time, aligned with the video frames.
+What the Adamo data service records for a robot; pass it as `adamo.Robot(record=...)`. `controller_mask` selects when to record, `mode` how the recording is cut into files and on which clock, `topics` the data to record next to the cameras and controls, and `record_audio` the robot's audio tracks. See [Recording a robot](/v1/recording/#recording-a-robot).
 
 ### `Recordings`
 
@@ -601,12 +600,15 @@ recordings.list(
     sessions=None, controllers=None, devices=None, tasks=None,
     tags=None,                     # all of them
     search=None,                   # every word in name, description, or session ID
+    folder=None,                   # everything under this path
 ) -> list[RecordingInfo]
 
 recordings.download(recordings: list[RecordingInfo], directory=".") -> list[Path]
+recordings.export(recordings, config: Export, output_folder=None, download_folder=None, decoders=None) -> LeRobotDataset
+recordings.export_audio(recordings, output_folder="audio", tracks=None, format="wav", download_folder=None) -> list[Path]
 ```
 
-`list` returns recordings that overlap `start`..`end`, oldest first. `download` writes each recording to `{directory}/{device}/{name}.rrd` with its `.json` entry beside it, skipping files already there. A download that fails is retried with a fresh link, resuming from the bytes already written, with 1, 2, 4 and up to 30 s between attempts for up to 5 minutes, unless the recordings API refuses it (400, 401, 403 or 404). Each `RecordingInfo` carries `id`, `device`, `session_id`, `display_name`, `description`, `tags`, `controller`, `started_at`, `ended_at`, `frame_count`, `cameras`, `tasks`, `size_bytes`, and `complete`.
+`list` returns recordings that overlap `start`..`end`, oldest first. `download` writes each recording to `{directory}/{device}/{name}.rrd` with its `.json` entry beside it, skipping files already there. A download that fails is retried with a fresh link, resuming from the bytes already written, with 1, 2, 4 and up to 30 s between attempts for up to 5 minutes, unless the recordings API refuses it (400, 401, 403 or 404). Each `RecordingInfo` carries `id`, `device`, `session_id`, `display_name`, `description`, `tags`, `folder`, `controller`, `user_id`, `started_at`, `ended_at`, `frame_count`, `frame_rate`, `cameras`, `audio_tracks`, `topics`, `tasks`, `size_bytes`, and `complete`. See [Exporting to LeRobot](/v1/recording/#exporting-to-lerobot) and [Exporting audio](/v1/recording/#exporting-audio).
 
 ---
 

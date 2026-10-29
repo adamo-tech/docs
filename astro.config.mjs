@@ -7,7 +7,7 @@ const sections = (prefix) =>
     { label: "Getting Started", items: ["index", "quickstart", "cameras", ...(prefix ? ["local-streaming"] : [])] },
     {
       label: "Building Robots",
-      items: ["control", "audio", "ros", "data", "recording", ...(prefix ? ["training"] : []), "state", "discovery"],
+      items: ["control", "audio", "ros", "data", "recording", ...(prefix ? ["training", "inference"] : []), "state", "discovery"],
     },
     { label: "Operating Robots", items: ["web-interface", "direct-connection", "operator"] },
     { label: "SDK References", items: ["python-sdk", "rust-sdk", "c-sdk", "typescript-sdk"] },

@@ -1,0 +1,93 @@
+---
+title: "Cloud Inference"
+description: "Run a policy on Adamo's GPUs to drive your robot."
+---
+
+Run your policy on Adamo's GPUs instead of on the robot. The robot streams its cameras and state, and receives actions on its control channels.
+
+```python
+robot.inference(policy: str, **arguments) -> Inference
+```
+
+`robot.inference` runs a policy on Adamo's GPUs and drives your robot with it. `policy` is a path you [saved weights or a state at](/v1/training/#saving-states-and-policies), or the name of a model Adamo serves:
+
+```python
+with robot.inference("my-fine-tuned-policy", prompt="stack four cubes") as run:
+    run.wait()
+```
+
+Saved weights know which tracks and topics to read and where to publish, so they need only a `prompt`. A served model without its own mapping also takes `images`, `state`, `action` and `frame_rate`:
+
+```python
+robot.inference(
+    "physical-intelligence/pi0.5-libero", prompt="pick up the black bowl and place it on the plate",
+    images=["cam"], state=["proprioception/joints"], action=["control/openpi.action"], frame_rate=20,
+)
+```
+
+| Model | Arguments | Description |
+|-------|-----------|-------------|
+| `physical-intelligence/pi0.5` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 as Physical Intelligence released it. It uses the checkpoint's `trossen` normalization: two arms of six joints then a gripper, with joint actions as offsets from the current state. |
+| `physical-intelligence/pi0.5-libero` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 fine-tuned on LIBERO. |
+| `abc/dit-bottles` | `prompt` | [ABC](https://abc.bot)-DiT for the bimanual YAM of the ABC sim. It reads the left eye of `head`, `wrist_left`, `wrist_right` and `proprioception/joints`, and publishes 14 joint targets in the `positions` field of `control/joint_state`, at 30 Hz. |
+
+`nvidia/GR00T-N1.7` and `robocurve/pi0.5-yam` are base models only: run them as weights you [fine-tuned](/v1/training/).
+
+## Actions
+
+The policy publishes one action per frame at `frame_rate`:
+
+- An action key that names a topic, such as `left/joint_cmd`, is published under `control/`: `control/left/joint_cmd`, in the field `action`.
+- An action key that names a field of a control channel, such as `control/joint_cmd.positions`, is published in that field.
+- Every message also carries `capture_time_us`, the capture time of the newest frame the policy saw.
+
+```json
+{"capture_time_us": 1791899263877871, "action": [0.12, 0.58, 0.57, -0.11, 0.07, 0.0, 0.95]}
+```
+
+The policy holds the robot like a teleoperator in the web app. When a teleoperator takes control there, the run ends.
+
+## Action chunks
+
+pi0.5 and GR00T ask for their next chunk when half of the current one is left, and `abc/dit-bottles` after 9 of its 30 actions. They ask earlier when recent inferences took longer. A new chunk's first action is for the moment its observation was taken, so the actions whose time passed during inference are skipped.
+
+- `real_time_chunking=True` guides a pi0.5 chunk to agree with the actions still queued, so the robot moves on without a jump (real-time chunking, Black et al. 2025). It adds about 40 ms per inference on an L40S.
+- `abc/dit-bottles` always continues its next 4 queued actions, unless `real_time_chunking=False`.
+- GR00T runs through TensorRT in about 40 ms on an L40S. The first run with a new prompt compiles for about 6 minutes.
+
+The run stops when a track's newest frame is more than 2 s old, when a state topic is silent for 2 s, or when a chunk runs out 1 s before the next one arrives. `status()` says why.
+
+## Monitoring a run
+
+| `Inference` member | Description |
+|--------|-------------|
+| `status()` | A dict: `policy` (`"waiting"`, `"loading"`, `"ready"`, then `"stopped"`), `run`, `last_stop`, `policy_error`, `start_pending`. |
+| `wait()` | Blocks until the run stops. Raises `RuntimeError` if the policy failed, for example because the robot does not publish one of its keys. |
+| `stop()` | Stops the run. Leaving the `with` block or `robot.close()` also stops it. |
+| `id` | The run's id. |
+
+`status()["run"]` reports progress while the policy drives the robot:
+
+| Field | Description |
+|-------|-------------|
+| `published_count` | Actions published so far. |
+| `step` | Control ticks since the run started, one per frame at `frame_rate`. |
+| `observation_ms` | Time to gather the last observation. |
+| `observation_age_ms` | Age of the last observation's frames. |
+| `inference_ms`, `max_inference_ms` | The last inference, and the longest of the last 100. |
+| `remaining_ms_at_arrival` | How much of the previous chunk was left when the last one arrived. |
+| `trimmed_step_count` | Actions of the last chunk skipped because their time had passed. |
+| `held_step_count` | Steps that repeated the last action because the chunk ran out. |
+
+## HTTP
+
+The same calls are available over HTTP with your organization API key:
+
+```bash
+API=https://api.adamohq.com/api/inference
+INFERENCE_ID=$(curl -X POST $API/start -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
+  -d '{"robot_name": "yam-london", "policy": "my-fine-tuned-policy", "arguments": {"prompt": "stack four cubes"}}' | jq -r .inference_id)
+curl "$API/status?inference_id=$INFERENCE_ID" -H "X-API-Key: $ADAMO_API_KEY"
+curl -X POST $API/stop -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
+  -d "{\"inference_id\": \"$INFERENCE_ID\"}"
+```

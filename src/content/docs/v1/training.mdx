@@ -1,9 +1,9 @@
 ---
-title: "Training and Running Policies"
-description: "Fine-tune a hosted VLA on your recordings with a training loop on your own machine, then run the weights on a robot by name"
+title: "Training Policies"
+description: "Fine-tune a policy on your dataset, and deploy it on your robots."
 ---
 
-Adamo fine-tunes a hosted base model on its GPUs while the training loop runs on your machine. Each step sends a batch to `forward_backward` and `optim_step`, in the style of [Tinker](https://tinker-docs.thinkingmachines.ai/). The weights stay on Adamo, and `robot.inference` runs a saved copy on a robot by its path.
+Use Adamo to fine-tune a base policy on your datasets and deploy it to your robot in a few lines of code, all on Adamo's hosted GPUs. Inspect your runs on the [Training page](https://operate.adamohq.com/#/training) and manage your weights on the [Policies page](https://operate.adamohq.com/#/policies).
 
 ```python
 import adamo
@@ -12,22 +12,22 @@ episodes = adamo.Recordings().list(folder="yam-london", tasks=["StackCubes"])
 dataset = adamo.Dataset(episodes, adamo.Export(
     state=["left/joint_pos", "right/joint_pos"],
     action=["left/joint_cmd", "right/joint_cmd"],
-    tasks={"StackCubes": "stack the cubes"},
-    images=["zed.left"],
+    tasks={"StackCubes": "stack four cubes"},
+    images=["zed.left", "wrist_left", "wrist_right"],
 ))
 
 with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as training:
     for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
         training.forward_backward(data, loss_fn="flow_matching")
         training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
-    weights = training.save_weights("stack-v1", ttl_seconds=30 * 24 * 3600).result()
+    weights = training.save_weights("my-fine-tuned-policy", ttl_seconds=30 * 24 * 3600).result()
 
 with adamo.Robot(name="yam-london") as robot:
-    with robot.inference(weights.path, prompt="stack the cubes") as run:
+    with robot.inference(weights.path, prompt="stack four cubes") as run:
         run.wait()
 ```
 
-Every call authenticates with your organization API key, from `ADAMO_API_KEY`.
+The training loop runs in your script, so you control every step. See [Cloud Inference](/v1/inference/) to run the policy on your robot.
 
 ## Datasets
 
@@ -35,118 +35,44 @@ Every call authenticates with your organization API key, from `ADAMO_API_KEY`.
 adamo.Dataset(recordings: list[RecordingInfo], export: Export, cache_ttl_seconds: int | None = 86400, decoders: dict[str, Struct] | None = None)
 ```
 
-`adamo.Dataset` builds a LeRobot dataset from recordings on Adamo and waits until it is ready. It applies the same checks as [`Recordings.export`](/v1/recording/#exporting-to-lerobot) and skips recordings with the same warnings, including those raised while the dataset was built on Adamo. A build where a recording could not be downloaded fails and says which one, and creating the dataset again retries it. It downloads no video: a batch refers to each frame by a `FramePointer`, and the training worker reads the pixels. A topic whose values are not JSON numbers needs a decoder, as for [`Recordings.export`](/v1/recording/#exporting-to-lerobot), and since the dataset is built on Adamo, it must be an `adamo.Struct` layout, not a function: `decoders={"proprioception/joints": adamo.Struct(">8x14f")}`. The same recordings, export and decoders are built once and reused for 7 days, then built again on the next request. Training keeps the dataset next to its GPUs until `cache_ttl_seconds` after its last use, a day by default, so every run after the first reads it without downloading it again; `None` keeps no copy. A cached dataset counts towards the organization's storage until it expires, and creating it again with another `cache_ttl_seconds` sets a new expiry from now. It never expires while a training run that read it is still running. Its calls to Adamo are retried on network errors and 408, 409, 429 and 5xx answers, with 1, 2, 4 and up to 30 s between attempts for up to 5 minutes.
+Train on your recordings without downloading them. `adamo.Dataset` builds a training dataset from [recordings](/v1/recording/#finding-recordings) made with Adamo. It runs the same checks as [`Recordings.export`](/v1/recording/#exporting-to-lerobot), keeping everything on the cloud.
 
-### Cameras
+It returns at once and builds in the background, so a `LoraTraining` started meanwhile gets its GPU during the build. `result()` waits for the build.
 
-`Export(images=...)` names the pictures each example holds, in order. A key is a camera track's name, which keeps the track's whole picture, or a side-by-side stereo track's name followed by `.left` or `.right`, which keeps one eye: the left or right half of each frame. Without `images`, every camera track is kept whole, and recordings with a different set of tracks from the first are skipped with a warning.
+Training caches the dataset next to its GPUs, so later runs start without downloading it again. The cache expires `cache_ttl_seconds` after its last use, and counts towards your organization's storage.
 
-For a robot with two 1280×720 wrist cameras and a ZED that sends both eyes side by side in one 3840×1080 track named `zed`:
-
-```python
-export = adamo.Export(
-    state=["left/joint_pos", "right/joint_pos"],
-    action=["left/joint_cmd", "right/joint_cmd"],
-)
-# every track, whole: {"wrist_left": (720, 1280, 3), "wrist_right": (720, 1280, 3), "zed": (1080, 3840, 3)}
-
-export = adamo.Export(state=[...], action=[...], images=["wrist_left", "wrist_right", "zed"])
-# the same tracks, in this order, with both eyes in one picture
-
-export = adamo.Export(state=[...], action=[...], images=["wrist_left", "wrist_right", "zed.left"])
-# the left eye: {"wrist_left": ..., "wrist_right": ..., "zed.left": (1080, 1920, 3)}
-
-export = adamo.Export(state=[...], action=[...], images=["wrist_left", "wrist_right", "zed.right"])
-# the right eye: {"wrist_left": ..., "wrist_right": ..., "zed.right": (1080, 1920, 3)}
-
-export = adamo.Export(state=[...], action=[...], images=["wrist_left", "wrist_right", "zed.left", "zed.right"])
-# both eyes as two pictures: {"wrist_left": ..., "wrist_right": ..., "zed.left": (1080, 1920, 3), "zed.right": (1080, 1920, 3)}
-```
-
-The shapes are what the training worker reads, before the base model resizes each picture to its own input size, so a whole stereo picture reaches the model with both eyes squeezed into it; two eye keys keep each eye at its own resolution.
-
-- `.left` and `.right` split a frame into its left and right halves, so they are for side-by-side tracks. Keep a top/bottom track whole. A stereo pair sent as [two eye tracks](/v1/cameras/#stereo-cameras) needs no suffix: name each track, as in `images=["head_left", "head_right"]`.
-- A training dataset keeps each camera's video as recorded, also when you choose an eye: the training worker crops the eye from each frame it reads, so choosing one does not slow the build or store another video.
-- Saved weights keep these keys, and `robot.inference` crops the same eye from the live track, so a policy trained on `zed.left` runs on a robot that sends the whole `zed` track.
+Binary topics need an [`adamo.Struct` decoder](/v1/recording/#decoders): `decoders={"proprioception/joints": adamo.Struct(">8x14f")}`.
 
 | Member | Description |
 |--------|-------------|
-| `dataset.batches(training, batch_size)` | An endless iterator of `Datum` lists, with frames drawn at random. It hands the dataset's normalization stats to `training`. |
-| `dataset.norm_stats` | A `NormStats` per state and action key. |
-| `dataset.frame_rate`, `dataset.frame_count`, `dataset.episode_count`, `dataset.id` | What was built. |
+| `batches(training, batch_size)` | An endless iterator of `Datum` lists, with frames drawn at random. |
+| `result(timeout=None)` | Waits until the dataset is built. Raises why the build failed. |
+| `frame_rate`, `frame_count`, `episode_count`, `id` | What was built. |
 
-## The training loop
+### Choosing cameras
+
+Choose which cameras the policy sees, and in which order. `Export(images=...)` names the cameras each example holds. Use a track's name for its whole picture. Add `.left` or `.right` to a side-by-side stereo track for one eye:
 
 ```python
-adamo.LoraTraining(base_model: str, rank: int = 32, norm_stats: dict[str, NormStats] | None = None, seed: int | None = None)
+images=["wrist_left", "wrist_right", "zed"]               # zed: (1080, 3840, 3), both eyes in one picture
+images=["wrist_left", "wrist_right", "zed.left"]          # zed.left: (1080, 1920, 3)
+images=["wrist_left", "wrist_right", "zed.left", "zed.right"]  # each eye as its own picture
 ```
 
-`LoraTraining` starts a LoRA run and waits until its worker is ready, which includes getting a GPU and loading the base model. The base models are `physical-intelligence/pi0.5` (Physical Intelligence's `pi05_base`, 50-step action chunks), `robocurve/pi0.5-yam` (pi0.5 fully fine-tuned by robocurve on AllenAI's MolmoAct2 bimanual YAM data, 16-step action chunks, Gemma license), `nvidia/GR00T-N1.7` (NVIDIA's GR00T N1.7 3B, 40-step action chunks), and `abc/dit-bottles` ([ABC](https://abc.bot)-DiT trained to put plastic bottles in a bin, 30-step action chunks). `rank` sets both of a pi0.5 model's adapters. On `nvidia/GR00T-N1.7`, `rank` sets the adapters of its action head, and the vision-language model stays frozen. GR00T sees each camera letterboxed to 224×224. A GR00T run whose state and actions are each 14 values, two arms of six joints then a gripper, starts from the bimanual YAM embodiment GR00T was pretrained on. Its arms predict actions relative to the current state when `norm_stats` has a `relative_action` entry, the 1st and 99th percentiles of each chunk step's action minus the state (40 × 14 values, flattened), and absolute actions otherwise; its grippers are always absolute. `abc/dit-bottles` is fine-tuned in full, its vision encoder included, so `rank` changes nothing on it. It takes three cameras, in the order of ABC's overhead camera, left wrist and right wrist, and a state and actions of 14 values, two arms of six joints then a gripper, as absolute joint targets. It keeps the normalization stats of its checkpoint, so it does not use `norm_stats`. Leaving the `with` block frees the GPU, and weights that were not saved by then are gone; see [When a run ends](#when-a-run-ends).
+Without `images`, every camera track is kept whole.
 
-| Method | Description |
-|--------|-------------|
-| `forward_backward(data, loss_fn="flow_matching")` | Adds the gradients of a list of `Datum` to the run's gradient sum. The result is a `ForwardBackwardOutput` with `.loss` and `.metrics`. `"flow_matching"` is the only `loss_fn`. |
-| `optim_step(adam_params)` | Applies AdamW to the mean of the summed gradients and clears them. Several `forward_backward` calls before one `optim_step` act as one larger batch. |
-| `save_weights(path, ttl_seconds=None, override=False)` | Stores the trained weights with their normalization stats and mapping at `path`, which `robot.inference(path)` runs. |
-| `save_state(path, ttl_seconds=None, override=False)` | Stores the weights and the optimizer state at `path`, which `LoraTraining.from_state(path)` resumes and `robot.inference(path)` also runs. |
-| `LoraTraining.from_state(path)` | Starts a run from the training state saved at `path`. |
-| `action_horizon` | The number of steps in an action chunk of the base model. |
-| `id` | The run's id. |
+- The base model resizes each picture to its input size. A whole stereo picture squeezes both eyes into one input, so prefer one or two eye keys.
+- Use `.left` and `.right` only on side-by-side tracks. A stereo pair sent as [two eye tracks](/v1/cameras/#stereo-cameras) needs no suffix: `images=["head_left", "head_right"]`.
+- Choosing an eye costs nothing: the dataset keeps the recorded video, and the worker crops each frame.
+- `robot.inference` crops the same eye from the live track, so a policy trained on `zed.left` runs on a robot that sends the whole `zed` track.
 
-| Call | Result |
-|------|--------|
-| `forward_backward` | A `ForwardBackwardOutput` with `.loss`, the mean flow-matching loss over the datums of the call, and `.metrics`, a dict whose `"example_count"` is the number of datums whose gradients are summed since the last `optim_step`. |
-| `optim_step` | `None`. |
-| `save_weights`, `save_state` | A `ModelWeights` with `path`, the path it was saved at, and `expires_at`, which is `None` when kept forever. |
+## Datum
 
-Each method returns at once with a future, and `result()` waits for it. The worker queues calls and runs them in the order they were made, so a training loop does not need to wait on any of them: while the GPU trains on one batch, the worker loads the frames of the next. Waiting on each step before sending the next one leaves the GPU idle while the worker loads frames. To follow the loss, keep the futures and read them every few steps:
+A `Datum` is one training example. To train on data you did not record with Adamo, build each `Datum` yourself from arrays, so any data loader works:
 
 ```python
-in_flight = []
-for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
-    in_flight.append(training.forward_backward(data, loss_fn="flow_matching"))
-    training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
-    if (step + 1) % 10 == 0:
-        print(step + 1, sum(future.result().loss for future in in_flight) / len(in_flight))
-        in_flight.clear()
-```
-
-Results are kept for the whole run, so a future can be waited on at any time. `result(timeout=None)` raises `TimeoutError` if the timeout passes first, and the call keeps running. In async code, `await future.result_async(timeout=None)` waits without blocking the event loop, and `forward_backward_async`, `optim_step_async`, `save_weights_async` and `save_state_async` return the future to await: `future = await training.forward_backward_async(data)`. A large `forward_backward` goes to the worker in several requests, and its result covers the whole batch. A call that cannot reach the worker is sent again for up to 5 minutes. Once a `forward_backward`, `optim_step` or `set_norm_stats` call fails, no later call runs, and their futures say which call failed. A failed save stops nothing.
-
-`AdamParams(learning_rate, beta1=0.9, beta2=0.95, eps=1e-8, weight_decay=1e-10, grad_clip_norm=1.0)` holds the optimizer settings of one step, so the learning rate can follow any schedule. `grad_clip_norm` clips the gradient's global norm before AdamW, and 0 turns clipping off.
-
-`seed` sets the adapters' initial weights and the training noise, and is random when left out. A run started with `from_state` keeps the seed of the run that saved it.
-
-Saved model weights and training states are kept until `ttl_seconds` runs out, and forever with `ttl_seconds=None`. A path is any name you choose, such as `stack-v1` or `yam/pi0.5/step-3000`, and is unique in your organization. Saving at a path that is already taken asks ``"`stack-v1` already exists, do you want to replace it? This action is irreversible. [y/N]"``, and raises `FileExistsError` unless the answer is yes, also when the script has no terminal to ask in. `override=True` replaces it without asking. The names of models Adamo serves, such as `physical-intelligence/pi0.5`, are reserved.
-
-### When a run ends
-
-A run ends and frees its GPU when its `with` block ends or `stop()` is called, and also when its client hasn't reached the worker for 10 minutes. While a `LoraTraining` is open, the SDK checks in with the worker every 30 s, so time spent between calls, such as collecting rollouts or evaluating, keeps the run. A client that is killed, loses its network or sleeps for 10 minutes loses its run, and its next call raises with the reason.
-
-Weights and optimizer state that were not saved are gone when a run ends, so save a training state every few hundred steps, and continue from the latest one with `LoraTraining.from_state` after a crash or a lost connection:
-
-```python
-with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as training:
-    for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
-        training.forward_backward(data, loss_fn="flow_matching")
-        training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
-        if (step + 1) % 500 == 0:
-            training.save_state(f"stack-v1/step-{step + 1}")
-```
-
-A later script continues from the latest one with `adamo.LoraTraining.from_state("stack-v1/step-1500")`.
-
-## Your own data
-
-A `Datum` can carry arrays in place of frame pointers, so any data loader works:
-
-```python
-norm_stats = {
-    "proprioception/joints": adamo.NormStats(q01=state_q01, q99=state_q99),
-    "control/joint_cmd.positions": adamo.NormStats(q01=action_q01, q99=action_q99),
-}
-
-with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", norm_stats=norm_stats) as training:
+with adamo.LoraTraining(base_model="physical-intelligence/pi0.5") as training:
+    training.compute_norm_stats(episode_arrays)
     for images, states, prompts, actions in loader:
         data = [
             adamo.Datum(
@@ -159,72 +85,110 @@ with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", norm_stats=nor
         training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
 ```
 
+`compute_norm_stats(episode_arrays, fraction=1.0)` sends the state and action values of your episodes, each a `{key: (frame_count, size) array}`, so the worker computes the base model's normalization stats. Call it before the first `forward_backward`. An `adamo.Dataset` does this for you.
+
 | Input | Shape | Type | Notes |
 |-------|-------|------|-------|
-| `images[key]` | (height, width, 3) | `uint8`, floats in 0..1 in either channel order, or PNG or JPEG bytes | The worker decodes PNG and JPEG bytes, which are usually smaller to send than arrays. `physical-intelligence/pi0.5` takes up to three images, in the order of the image keys: the main camera, then the left wrist camera, then the right wrist camera. A run with fewer cameras costs less per step, as only the cameras given are computed. |
+| `images[key]` | (height, width, 3) | `uint8`, floats in 0..1, or PNG or JPEG bytes | PNG and JPEG bytes are usually smaller to send. |
 | `state[key]` | (size,) | floats | Raw values, such as radians. |
-| `loss_fn_inputs[key]` | (`training.action_horizon`, size) | floats | Raw actions of this frame and the next ones at `frame_rate`. Where an episode ends sooner, repeat its last action, as `adamo.Dataset` does. |
+| `loss_fn_inputs[key]` | (`training.action_horizon`, size) | floats | Raw actions of this frame and the next ones. Where an episode ends sooner, repeat its last action. |
 | `prompt` | | `str` | The task. |
-| `frame_rate` | | `int` | The frames a second of the state and actions. |
+| `frame_rate` | | `int` | Frames per second of the state and actions. |
 
-- The keys of `images`, `state` and `loss_fn_inputs` are the robot's track and topic names. Saved weights keep them, which is how `robot.inference` knows what to read and where to publish.
-- The worker scales state and actions with the run's `NormStats`, the 1st and 99th percentile of each key per dimension, and scales the same way at inference.
-- A run keeps one set of keys, one frame rate and one set of normalization stats. A datum with other keys, or a second, different set of stats, raises.
-- One `forward_backward` request is limited to 512 MB.
+- Keys are the robot's track and topic names. Saved weights keep them, so `robot.inference` knows what to read and where to publish.
+- A run keeps one set of keys and one frame rate. A datum with other keys raises.
 
-## Running a policy on a robot
+## The training loop
 
 ```python
-robot.inference(policy: str, **arguments) -> Inference
+adamo.LoraTraining(base_model: str, rank: int = 32, seed: int | None = None, embodiment: Embodiment | None = None, name: str | None = None, tags: list[str] = [])
 ```
 
-`policy` is the path your organization saved weights or a training state at, or the name of a model Adamo serves. The other arguments go to the policy, most often `prompt`. ModelWeights carry their mapping. A model name without its own mapping takes it as arguments:
+You write the training loop, so you control the batches, the learning rate schedule and when to save. `LoraTraining` starts a training run and waits until its worker has a GPU and has loaded the base model. Leaving the `with` block or calling `training.stop()` frees the GPU.
+
+Pick the base model closest to your robot and task:
+
+| Base model | Model | Action chunk |
+|------------|-------|--------------|
+| `physical-intelligence/pi0.5` | Physical Intelligence's `pi05_base`. | 50 steps |
+| `robocurve/pi0.5-yam` | pi0.5 fully fine-tuned by robocurve on AllenAI's MolmoAct2 bimanual YAM data. Gemma license. | 16 steps |
+| `nvidia/GR00T-N1.7` | NVIDIA's GR00T N1.7 3B. | 40 steps |
+| `abc/dit-bottles` | [ABC](https://abc.bot)-DiT trained to put plastic bottles in a bin. | 30 steps |
+
+- **pi0.5** takes up to three cameras, in order: the main camera, the left wrist, the right wrist. Fewer cameras cost less per step. `rank` sets the LoRA rank of both the PaliGemma vision-language model and the action expert.
+- **GR00T** trains LoRA adapters on its action head, and its vision-language model stays frozen. It sees each camera letterboxed to 224×224. It predicts `Joints` relative to the current state and `Gripper` values as absolute. When every part of your `embodiment` matches a robot GR00T was pretrained on, in kind, `side` and size, training starts from that robot's weights.
+- **abc/dit-bottles** is fine-tuned in full, vision encoder included, so `rank` does nothing. It takes three cameras, in order: ABC's overhead camera, the left wrist, the right wrist. It keeps its checkpoint's normalization stats.
+
+`embodiment` describes the robot's state and action vectors, part by part, in order. It defaults to `adamo.BimanualArms()`, two six-joint arms with a gripper each. Saved weights keep it.
 
 ```python
-robot.inference(
-    "physical-intelligence/pi0.5-libero", prompt="pick up the black bowl and place it on the plate",
-    images=["cam"], state=["proprioception/joints"], action=["control/openpi.action"], frame_rate=20,
-)
+embodiment = adamo.Embodiment({"arm": adamo.Joints(7, side="right"), "gripper": adamo.Gripper(side="right")})
 ```
 
-The model names are:
+`side`, `"left"` or `"right"`, lets a base model start from a pretrained robot with the same parts.
 
-| Name | Model |
-|---|---|
-| `physical-intelligence/pi0.5` | pi0.5 as Physical Intelligence released it, with no fine-tuning. It runs with the checkpoint's `trossen` normalization: a state of two arms, each six joints then a gripper, and actions in the same layout, with the joints as offsets from the current state. |
-| `physical-intelligence/pi0.5-libero` | Physical Intelligence's pi0.5 fine-tuned on LIBERO. |
-| `abc/dit-bottles` | [ABC](https://abc.bot)-DiT trained to put plastic bottles in a bin, for the bimanual YAM of the ABC sim. It has its own mapping: the left eye of the stereo `head` track and the `wrist_left` and `wrist_right` tracks, the 14 joints on `proprioception/joints`, and 14 joint targets in the `positions` field of `control/joint_state`, at 30 Hz. Only `prompt` is needed. |
+`seed` sets the adapters' initial weights and the training noise. `name` and `tags` label the run on the [Training page](https://operate.adamohq.com/#/training).
 
-The policy reads the tracks in `images` and the topics in `state`, and publishes one action per frame at `frame_rate`:
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `forward_backward(data, loss_fn="flow_matching")` | `ForwardBackwardOutput` | Adds the gradients of a list of `Datum` to the run's gradient sum. `.loss` is the mean loss of the call. `.metrics["example_count"]` counts the datums since the last `optim_step`. |
+| `optim_step(adam_params)` | `None` | Applies AdamW to the mean of the summed gradients and clears them. |
+| `save_weights(path, ttl_seconds=None, override=False, tags=[])` | `ModelWeights` | Saves the weights for `robot.inference`. |
+| `save_state(path, ttl_seconds=None, override=False, tags=[])` | `ModelWeights` | Saves the weights and the optimizer state, to resume training. |
+| `LoraTraining.from_state(path, name=None, tags=[])` | `LoraTraining` | Starts a run from a saved state. |
+| `action_horizon` | `int` | The steps in one action chunk of the base model. |
 
-- An action key that names a topic, such as `left/joint_cmd`, is published on the same name under `control/`: `control/left/joint_cmd`, with the values in the field `action`.
-- An action key that names a field of a control channel, such as `control/joint_cmd.positions`, is published on that channel in that field.
-- Every message is a JSON object that also carries `capture_time_us`, the capture time of the newest frame the policy had seen.
+Several `forward_backward` calls before one `optim_step` act as one larger batch. `"flow_matching"` is the only loss function.
 
-```json
-{"capture_time_us": 1791899263877871, "action": [0.12, 0.58, 0.57, -0.11, 0.07, 0.0, 0.95]}
+`AdamParams(learning_rate, beta1=0.9, beta2=0.95, eps=1e-8, weight_decay=1e-10, grad_clip_norm=1.0)` holds the optimizer settings of one step, so the learning rate can follow any schedule. `grad_clip_norm=0` turns clipping off.
+
+### Futures
+
+Every method returns immediately with a future. The worker runs calls in the order they were made, so don't wait on each step: while the GPU trains on one batch, the worker loads the next. To follow the loss, keep the futures and read them every few steps:
+
+```python
+in_flight = []
+for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
+    in_flight.append(training.forward_backward(data, loss_fn="flow_matching"))
+    training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
+    if (step + 1) % 10 == 0:
+        print(step + 1, sum(future.result().loss for future in in_flight) / len(in_flight))
+        in_flight.clear()
 ```
 
-The policy holds the robot as an operator in the web app does. When a person takes control there, the policy stops publishing and the run ends.
+- `result(timeout=None)` waits for the result. A timeout raises `TimeoutError` and leaves the call running.
+- In async code, use `forward_backward_async`, `optim_step_async`, `save_weights_async` and `save_state_async`, then `await future.result_async()`.
+- Once a `forward_backward` or `optim_step` fails, no later call runs, and their futures say which call failed. A failed save stops nothing.
 
-The pi0.5 and GR00T models ask for their next action chunk while half of the current one is still queued, `abc/dit-bottles` after 9 of its 30 actions, or earlier if recent inferences took longer than that. The new chunk starts from the frame its observation was taken at. With `real_time_chunking=True` among the arguments, a pi0.5 chunk is also guided to agree with the actions still queued, so the robot moves on without a jump between chunks (real-time chunking, Black et al. 2025). Guidance adds about 40 ms to each pi0.5 inference on an L40S. GR00T runs through TensorRT in about 40 ms on an L40S, after a compile of about 6 minutes the first time a run uses a prompt. `abc/dit-bottles` was trained to continue the next 4 queued actions and always does, unless `real_time_chunking=False`. The run stops with the reason when the newest frame of a track was captured more than 2 s ago, when a state topic has not arrived for 2 s, or when a chunk ran out 1 s before the next one arrived.
+### Saving states and policies
 
-`run` in `status()` has `published_count` and `step`, `observation_ms` (how long the last observation took to gather), `inference_ms` and `max_inference_ms` (the longest of the last 100), `observation_age_ms` (how old the frames of the last observation were), `remaining_ms_at_arrival` (how much of the previous chunk was still queued when the last one arrived), `trimmed_step_count` (the actions of the last chunk skipped because their time had passed), and `held_step_count` (the steps that repeated the last action because the chunk had run out).
+Keep your script running: the SDK checks in with the worker every 30 s, and a run whose client is gone for 10 minutes ends. Anything not saved by then is lost.
 
-| `Inference` member | Description |
-|--------|-------------|
-| `status()` | A dict: `policy` (`"waiting"` for a GPU, `"loading"`, `"ready"`, then `"stopped"`), `run` (progress while it drives the robot), `last_stop` (why it stopped on its own), `policy_error`, `start_pending`. |
-| `wait()` | Blocks until the run stops. Raises `RuntimeError` if the policy failed, for example because the robot does not publish one of its keys. |
-| `stop()` | Stops the run. Leaving the `with` block, `robot.close()`, or the robot being collected also stops it. |
-| `id` | The run's inference id. |
+| Method | Use it to |
+|--------|-----------|
+| `save_weights` | Run the policy on a robot with `robot.inference`. |
+| `save_state` | Resume training. It saves the optimizer state with the weights, and `robot.inference` runs it too. |
 
-The same calls are available over HTTP with your organization API key:
+Save a state every few hundred steps, and resume from the latest one after a crash or a lost connection:
 
-```bash
-API=https://api.adamohq.com/api/inference
-curl -X POST $API/start -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
-  -d '{"robot_name": "yam-london", "policy": "stack-v1", "arguments": {"prompt": "stack the cubes"}}'
-curl "$API/status?inference_id=$INFERENCE_ID" -H "X-API-Key: $ADAMO_API_KEY"
-curl -X POST $API/stop -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
-  -d "{\"inference_id\": \"$INFERENCE_ID\"}"
+```python
+# save
+if (step + 1) % 500 == 0:
+    training.save_state(f"my-fine-tuned-policy/step-{step + 1}")
+
+# resume
+with adamo.LoraTraining.from_state("my-fine-tuned-policy/step-1500") as training:
+    ...
 ```
+
+Each save returns a `ModelWeights`:
+
+```python
+weights = training.save_weights("my-fine-tuned-policy").result()
+print(weights.path)  # my-fine-tuned-policy
+print(weights.expires_at)  # None: kept forever
+```
+
+A path is any name you choose, such as `stack-v1` or `yam/pi0.5/step-3000`, unique in your organization. Saving at a taken path asks you to confirm, and raises `FileExistsError` without a yes. `override=True` replaces it without asking.
+
+Saves are kept for `ttl_seconds`, or forever with `ttl_seconds=None`. `tags` label them on the [Policies page](https://operate.adamohq.com/#/policies).
