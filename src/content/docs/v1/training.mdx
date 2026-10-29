@@ -16,11 +16,11 @@ dataset = adamo.Dataset(episodes, adamo.Export(
     images=["zed.left", "wrist_left", "wrist_right"],
 ))
 
-with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32) as training:
+with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32, name="my-fine-tuned-policy") as training:
     for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
         training.forward_backward(data, loss_fn="flow_matching")
         training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
-    weights = training.save_weights("my-fine-tuned-policy", ttl_seconds=30 * 24 * 3600).result()
+    weights = training.save_weights("my-fine-tuned-policy/final", ttl_seconds=30 * 24 * 3600).result()
 
 with adamo.Robot(name="yam-london") as robot:
     with robot.inference(weights.path, prompt="stack four cubes") as run:
@@ -127,7 +127,7 @@ embodiment = adamo.Embodiment({"arm": adamo.Joints(7, side="right"), "gripper": 
 
 `side`, `"left"` or `"right"`, lets a base model start from a pretrained robot with the same parts.
 
-`seed` sets the adapters' initial weights and the training noise. `name` and `tags` label the run on the [Training page](https://operate.adamohq.com/#/training).
+`seed` sets the adapters' initial weights and the training noise. `name` and `tags` label the run on the [Training page](https://operate.adamohq.com/#/training). A `/` in `name` groups runs into folders there: `pi0.5/stack-cubes` sits in the `pi0.5` folder.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
@@ -184,11 +184,11 @@ with adamo.LoraTraining.from_state("my-fine-tuned-policy/step-1500") as training
 Each save returns a `ModelWeights`:
 
 ```python
-weights = training.save_weights("my-fine-tuned-policy").result()
-print(weights.path)  # my-fine-tuned-policy
+weights = training.save_weights("my-fine-tuned-policy/final").result()
+print(weights.path)  # my-fine-tuned-policy/final
 print(weights.expires_at)  # None: kept forever
 ```
 
-A path is any name you choose, such as `stack-v1` or `yam/pi0.5/step-3000`, unique in your organization. Saving at a taken path asks you to confirm, and raises `FileExistsError` without a yes. `override=True` replaces it without asking.
+A path is any name you choose, unique in your organization. A `/` groups saves into folders on the [Policies page](https://operate.adamohq.com/#/policies), so name a run's saves after it: `my-fine-tuned-policy/step-1500` and `my-fine-tuned-policy/final` sit in the `my-fine-tuned-policy` folder. Saving at a taken path asks you to confirm, and raises `FileExistsError` without a yes. `override=True` replaces it without asking.
 
 Saves are kept for `ttl_seconds`, or forever with `ttl_seconds=None`. `tags` label them on the [Policies page](https://operate.adamohq.com/#/policies).
