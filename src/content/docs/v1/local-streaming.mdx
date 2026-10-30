@@ -83,11 +83,11 @@ robot = adamo.Robot(name="my-arm", port=17447, pairing_key="<key printed on the 
 From SDK **1.0.19**, `pairing_key` can also be a password. Any value that is not a generated 43-character key is stretched into one, and the viewer and `adamo.connect_local()` accept the same password:
 
 ```python
-robot = adamo.Robot(name="my-arm", port=17447, pairing_key="a long robot password")
+robot = adamo.Robot(name="my-arm", port=17447, pairing_key="long-robot-password-42")
 ```
 
 ```
-https://local.adamohq.com/#robot=192.168.1.20:17447&key=a%20long%20robot%20password
+https://local.adamohq.com/#robot=192.168.1.20:17447&key=long-robot-password-42
 ```
 
 URL-encode the password in a link: spaces, `&`, `#`, `+`, and `%` must be escaped. Anyone on the robot's network can guess a short password offline, so use a long one; the robot warns below 12 characters.
