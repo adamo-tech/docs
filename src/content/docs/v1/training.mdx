@@ -108,18 +108,18 @@ You write the training loop, so you control the batches, the learning rate sched
 
 Pick the base model closest to your robot and task:
 
-| Base model | Model | Action chunk |
-|------------|-------|--------------|
-| `physical-intelligence/pi0.5` | Physical Intelligence's `pi05_base`. | 50 steps |
-| `robocurve/pi0.5-yam` | pi0.5 fully fine-tuned by robocurve on AllenAI's MolmoAct2 bimanual YAM data. Gemma license. | 16 steps |
-| `nvidia/GR00T-N1.7` | NVIDIA's GR00T N1.7 3B. | 40 steps |
-| `abc/dit-bottles` | [ABC](https://abc.bot)-DiT trained to put plastic bottles in a bin. | 30 steps |
+| Base model | Model | Action chunk | Default embodiment |
+|------------|-------|--------------|--------------------|
+| `physical-intelligence/pi0.5` | Physical Intelligence's `pi05_base`. | 50 steps | Required |
+| `robocurve/pi0.5-yam` | pi0.5 fully fine-tuned by robocurve on AllenAI's MolmoAct2 bimanual YAM data. Gemma license. | 16 steps | `adamo.BimanualArms()` |
+| `nvidia/GR00T-N1.7` | NVIDIA's GR00T N1.7 3B. | 40 steps | Required |
+| `abc/dit-bottles` | [ABC](https://abc.bot)-DiT trained to put plastic bottles in a bin. | 30 steps | `adamo.BimanualArms()` |
+| `allenai/MolmoAct2` | AllenAI's MolmoAct2 | 30 steps | Required |
+| `allenai/MolmoAct2-BimanualYAM` | MolmoAct2 fine-tuned by AllenAI on bimanual YAM data. Apache 2.0. | 30 steps | `adamo.BimanualArms()` |
+| `allenai/MolmoAct2-DROID` | MolmoAct2 fine-tuned by AllenAI for the DROID Franka. Apache 2.0. | 15 steps | 7 `Joints`, then a `Gripper` |
+| `allenai/MolmoAct2-SO100_101` | MolmoAct2 fine-tuned by AllenAI for SO-100/101. Apache 2.0. | 30 steps | 5 `Joints`, then a `Gripper` |
 
-- **pi0.5** takes up to three cameras, in order: the main camera, the left wrist, the right wrist. Fewer cameras cost less per step. `rank` sets the LoRA rank of both the PaliGemma vision-language model and the action expert.
-- **GR00T** trains LoRA adapters on its action head, and its vision-language model stays frozen. It sees each camera letterboxed to 224×224. It predicts `Joints` relative to the current state and `Gripper` values as absolute. When every part of your `embodiment` matches a robot GR00T was pretrained on, in kind, `side` and size, training starts from that robot's weights.
-- **abc/dit-bottles** is fine-tuned in full, vision encoder included, so `rank` does nothing. It takes three cameras, in order: ABC's overhead camera, the left wrist, the right wrist. It keeps its checkpoint's normalization stats.
-
-`embodiment` describes the robot's state and action vectors, part by part, in order. It defaults to `adamo.BimanualArms()`, two six-joint arms with a gripper each. Saved weights keep it.
+`embodiment` describes the robot's state and action vectors, part by part, in order. It defaults to the robot the base model was trained for.
 
 ```python
 embodiment = adamo.Embodiment({"arm": adamo.Joints(7, side="right"), "gripper": adamo.Gripper(side="right")})
