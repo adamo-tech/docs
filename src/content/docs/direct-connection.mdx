@@ -13,7 +13,7 @@ It's **additive and automatic**: the browser uses the direct path when one is av
 
 A direct connection is used only when **all** of these hold — otherwise the session stays on the relay, which always works:
 
-- **The robot serves P2P** (see below) and **its firewall allows the direct port** (see [Open the robot's firewall](#open-the-robots-firewall)).
+- **The robot opts in** to serving P2P (see below). Robots don't serve it by default.
 - **A direct network path exists** between your browser and the robot: the same LAN, the same [Tailscale](https://tailscale.com) tailnet, or a robot with a publicly reachable IP. Robots behind symmetric CGNAT (for example Starlink) usually can't be reached directly and stay on the relay.
 - **You're on Chrome / a Chromium browser.** The direct path pins a self-signed certificate, which only Chromium supports; Safari and Firefox fall back to the relay.
 
@@ -24,11 +24,13 @@ The robot has to opt in. Add one call to the robot you already have (see [Quicks
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
+The Python SDK 1.0 has no `p2p=` option. Its video tracks take `route=` instead: `"auto"` (the default) races a LAN candidate against the relay, `"relay"` never dials one, and `"local"` requires the direct link named by `direct_target`.
+
 ```python
 import adamo
 
-robot = adamo.Robot(api_key="ak_...", name="my-arm", p2p=True)
-robot.attach_video("main", device="/dev/video0")
+robot = adamo.Robot(api_key="ak_...", name="my-arm")
+robot.attach_video("main", device="/dev/video0", route="auto")
 robot.run()
 ```
 
@@ -40,7 +42,7 @@ use adamo::Robot;
 
 fn main() -> adamo::Result<()> {
     let mut robot = Robot::new_default("ak_...", Some("my-arm"))?;
-    robot.enable_p2p(17447)?; // the UDP port operators open in the firewall
+    robot.enable_p2p(443)?; // 0 → default port 443
     robot.attach_v4l2("main", "/dev/video0", 1280, 720, 30, 4000, false)?;
     robot.run()
 }
@@ -51,7 +53,7 @@ fn main() -> adamo::Result<()> {
 
 ```c
 adamo_robot_t *robot = adamo_robot_new_default("ak_...", "my-arm");
-adamo_robot_enable_p2p(robot, 17447); // the UDP port operators open in the firewall
+adamo_robot_enable_p2p(robot, 443); // 0 → default port 443
 // ... attach video ...
 adamo_robot_run(robot);
 ```
@@ -77,50 +79,6 @@ p2p_port: 443
 
 The P2P listener is additive — the robot keeps its normal relay connection, so operators who can't reach it directly still see video over the relay.
 
-## Open the robot's firewall
-
-A direct connection is an **inbound** connection to the robot, so the robot's own firewall has to let it in. The relay connection is outbound and unaffected, which is why a robot with a closed firewall still works fine over the relay — it just never goes direct.
-
-Hosted robots listen for direct connections on **UDP port 17447**. The SDK prints the port it ended up on at startup:
-
-```
-adamo: direct connections listen on UDP port 17447 (and TCP 17447 for offline pairing); open the UDP port in the robot's firewall for operators on its network
-```
-
-If 17447 is already taken on the host (for example by another robot process), the SDK tries 17448, 17449, and so on, so check the printed port rather than assuming. To pin a different port, set `ADAMO_DIRECT_PORT` in the robot's environment.
-
-On Ubuntu / Debian with `ufw`, allow the port:
-
-```sh
-sudo ufw allow 17447/udp
-```
-
-To limit the rule to operators on the robot's LAN, restrict it to your subnet instead (adjust `192.168.1.0/24` to match your network):
-
-```sh
-sudo ufw allow proto udp from 192.168.1.0/24 to any port 17447
-```
-
-Other firewalls follow the same idea — allow inbound UDP on the robot's direct port:
-
-```sh
-# firewalld (Fedora / RHEL)
-sudo firewall-cmd --permanent --add-port=17447/udp && sudo firewall-cmd --reload
-
-# nftables / iptables
-sudo iptables -I INPUT -p udp --dport 17447 -j ACCEPT
-```
-
-Offline pairing (robots running without an Adamo account, see the SDK's `Robot.local`) also uses **TCP** on the same port; open `17447/tcp` as well only if you use it.
-
-A few things that look like a firewall problem but aren't:
-
-- **The browser's "local network access" prompt** (Chrome) only lets the page *attempt* a local connection. Allowing it does not open anything on the robot — the robot-side rule above is still required.
-- **Wi-Fi client isolation.** Many guest and office networks stop devices on the same Wi-Fi from talking to each other at all. If a wired laptop connects directly but a phone on the Wi-Fi stays on the relay with the firewall open, this is usually the cause. Connect both through the same switch or use [Tailscale](#best-results-tailscale).
-- **Different networks.** The direct path needs a route from the browser to the robot; across networks that means Tailscale or a publicly reachable IP, not a firewall change.
-
-To check which path you're on, see [Use it in the browser](#use-it-in-the-browser).
-
 ## Use it in the browser
 
 Nothing to configure. Open the robot on [operate.adamohq.com](https://operate.adamohq.com) in Chrome and it connects directly when it can.
@@ -139,6 +97,99 @@ Direct connections fall back to the relay automatically, but you can also force 
 ```js
 localStorage.setItem('adamo_p2p', '0')
 ```
+
+## Fully local: no API key or relay
+
+A robot can also stream with **no Adamo account, API key, or internet connection**. Use this on an isolated network, on a bench, or between two processes on the same machine. The robot serves video itself, and a receiver connects to it with the robot's address and a **pairing key**. Nothing goes through the Adamo network.
+
+Requires SDK **1.0.17** or later on both the robot and the receiver.
+
+### Stream from the robot
+
+Run your usual robot script **without an API key**. When neither `api_key` nor `ADAMO_API_KEY` is set, `adamo.Robot()` warns and starts as a local robot instead of connecting to the relay. The same script therefore streams through the relay when the key is set and locally when it isn't:
+
+```python
+import adamo
+import numpy as np
+
+robot = adamo.Robot(name="my-arm")  # local when ADAMO_API_KEY is not set
+
+track = robot.video("front", pixel_format="BGR", width=640, height=360, fps=30)
+frame = np.zeros((360, 640, 3), dtype=np.uint8)
+for _ in adamo.Rate(30):
+    track.send(frame)  # or a frame from your camera
+```
+
+The local robot listens on port **17447**: UDP for video and TCP for pairing. At startup it prints the pairing key to hand to the receiver:
+
+```
+adamo: warning: no API key was found (pass api_key or set ADAMO_API_KEY), so my-arm is running locally without the cloud. It will not appear on operate.adamohq.com, and recording and inference are unavailable.
+adamo: connect on this network with address <this machine's IP>:17447 and pairing key <pairing key>
+adamo: from Python: adamo.connect_local("<ip>:17447", "<pairing key>")
+```
+
+An API key that is set but invalid is still an error; the robot only runs locally when no key is present at all.
+
+To always run locally, whether or not a key is set, use `adamo.Robot.local()`. It also takes a different `port` and a fixed `pairing_key`, and reports them as `robot.local_port` and `robot.local_pairing_key`.
+
+Hardware-attached tracks (`robot.attach_video(...)` then `robot.run()`) work the same way as on a cloud robot.
+
+The pairing key is generated when the robot starts, so a new key is printed on each run. To keep the same key across restarts, pass the first run's key back in with `Robot.local()`:
+
+```python
+robot = adamo.Robot.local("my-arm", pairing_key="<key printed on the first run>")
+```
+
+Treat the pairing key like a password: anyone on the network who has it can watch the robot's video and send it control messages.
+
+### Receive in another process
+
+Connect with the robot's address and pairing key, then open a video receiver exactly as you would over the relay:
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+import adamo
+import numpy as np
+
+with adamo.connect_local("192.168.1.20:17447", "<pairing key>") as session:
+    with session.video_receiver("my-arm", "front", max_queued_frames=1) as receiver:
+        while True:
+            frame = receiver.recv(timeout=5.0)
+            rgba = np.asarray(frame.rgba)  # uint8 (height, width, 4)
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use std::{sync::Arc, time::Duration};
+use adamo::{Session, video_receiver::VideoReceiver};
+
+fn main() -> adamo::Result<()> {
+    let session = Arc::new(Session::connect_local("192.168.1.20:17447", "<pairing key>")?);
+    let receiver = VideoReceiver::subscribe(session, "my-arm", "front", 1)?;
+    loop {
+        // None means no frame arrived within the timeout.
+        if let Some(frame) = receiver.recv(Duration::from_secs(5))? {
+            println!("{}x{} seq {}", frame.width, frame.height, frame.sequence);
+        }
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+On the same machine, use `127.0.0.1:17447`. The address can omit the port when the robot uses the default `17447`.
+
+### Things to know
+
+- **Only one local robot per port.** A second `Robot.local()` on the same machine fails with *Address already in use*. Give it another port with `adamo.Robot.local("other-arm", port=17448)`.
+- **The robot's firewall must allow UDP and TCP on its port** for receivers on other machines, for example `sudo ufw allow 17447` with `ufw`.
+- **Local robots are invisible to the cloud.** They don't appear on operate.adamohq.com and can't be recorded by the Adamo data service.
+- **Linux and macOS only** for the receiver.
 
 ## Notes
 

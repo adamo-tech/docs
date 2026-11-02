@@ -27,7 +27,7 @@ with adamo.Robot(name="yam-london") as robot:
         run.wait()
 ```
 
-The training loop runs in your script, so you control every step. See [Cloud Inference](/v1/inference/) to run the policy on your robot.
+The training loop runs in your script, so you control every step. See [Cloud Inference](/inference/) to run the policy on your robot.
 
 ## Datasets
 
@@ -35,13 +35,13 @@ The training loop runs in your script, so you control every step. See [Cloud Inf
 adamo.Dataset(recordings: list[RecordingInfo], export: Export, cache_ttl_seconds: int | None = 86400, decoders: dict[str, Struct] | None = None)
 ```
 
-Train on your recordings without downloading them. `adamo.Dataset` builds a training dataset from [recordings](/v1/recording/#finding-recordings) made with Adamo. It runs the same checks as [`Recordings.export`](/v1/recording/#exporting-to-lerobot), keeping everything on the cloud.
+Train on your recordings without downloading them. `adamo.Dataset` builds a training dataset from [recordings](/recording/#finding-recordings) made with Adamo. It runs the same checks as [`Recordings.export`](/recording/#exporting-to-lerobot), keeping everything on the cloud.
 
 It returns at once and builds in the background, so a `LoraTraining` started meanwhile gets its GPU during the build. `result()` waits for the build.
 
 Training caches the dataset next to its GPUs, so later runs start without downloading it again. The cache expires `cache_ttl_seconds` after its last use, and counts towards your organization's storage.
 
-Binary topics need an [`adamo.Struct` decoder](/v1/recording/#decoders): `decoders={"proprioception/joints": adamo.Struct(">8x14f")}`.
+Binary topics need an [`adamo.Struct` decoder](/recording/#decoders): `decoders={"proprioception/joints": adamo.Struct(">8x14f")}`.
 
 | Member | Description |
 |--------|-------------|
@@ -62,7 +62,7 @@ images=["wrist_left", "wrist_right", "zed.left", "zed.right"]  # each eye as its
 Without `images`, every camera track is kept whole.
 
 - The base model resizes each picture to its input size. A whole stereo picture squeezes both eyes into one input, so prefer one or two eye keys.
-- Use `.left` and `.right` only on side-by-side tracks. A stereo pair sent as [two eye tracks](/v1/cameras/#stereo-cameras) needs no suffix: `images=["head_left", "head_right"]`.
+- Use `.left` and `.right` only on side-by-side tracks. A stereo pair sent as [two eye tracks](/cameras/#stereo-cameras) needs no suffix: `images=["head_left", "head_right"]`.
 - Choosing an eye costs nothing: the dataset keeps the recorded video, and the worker crops each frame.
 - `robot.inference` crops the same eye from the live track, so a policy trained on `zed.left` runs on a robot that sends the whole `zed` track.
 

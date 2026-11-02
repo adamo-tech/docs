@@ -177,7 +177,7 @@ Watch for liveliness changes. The callback fires with `(prefix-stripped key, is_
 pub fn state_store(&self, robot: &str) -> Result<StateStore<'_>>;
 ```
 
-Declare a robot-owned [key/value store](/v1/state/) on `{robot}/state/**`. The robot updates it; operators read with `get` / `subscribe`.
+Declare a robot-owned [key/value store](/v0/state/) on `{robot}/state/**`. The robot updates it; operators read with `get` / `subscribe`.
 
 ### `Session::task_runner`
 
@@ -185,7 +185,7 @@ Declare a robot-owned [key/value store](/v1/state/) on `{robot}/state/**`. The r
 pub fn task_runner(&self, robot: &str) -> Result<TaskRunner<'_>>;
 ```
 
-Declare a [task runner](/v1/state/#task-runs) — a looping subtask sequence with an idle gap between reps — published on `{robot}/state/task_run`.
+Declare a [task runner](/v0/state/#task-runs) — a looping subtask sequence with an idle gap between reps — published on `{robot}/state/task_run`.
 
 ### `Session::relay_rtt`
 
@@ -314,7 +314,7 @@ Returned by `Session::subscribe_with`. `Send + Sync`. The callback runs on a bac
 
 ## `StateStore<'a>`
 
-A robot-owned retained key/value store — see [Robot State](/v1/state/). Tied to its `Session` by lifetime; dropping it stops answering reads.
+A robot-owned retained key/value store — see [Robot State](/v0/state/). Tied to its `Session` by lifetime; dropping it stops answering reads.
 
 ```rust
 pub fn set(&self, key: &str, value: &[u8]) -> Result<()>;
@@ -326,7 +326,7 @@ pub fn delete(&self, key: &str) -> Result<()>;
 
 ## `TaskRunner<'a>`
 
-A looping subtask sequence with an idle gap between reps; publishes `{robot}/state/task_run`. See [Task Runs](/v1/state/#task-runs).
+A looping subtask sequence with an idle gap between reps; publishes `{robot}/state/task_run`. See [Task Runs](/v0/state/#task-runs).
 
 ```rust
 // subtasks: &[(id, name)] in order
@@ -462,8 +462,6 @@ pub struct VideoOptions {
     pub fps: u32,
     pub keyframe_distance: f64,
     pub stereo: bool,
-    pub stereo_left: bool,            // left eye of a two-track stereo pair
-    pub stereo_right: bool,           // right eye of a two-track stereo pair
     pub backend: VideoBackend,
     pub shm_publish: Option<String>,
     pub passthrough: bool,
@@ -472,15 +470,13 @@ pub struct VideoOptions {
 ```
 
 `VideoOptions::default()` produces a 1280×720, 30 fps H.264 track at
-2000 kbit/s with adaptive bitrate enabled. `stereo_left` and `stereo_right`
-mark the two eyes of the robot's one two-track stereo pair; see
-[Stereo Cameras](/v1/cameras/#stereo-cameras). Builder helpers include
+2000 kbit/s with adaptive bitrate enabled. Builder helpers include
 `with_source_format`, `with_encoder`, `with_backend`, `with_shm_publish`, and
 `with_passthrough`.
 
 `face_blur: Some(FaceBlurOptions::default())` masks faces on the robot before
 encoding. It requires the `face_blur` feature and ONNX Runtime. See
-[Masking faces](/v1/cameras/#masking-faces).
+[Masking faces](/v0/cameras/#masking-faces).
 
 ### `Robot`
 
@@ -580,7 +576,7 @@ robot.run()?;
 This decodes H.265 from shared memory and sends H.264 through Adamo. Use
 `VideoBackend::GStreamer` to force the GStreamer path. Set `passthrough: true`
 only when the input and output codecs match and no decode/re-encode is wanted.
-See [Adding Cameras: transcoding encoded shared memory](/v1/cameras/#transcode-h264-or-h265-from-shared-memory)
+See [Adding Cameras: transcoding encoded shared memory](/v0/cameras/#transcode-h264-or-h265-from-shared-memory)
 for the producer wire format and host encoder names.
 
 <Aside>The `attach_gst(...)` GStreamer pipeline path is still present in the crate but deprecated for new code; use V4L2 or shared memory instead.</Aside>
@@ -605,63 +601,6 @@ pub fn detect_encoder() -> Result<&'static str>;
 
 Returns the best available H.264 encoder for the host (NVENC, VA-API, VideoToolbox, x264) or `"none"` if no encoder is available.
 
-### `VideoReceiver`
-
-Subscribes to one of a robot's video tracks and decodes it to images, for inference and perception clients. Each receiver decodes every picture on its own worker thread, then keeps only the newest `max_queued_frames` decoded images (1 to 64). A slow consumer drops whole decoded images, never encoded frames, so it still gets the most recent picture without decode artifacts.
-
-```rust
-use adamo::video_receiver::{VideoFrame, VideoImageFrame, VideoOutput, VideoReceiver};
-
-impl VideoReceiver {
-    /// An H.264 track, decoded to CPU RGBA.
-    pub fn subscribe(session: Arc<Session>, robot: &str, track: &str, max_queued_frames: usize) -> Result<Self>;
-    /// The codec must match the publisher's: `VideoCodec::H264` or `VideoCodec::Av1`.
-    pub fn subscribe_with_codec(session: Arc<Session>, robot: &str, track: &str, max_queued_frames: usize, codec: VideoCodec) -> Result<Self>;
-    /// Requests an exact output format and memory, such as NV12 or RGBA in CUDA memory.
-    pub fn subscribe_with_output(session: Arc<Session>, robot: &str, track: &str, max_queued_frames: usize, codec: VideoCodec, output: VideoOutput) -> Result<Self>;
-
-    /// The oldest queued image as CPU RGBA, or `None` after `timeout`.
-    pub fn recv(&self, timeout: Duration) -> Result<Option<VideoFrame>>;
-    /// The oldest queued image in the requested output, without copying it to the CPU.
-    pub fn recv_image(&self, timeout: Duration) -> Result<Option<VideoImageFrame>>;
-    /// Stops the decoder worker; also runs on drop.
-    pub fn close(&self) -> Result<()>;
-}
-
-pub struct VideoFrame {
-    pub rgba: Vec<u8>,          // tightly packed RGBA, width × height × 4 bytes
-    pub width: u32,
-    pub height: u32,
-    pub sequence: u64,          // frame number from the robot's encoder
-    pub capture_time_us: u64,   // capture time stamped by the robot
-    pub keyframe: bool,
-}
-
-pub struct VideoOutput {
-    pub capability: adamo::io::video::VideoFrameCapability, // default: RGBA in CPU memory
-    pub device_ordinal: u32,                                // CUDA device; default 0
-}
-```
-
-`VideoCodec` is `adamo::media::video::VideoCodec`. `VideoImageFrame` has the same fields as `VideoFrame`, but in place of `rgba` it carries `image`, an `adamo::io::video::RawFrame` that keeps GPU storage. `to_rgba()` or `into_rgba()` converts it to a CPU `VideoFrame` when needed. Requires the `video` feature.
-
-```rust
-use std::{sync::Arc, time::Duration};
-use adamo::{Session, video_receiver::VideoReceiver};
-
-let session = Arc::new(Session::open_default(&std::env::var("ADAMO_API_KEY")?)?);
-let receiver = VideoReceiver::subscribe(session.clone(), "my-robot", "head", 1)?;
-loop {
-    match receiver.recv(Duration::from_secs(5)) {
-        Ok(Some(frame)) => { /* frame.rgba: frame.width × frame.height × 4 bytes */ }
-        Ok(None) => eprintln!("no frame from my-robot/head in 5 s"),
-        Err(error) => eprintln!("{error}"), // see below for which errors recover
-    }
-}
-```
-
-The `subscribe` calls return an error if the requested codec, output format or memory has no decoder on this host. They never fall back silently to a different output. If a picture fails to decode, `recv` returns that error once. The receiver then resets its decoder and asks the robot for a keyframe, so the next calls deliver frames again. If the worker itself stops, every later `recv` returns an error that says to close and reopen the receiver. The CUDA output paths have the same requirements and limits as in [Python](/v1/python-sdk/#copies-cpu-access-and-requirements).
-
 ---
 
 ## Audio: `feature = "audio"`
@@ -669,7 +608,7 @@ The `subscribe` calls return an error if the requested codec, output format or m
 The `audio` feature adds audio tracks to `Robot`, `AudioReceiver` for
 decoding them and `AudioPlayback` for playing them. It implies `video`. Builds need libopus (`libopus-dev` or
 `brew install opus`) and, on Linux, `libasound2-dev`. See
-[Streaming Audio](/v1/audio/) for sources, defaults and transport.
+[Streaming Audio](/v0/audio/) for sources, defaults and transport.
 
 ### `AudioOptions`
 

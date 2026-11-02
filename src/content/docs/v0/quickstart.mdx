@@ -7,7 +7,7 @@ import { Tabs, TabItem, Steps, LinkCard, CardGrid } from "@astrojs/starlight/com
 
 Get a robot streaming video to [operate.adamohq.com](https://operate.adamohq.com) in under five minutes. Pick the language you want to write your robot in — Python, Rust, or C — install the SDK, write a short program that opens a camera, run it.
 
-You don't need to write an operator — operate.adamohq.com provides a gamepad, VR teleop, recording, and replay against any robot you've started. The [Building Your Own Operator](/v1/operator/) page covers the case when you want a custom one.
+You don't need to write an operator — operate.adamohq.com provides a gamepad, VR teleop, recording, and replay against any robot you've started. The [Building Your Own Operator](/v0/operator/) page covers the case when you want a custom one.
 
 ## Install the SDK
 
@@ -18,7 +18,11 @@ You don't need to write an operator — operate.adamohq.com provides a gamepad, 
 pip install adamo
 ```
 
-Requires Python 3.8+. Video support is built in; there are no extras to install.
+Requires Python 3.10+. On the robot host you'll also want the video extras:
+
+```sh
+pip install 'adamo[video]'
+```
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -47,7 +51,7 @@ curl -fsSL -o adamo-sdk.tar.gz \
 sudo tar xzf adamo-sdk.tar.gz -C /opt
 ```
 
-Builds are also available for Linux x86_64 and macOS arm64, with and without video — see the [C SDK install section](/v1/c-sdk/#install) for the full list and the GStreamer runtime the `-video` builds need.
+Builds are also available for Linux x86_64 and macOS arm64, with and without video — see the [C SDK install section](/v0/c-sdk/#install) for the full list and the GStreamer runtime the `-video` builds need.
 
 Then in your project's `CMakeLists.txt`:
 
@@ -126,7 +130,7 @@ int main(void) {
 ### First step: run the doctor
 
 ```sh
-adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
+python -m adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
 ```
 
 It checks API key validity, QUIC reachability (including whether this network blocks UDP), encoder availability, and the video extras — and prints output you can paste straight into a support request.
@@ -184,14 +188,14 @@ Open [operate.adamohq.com](https://operate.adamohq.com) and log in. Your robot a
 
 From there you have:
 
-- **Gamepad control** — plug in a USB or Bluetooth controller; the web app publishes Joy messages that your robot can subscribe to. See [Receiving Control](/v1/control/).
+- **Gamepad control** — plug in a USB or Bluetooth controller; the web app publishes Joy messages that your robot can subscribe to. See [Receiving Control](/v0/control/).
 - **VR teleop** — for stereo camera tracks, "View Stereo" launches a WebXR view with head + controller pose forwarded to the robot.
 - **Recording & replay** — every session can be recorded and replayed later.
 - **Layouts** — multi-camera grids you can configure once and reuse.
 
-See [The operate.adamohq.com Platform](/v1/web-interface/) for the full tour.
+See [The operate.adamohq.com Platform](/v0/web-interface/) for the full tour.
 
-To make the robot *respond* to gamepad or VR input, see [Receiving Control](/v1/control/).
+To make the robot *respond* to gamepad or VR input, see [Receiving Control](/v0/control/).
 
 ## Inspect Live Topics
 
@@ -200,17 +204,17 @@ When you are not sure what is flowing through the network, subscribe to a wildca
 ```python
 import adamo
 
-robot = adamo.Robot(api_key="ak_...", name="topic-tap")
+session = adamo.connect(api_key="ak_...")
 seen = set()
 
-with robot.session.subscribe("my-arm/**") as sub:
+with session.subscribe("my-arm/**") as sub:
     for sample in sub:
         if sample.key not in seen:
             seen.add(sample.key)
             print(sample.key)
 ```
 
-Use `my-arm/**` for one robot, `**/control/**` for control traffic, or `**` when you really want to see every sample in your org. See [Robot and Topic Discovery](/v1/discovery/#listing-live-topics) for Python, Rust, C, and TypeScript versions.
+Use `my-arm/**` for one robot, `**/control/**` for control traffic, or `**` when you really want to see every sample in your org. See [Robot and Topic Discovery](/v0/discovery/#listing-live-topics) for Python, Rust, C, and TypeScript versions.
 
 ## Add More Cameras
 
@@ -225,8 +229,7 @@ import adamo
 robot = adamo.Robot(api_key="ak_...", name="my-arm")
 robot.attach_video("wrist_left",  device="/dev/video0")
 robot.attach_video("wrist_right", device="/dev/video1")
-robot.attach_video("head",        shm="head_cam",     # iceoryx2 SHM
-                   pixel_format="BGRA", width=1280, height=720)
+robot.attach_video("head",        shm="head_cam")     # iceoryx2 SHM
 robot.run()
 ```
 
@@ -259,13 +262,13 @@ adamo_robot_run(robot);
 </TabItem>
 </Tabs>
 
-For the full set of input methods (V4L2 and shared memory), see [Adding Cameras](/v1/cameras/).
+For the full set of input methods (V4L2 and shared memory), see [Adding Cameras](/v0/cameras/).
 
 ## What's Next
 
 <CardGrid>
-  <LinkCard title="Adding Cameras" description="Every supported camera source, per language." href="/v1/cameras/" />
-  <LinkCard title="Receiving Control" description="Make the robot respond to the platform's gamepad / VR." href="/v1/control/" />
-  <LinkCard title="Sending and Receiving Data" description="Publish telemetry and subscribe to other robots." href="/v1/data/" />
-  <LinkCard title="The operate.adamohq.com Platform" description="What the hosted operator can do." href="/v1/web-interface/" />
+  <LinkCard title="Adding Cameras" description="Every supported camera source, per language." href="/v0/cameras/" />
+  <LinkCard title="Receiving Control" description="Make the robot respond to the platform's gamepad / VR." href="/v0/control/" />
+  <LinkCard title="Sending and Receiving Data" description="Publish telemetry and subscribe to other robots." href="/v0/data/" />
+  <LinkCard title="The operate.adamohq.com Platform" description="What the hosted operator can do." href="/v0/web-interface/" />
 </CardGrid>

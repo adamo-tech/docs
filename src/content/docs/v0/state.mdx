@@ -19,13 +19,11 @@ State values live under `{robot}/state/{key}`. The robot sets a value; operators
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-In Python, a robot keeps its own state: call `state_store()` on the robot.
-
 ```python
 import adamo
 
-robot = adamo.Robot(api_key="ak_...", name="my-arm")
-state = robot.state_store()
+session = adamo.connect(api_key="ak_...")
+state = session.state_store("my-arm")
 
 state.set("fork_height", {"current": 1.4})   # dict / list -> JSON
 state.set("mode", "manual")
@@ -67,18 +65,19 @@ Read it from an operator program (or another robot):
 <Tabs syncKey="lang">
 <TabItem label="Python" icon="seti:python">
 
-The Python SDK 1.0 reads state by subscribing for live updates; one-shot reads (`get`) are not available in Python.
-
 ```python
 import adamo
+from adamo.operate import state_topic, state_topic_all
 
-robot = adamo.Robot(api_key="ak_...", name="my-operator-tool")
+session = adamo.connect(api_key="ak_...")
+
+# one-shot read
+for s in session.get(state_topic("my-arm", "fork_height")):
+    print(s.payload)            # b'{"current": 1.4}'
 
 # live updates for every state key
-robot.session.subscribe(adamo.state_topic_all("my-arm"), callback=lambda s: print(s.key, s.payload))
+session.subscribe(state_topic_all("my-arm"), callback=lambda s: print(s.key, s.payload))
 ```
-
-`adamo.state_topic("my-arm", "fork_height")` names a single key.
 
 </TabItem>
 <TabItem label="Rust" icon="seti:rust">
@@ -126,8 +125,8 @@ idle → subtask 1 → subtask 2 → … → subtask N → idle (rep++) → subt
 ```python
 import adamo
 
-robot = adamo.Robot(api_key="ak_...", name="my-arm")
-runner = robot.task_runner()
+session = adamo.connect(api_key="ak_...")
+runner = session.task_runner("my-arm")
 
 runner.select("fold-set", "Fold clothes", [
     {"id": "s1", "name": "Flatten"},
@@ -201,5 +200,5 @@ The web **Tasks** widget reads `{robot}/state/task_run` and renders the subtask 
 `current_index` is `null` when idle (between reps). Each subtask `status` is `pending`, `active`, or `done`.
 
 <Aside type="note">
-Task definitions (the sets and their subtasks) are normally created in the web app or over the task REST API — see [Receiving Control → Managing tasks programmatically](/v1/control/#managing-tasks-programmatically). The task runner here is the runtime side: it sequences whatever subtasks you hand `select`.
+Task definitions (the sets and their subtasks) are normally created in the web app or over the task REST API — see [Receiving Control → Managing tasks programmatically](/v0/control/#managing-tasks-programmatically). The task runner here is the runtime side: it sequences whatever subtasks you hand `select`.
 </Aside>

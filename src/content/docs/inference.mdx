@@ -9,7 +9,7 @@ Run your policy on Adamo's hosted GPUs to drive your robot remotely. The robot s
 robot.inference(policy: str, **arguments) -> Inference
 ```
 
-`robot.inference` runs a policy on Adamo's GPUs and drives your robot with it. `policy` is a path you [saved weights or a state at](/v1/training/#saving-states-and-policies), or the name of a model Adamo serves:
+`robot.inference` runs a policy on Adamo's GPUs and drives your robot with it. `policy` is a path you [saved weights or a state at](/training/#saving-states-and-policies), or the name of a model Adamo serves:
 
 ```python
 with robot.inference("my-fine-tuned-policy/final", prompt="stack four cubes") as run:

@@ -1299,7 +1299,7 @@ player.close();
 
 ## 13. Audio
 
-Audio works in both directions (see [Streaming Audio](/v1/audio/)). The browser
+Audio works in both directions (see [Streaming Audio](/v0/audio/)). The browser
 plays a robot's audio tracks, and it can publish the operator's microphone as a
 track on the robot. Audio is independent of video: it is not tied to a video
 track.
@@ -1395,7 +1395,7 @@ const microphone = useMicrophonePublisher({
 
 `operatorAudioTrack(id)` returns `operator-{id}` for an id that is unique to
 this operator, such as their session id. The robot plays the tracks that
-`isOperatorAudioTrack` accepts (see [Streaming Audio](/v1/audio/)), and the same
+`isOperatorAudioTrack` accepts (see [Streaming Audio](/v0/audio/)), and the same
 function keeps operator microphones out of the list of robot tracks to play.
 
 #### Options
