@@ -342,7 +342,7 @@ void adamo_state_bytes_free(uint8_t *payload, size_t payload_len);
 void adamo_state_free(adamo_state_t *state);
 ```
 
-A robot-owned retained key/value store on `{robot}/state/**` — the robot sets values; operators read them with `adamo_get` on `{robot}/state/{key}`. `adamo_state_get` reads the store's own latest value; free its buffer with `adamo_state_bytes_free`. See [Robot State](/v1/state/).
+A robot-owned retained key/value store on `{robot}/state/**` — the robot sets values; operators read them with `adamo_get` on `{robot}/state/{key}`. `adamo_state_get` reads the store's own latest value; free its buffer with `adamo_state_bytes_free`. See [Robot State](/v0/state/).
 
 ## Task runner
 
@@ -357,7 +357,7 @@ int32_t adamo_task_runner_reset(const adamo_task_runner_t *runner);    // back t
 void adamo_task_runner_free(adamo_task_runner_t *runner);
 ```
 
-A looping subtask sequence with an idle gap between reps, published on `{robot}/state/task_run`. `ids` / `names` are parallel arrays of `count` strings. Wire your pedal to `adamo_task_runner_advance`. See [Task Runs](/v1/state/#task-runs).
+A looping subtask sequence with an idle gap between reps, published on `{robot}/state/task_run`. `ids` / `names` are parallel arrays of `count` strings. Wire your pedal to `adamo_task_runner_advance`. See [Task Runs](/v0/state/#task-runs).
 
 ## Fabric time
 
@@ -540,7 +540,7 @@ adamo_robot_attach_video_shm_configured(
 
 Set `passthrough` to a non-zero value only when the input and output codecs
 match and the encoded access units should be forwarded without decoding or
-re-encoding. See [Adding Cameras: transcoding encoded shared memory](/v1/cameras/#transcode-h264-or-h265-from-shared-memory)
+re-encoding. See [Adding Cameras: transcoding encoded shared memory](/v0/cameras/#transcode-h264-or-h265-from-shared-memory)
 for the wire format, backend prerequisites, and encoder names.
 
 The C++ wrapper exposes `reliability` on `adamo::VideoOptions` as well (an
@@ -719,7 +719,7 @@ When the library is built with the audio feature, the robot can capture and
 stream a microphone (send) and a consumer can decode a track to PCM (receive).
 `ADAMO_BUILD_AUDIO` **implies `ADAMO_BUILD_VIDEO`** — the `Robot` handle is shared
 — and defines `ADAMO_HAS_AUDIO` (which guards the C++ audio types). Audio is Opus;
-see [Streaming Audio](/v1/audio/) for the concepts, source types, and hardware notes.
+see [Streaming Audio](/v0/audio/) for the concepts, source types, and hardware notes.
 
 ```cmake
 cmake -DADAMO_BUILD_AUDIO=ON ...

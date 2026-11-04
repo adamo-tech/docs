@@ -40,7 +40,7 @@ You need:
        track.send(frame)  # or a frame from your camera
    ```
 
-   A [camera](/v1/cameras/) attached with `robot.attach_video(...)` and `robot.run()` works the same way.
+   A [camera](/cameras/) attached with `robot.attach_video(...)` and `robot.run()` works the same way.
 
 3. Run it with `ADAMO_API_KEY` unset:
 
@@ -108,7 +108,7 @@ The viewer is already served over HTTPS, so a headset opens the same link with n
 
 The viewer only watches until you press **Take control**, in the header or inside VR. While you hold control, it sends your headset and controller poses to the robot, the same messages operate.adamohq.com sends. It stops sending whenever the video freezes. Press **Release** to stop.
 
-Read them on the robot with `subscribe_xr_control`, exactly as for [VR from operate.adamohq.com](/v1/control/#vr-headset-from-operateadamohqcom):
+Read them on the robot with `subscribe_xr_control`, exactly as for [VR from operate.adamohq.com](/control/#vr-headset-from-operateadamohqcom):
 
 ```python
 from adamo.xr import XrFrame, subscribe_xr_control
@@ -138,4 +138,4 @@ Taking control from the local viewer then shows the robot as in use by **Local o
 - **Treat the pairing key like a password.** Anyone on the network who has it, or the link, can watch the robot and drive it.
 - **The browser loads the page from local.adamohq.com**, so the viewing device needs to reach it once per visit. The robot itself needs no internet connection.
 - **Local robots are invisible to the cloud.** A robot with no API key doesn't appear on operate.adamohq.com, and recording and inference are unavailable.
-- **Other ways to receive.** To process frames in code instead of watching them, connect with `adamo.connect_local(address, pairing_key)`, described in [Direct Connection](/v1/direct-connection/#receive-in-another-process).
+- **Other ways to receive.** To process frames in code instead of watching them, connect with `adamo.connect_local(address, pairing_key)`, described in [Direct Connection](/direct-connection/#receive-in-another-process).

@@ -12,12 +12,14 @@ npm run build
 
 ## Versions
 
-The site root redirects to the 1.0 docs at `/v1/`. The 0.x docs retain their
-unprefixed URLs, with their introduction at `/v0/`. The 1.0 docs live in
-`src/content/docs/v1/` and are served under `/v1/`. `src/versions.ts` lists the
-versions for the header's version selector, which switches to the same page in
-the other version; `src/routeData.ts` limits the sidebar and previous/next links
-to the version being viewed. Links inside the 1.0 pages use the `/v1/` prefix.
+The 1.0 docs are served from the site root, from `src/content/docs/`. The 0.x
+docs live in `src/content/docs/v0/` and are served under `/v0/`; links inside
+them use the `/v0/` prefix. The 1.0 docs were previously served under `/v1/`,
+and `astro.config.mjs` generates redirects from those URLs. `src/versions.ts`
+lists the versions for the header's version selector, which switches to the
+same page in the other version (or that version's introduction if the page
+does not exist there); `src/routeData.ts` limits the sidebar and previous/next
+links to the version being viewed.
 
 ## S3 publishing
 

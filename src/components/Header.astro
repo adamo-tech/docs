@@ -4,9 +4,18 @@ import config from "virtual:starlight/user-config";
 import Search from "virtual:starlight/components/Search";
 import SocialIcons from "virtual:starlight/components/SocialIcons";
 import logoUrl from "../assets/logo.svg";
+import { getCollection } from "astro:content";
 import { pathIn, versionOf, versions } from "../versions";
 
 const currentVersion = versionOf(Astro.url.pathname);
+
+// The same page in another version, or that version's introduction when the
+// page exists only in this one.
+const pages = new Set((await getCollection("docs")).map((entry) => "/" + (entry.id === "index" ? "" : entry.id + "/")));
+const switchTo = (version: (typeof versions)[number]) => {
+  const path = pathIn(version, Astro.url.pathname);
+  return pages.has(path) ? path : "/" + version.prefix;
+};
 
 const shouldRenderSearch =
   config.pagefind || config.components.Search !== "@astrojs/starlight/components/Search.astro";
@@ -29,7 +38,7 @@ const shouldRenderSearch =
         <ul class="adamo-version-options" aria-label="Docs version">
           {versions.map((version) => (
             <li>
-              <a href={pathIn(version, Astro.url.pathname)} aria-current={version === currentVersion ? "page" : undefined}>
+              <a href={switchTo(version)} aria-current={version === currentVersion ? "page" : undefined}>
                 {version.label}
                 {version === currentVersion && (
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
