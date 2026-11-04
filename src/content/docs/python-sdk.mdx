@@ -388,10 +388,9 @@ Supports the context-manager protocol.
 
 ## Receiving video
 
-Starting with SDK **1.0.9**, a Python video receiver can return decoded images
-in **CUDA memory**. This lets a perception or inference pipeline consume video
-on the GPU without downloading frames to NumPy and uploading them again.
-Both AV1 and H.264 receivers support CUDA NV12 and CUDA RGBA output.
+Starting with SDK **1.0.9**, Python can receive and decode live H.264 or AV1
+video. By default, frames are available as CPU NumPy arrays. Receivers also
+support CUDA NV12 and CUDA RGBA output for GPU perception or inference.
 
 Open a shared client session with `adamo.connect()`. It reads `ADAMO_API_KEY`
 by default, or accepts an API key explicitly. Select the robot and track, and
@@ -411,6 +410,37 @@ session.video_receiver(
 `receiver.recv(timeout=5.0)` waits up to five seconds for a decoded frame and
 raises `TimeoutError` if none arrives. Both the session and receiver support
 context managers; closing the session also closes its receivers.
+
+### Receive frames as NumPy arrays
+
+Install NumPy support with `pip install 'adamo[video]'`, then receive a frame
+from a robot's camera track:
+
+```python
+import adamo
+
+with adamo.connect() as session:  # reads ADAMO_API_KEY
+    with session.video_receiver(
+        "my-robot", "head", max_queued_frames=1
+    ) as receiver:
+        frame = receiver.recv(timeout=5.0)
+        rgba = frame.rgba  # read-only NumPy uint8 array: (height, width, 4)
+        rgb = rgba[..., :3].copy()  # writable RGB array for image processing
+```
+
+Replace `"my-robot"` and `"head"` with the robot and track names. H.264 is
+the default; pass `codec="av1"` for an AV1 stream. The codec must match the
+publisher; automatic codec discovery is not supported. Receiving video does
+not register a new robot or claim control of the remote robot.
+
+Call `receiver.recv(...)` repeatedly to consume the stream. The native worker
+continues decoding between calls. `max_queued_frames=1` (the default) retains
+the latest decoded frame when processing is slower than the stream, while
+preserving the decoder's reference chain. Each camera has its own worker.
+
+Frames also expose `width`, `height`, `sequence`, `keyframe`, and
+`capture_time_us` (the sender's Unix timestamp in microseconds). The NumPy
+array remains valid after the next receive or after the session closes.
 
 ### Receive NV12 in CUDA memory
 
