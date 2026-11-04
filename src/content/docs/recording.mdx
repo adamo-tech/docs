@@ -265,7 +265,7 @@ When the bytes are one field of a MessagePack map, `field=` names it, and the fi
 decoders={"control/joy": adamo.Struct("<86x3fb3x4f4x4?9x", field="e")}  # skip an 86-byte header, then read 3 floats, a signed byte, 4 floats and 4 booleans
 ```
 
-A control is filed at the time it reached Adamo, after the network delay, unless its sender attached a capture time. When the sender stamps each message with the time it was made, `timestamp=` reads that time, so each command lines up with the frame the operator was looking at. It is a layout over the same bytes that reads seconds then nanoseconds since the Unix epoch, like a ROS `header.stamp`:
+Controls sent from the browser carry the time they were made, so they already line up with the frames. A sender that publishes controls its own way may not attach that time, and its controls are then filed when they reached the relay. When such a sender stamps each message itself, `timestamp=` reads that time, so each command lines up with the frame the operator was looking at. It is a layout over the same bytes that reads seconds then nanoseconds since the Unix epoch, like a ROS `header.stamp`:
 
 ```python
 decoders={"control/joy": adamo.Struct("<86x3fb3x4f4x4?9x", field="e", timestamp="<70xII")}  # header.stamp sits at byte 70
