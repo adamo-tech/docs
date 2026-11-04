@@ -584,10 +584,11 @@ adamo.Recording(
     max_size: int = 1_500_000_000,
     topics: list[str] = [],
     record_audio: bool = False,
+    format: Literal["rrd", "mcap"] = "rrd",
 )
 ```
 
-What the Adamo data service records for a robot; pass it as `adamo.Robot(record=...)`. `controller_mask` selects when to record, `mode` how the recording is cut into files and on which clock, `topics` the data to record next to the cameras and controls, and `record_audio` the robot's audio tracks. See [Recording a robot](/recording/#recording-a-robot).
+What the Adamo data service records for a robot; pass it as `adamo.Robot(record=...)`. `controller_mask` selects when to record, `mode` how the recording is cut into files and on which clock, `topics` the data to record next to the cameras and controls, `record_audio` the robot's audio tracks, and `format` the kind of file each recording is written as, a Rerun `.rrd` or an [MCAP](/recording/#file-format) file. See [Recording a robot](/recording/#recording-a-robot).
 
 ### `Recordings`
 
@@ -608,7 +609,7 @@ recordings.export(recordings, config: Export, output_folder=None, download_folde
 recordings.export_audio(recordings, output_folder="audio", tracks=None, format="wav", download_folder=None) -> list[Path]
 ```
 
-`list` returns recordings that overlap `start`..`end`, oldest first. `download` writes each recording to `{directory}/{device}/{name}.rrd` with its `.json` entry beside it, skipping files already there. A download that fails is retried with a fresh link, resuming from the bytes already written, with 1, 2, 4 and up to 30 s between attempts for up to 5 minutes, unless the recordings API refuses it (400, 401, 403 or 404). Each `RecordingInfo` carries `id`, `device`, `session_id`, `display_name`, `description`, `tags`, `folder`, `controller`, `user_id`, `started_at`, `ended_at`, `frame_count`, `frame_rate`, `cameras`, `audio_tracks`, `topics`, `tasks`, `size_bytes`, and `complete`. See [Exporting to LeRobot](/recording/#exporting-to-lerobot) and [Exporting audio](/recording/#exporting-audio).
+`list` returns recordings that overlap `start`..`end`, oldest first. `download` writes each recording to `{directory}/{device}/{name}.rrd`, or `.mcap` for an MCAP recording, with its `.json` entry beside it, skipping files already there. A download that fails is retried with a fresh link, resuming from the bytes already written, with 1, 2, 4 and up to 30 s between attempts for up to 5 minutes, unless the recordings API refuses it (400, 401, 403 or 404). Each `RecordingInfo` carries `id`, `device`, `session_id`, `display_name`, `description`, `tags`, `folder`, `controller`, `user_id`, `started_at`, `ended_at`, `frame_count`, `frame_rate`, `cameras`, `audio_tracks`, `topics`, `tasks`, `size_bytes`, `complete`, and `format` (`"rrd"` or `"mcap"`). See [Exporting to LeRobot](/recording/#exporting-to-lerobot) and [Exporting audio](/recording/#exporting-audio).
 
 ---
 

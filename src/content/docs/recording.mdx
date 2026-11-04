@@ -142,6 +142,35 @@ Record audio to train models on sound, such as voice models. `record_audio=True`
 
 Audio keeps its own timing. Each track is stored as the Opus packets it sent, at their capture times on the video's clock, under `audio/{track}`. A recording lists its tracks in `audio_tracks`. See [Exporting audio](#exporting-audio) to decode them.
 
+### File format
+
+Recordings are Rerun `.rrd` files by default. `format="mcap"` records the robot as [MCAP](https://mcap.dev) files instead:
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+recording = adamo.Recording(format="mcap", topics=["left/joint_pos", "left/joint_cmd"])
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::{Recording, RecordingFormat};
+
+let recording = Recording { format: RecordingFormat::Mcap, ..Recording::default() };
+```
+
+</TabItem>
+</Tabs>
+
+- Both formats play on the [Recordings page](https://operate.adamohq.com/#/recordings) and open in [Rerun](https://rerun.io). [Foxglove](https://foxglove.dev) also opens MCAP.
+- An `.rrd` logs each numeric field of a JSON topic as its own series, ready to plot.
+- An MCAP file keeps each camera as a `foxglove.CompressedVideo` channel and each other topic as the payload the robot sent, so any MCAP reader can open it.
+- A recording's `format` says which kind of file it is.
+- [Exporting to LeRobot](#exporting-to-lerobot), [exporting audio](#exporting-audio) and `adamo replay` read `.rrd` recordings only. For an MCAP recording they stop before downloading anything and say so.
+
 ### Tasks
 
 Tasks turn teleoperation into labelled episodes, each with a prompt and an outcome. In Episodes mode, files follow the tasks the operator runs from the web app's task list (Settings, Tasks, "Show task list"). Starting a task opens a file. Stopping it with Success or Failure, or aborting it, closes the file with that outcome. See [Task Signals](/control/#task-signals).
