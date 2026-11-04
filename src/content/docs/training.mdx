@@ -127,6 +127,16 @@ embodiment = adamo.Embodiment({"arm": adamo.Joints(7, side="right"), "gripper": 
 
 `side`, `"left"` or `"right"`, lets a base model start from a pretrained robot with the same parts.
 
+A vehicle such as a forklift is driven by commands, not joint targets. Describe them with `adamo.Controls`: the model predicts them as absolute values, and since no pretrained robot has them, it learns them from scratch.
+
+When the robot observes something other than what it commands, pass `state` and `action` instead of one set of parts. Each vector then holds only its own parts, so nothing is padded with zeros. Here the forklift reads 16 sensor values and is driven by 12 joystick commands:
+
+```python
+embodiment = adamo.Embodiment(state={"sensors": adamo.Controls(16)}, action={"joystick": adamo.Controls(12)})
+```
+
+A datum's `state` then has a `sensors` entry, and its `loss_fn_inputs` a `joystick` entry. Parts passed as the first argument appear in both vectors, before the ones passed to `state` and `action`.
+
 `seed` sets the adapters' initial weights, the training noise and the frames `dataset.batches(training, ...)` draws, so two runs with the same seed train on the same data. `name` and `tags` label the run on the [Training page](https://operate.adamohq.com/#/training). A `/` in `name` groups runs into folders there: `pi0.5/stack-cubes` sits in the `pi0.5` folder.
 
 | Method | Returns | Description |
