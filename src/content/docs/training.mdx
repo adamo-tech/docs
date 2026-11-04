@@ -127,7 +127,7 @@ embodiment = adamo.Embodiment({"arm": adamo.Joints(7, side="right"), "gripper": 
 
 `side`, `"left"` or `"right"`, lets a base model start from a pretrained robot with the same parts.
 
-`seed` sets the adapters' initial weights and the training noise. `name` and `tags` label the run on the [Training page](https://operate.adamohq.com/#/training). A `/` in `name` groups runs into folders there: `pi0.5/stack-cubes` sits in the `pi0.5` folder.
+`seed` sets the adapters' initial weights, the training noise and the frames `dataset.batches(training, ...)` draws, so two runs with the same seed train on the same data. `name` and `tags` label the run on the [Training page](https://operate.adamohq.com/#/training). A `/` in `name` groups runs into folders there: `pi0.5/stack-cubes` sits in the `pi0.5` folder.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
