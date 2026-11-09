@@ -182,6 +182,37 @@ To store more hours of data:
 - **Raise the GOP.** Keyframes are the largest frames, so `FrameRate.Fixed(30, gop=30)` makes much smaller files. A small `gop` lets a training loader jump to any frame quickly, since a frame far from its keyframe takes longer to decode on its own.
 - **Leave out unattended time.** Keep `UNATTENDED` out of `controller_mask`, and call `robot.stop_recording()` once you no longer need a recording you started.
 
+## Labelling tasks
+
+The Task Editor lets you label recordings, add or edit tasks. Open a `.rrd` recording on the [Recordings page](https://operate.adamohq.com/#/recordings) and click **Task Editor**.
+
+Label recordings from your own code or an AI agent, and review the result in the Task Editor. The labels API takes your `ADAMO_API_KEY`, and a recording's path is its `id`, `{device}/{name}`:
+
+```bash
+API=https://api.adamohq.com/api/recordings/my-arm/my-recording
+curl "$API/labels" -H "X-API-Key: $ADAMO_API_KEY"
+```
+
+It returns the saved tasks, the `labels_revision` they belong to, `is_written` once the `.rrd` holds them, any `draft`, and the recording's `started_at_us` and `ended_at_us`. Times are capture times in microseconds since the Unix epoch.
+
+To propose tasks for someone to review, save them as a draft. The Task Editor opens the recording on it:
+
+```bash
+curl -X PUT "$API/labels/draft" -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
+  -d '{"intervals": [{"task_name": "PickUpCube", "start_us": 1794237073306835, "end_us": 1794237081349093, "outcome": "success"}]}'
+```
+
+To save tasks into the `.rrd` directly, `PUT $API/labels` with the same `intervals` and the `labels_revision` you read. If the labels changed since, it fails with 409 Conflict instead of overwriting someone else's edit, so read them again and redo your change. `DELETE $API/labels/draft` discards a draft.
+
+| Route | Description |
+|-------|-------------|
+| `GET /labels` | Saved tasks, revision and draft |
+| `PUT /labels` | Save tasks into the `.rrd`: `{"intervals", "labels_revision"}` |
+| `PUT /labels/draft` | Save a draft: `{"intervals"}` |
+| `DELETE /labels/draft` | Discard the draft |
+
+Each interval has a `task_name`, `start_us`, `end_us` and an `outcome` of `"success"`, `"failure"` or `"abort"`.
+
 ## Finding recordings
 
 Select the recordings to download, export or train on. `adamo.Recordings` reads your organization's recordings, using your `ADAMO_API_KEY`:
