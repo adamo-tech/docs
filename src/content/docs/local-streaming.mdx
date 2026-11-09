@@ -119,6 +119,8 @@ def on_xr(sample):
         print("right hand", sample.message.right.pose.position.as_tuple())
 ```
 
+While you hold control, the viewer also publishes a [safety heartbeat](/control/#safety-heartbeat) every 500 ms, `0` while video arrives and `4` when it stops, and plays [controller rumble](/control/#controller-rumble) the robot sends. Some controller buttons [belong to the viewer](/control/#buttons-the-viewer-keeps), and after the menu closes you squeeze both grips to [resume](/control/#pausing-and-resuming).
+
 Nothing stops two viewers from taking control at the same time, so make sure only one person drives.
 
 ## Local viewing of a cloud robot

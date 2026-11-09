@@ -456,6 +456,58 @@ exposes the raw envelope decoder (`decode_ros_envelope`), so republishing the
 CDR bytes into ROS 2 is done from the [ROS 2 control fan-out](/ros/#operator-control-as-ros-topics)
 of an `adamo-network` robot instead.
 
+### Buttons the viewer keeps
+
+Some controller buttons drive the viewer itself. They still appear in `/controller/{handedness}/joy`, so don't map them to robot actions:
+
+| Button | Default use | Change it in |
+|--------|-------------|--------------|
+| Right **A** | Opens the menu: tap for the operator tray, hold for the control panel | Settings → Controls (also **B**, **X** or **Y**) |
+| Left stick click | Starts or stops the selected [task](#task-signals) | Controller bindings |
+| Right stick click | Marks the current task failed | Controller bindings |
+| Right **B** | Aborts the current task | Controller bindings |
+
+The frame that opens the menu is sent before tracking pauses, so the robot's last `joy` message shows the menu button pressed until tracking resumes.
+
+### Pausing and resuming
+
+Tracking stops when the menu opens, when the headset's own system menu takes focus, and on a quick pause. Nothing is sent while it is paused. To resume, the operator releases both controller grips and then squeezes both. The first frames after resuming therefore have both grips held, so a robot that follows a controller while its grip is held starts moving at once.
+
+## Controller Rumble
+
+The robot can pulse the operator's controllers, for example to signal contact. Publish JSON on `{robot}/feedback/haptics`:
+
+```json
+{"hand": "left", "intensity": 0.6, "duration_ms": 100, "ts_us": 1780000000000000}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `hand` | `"left"` or `"right"`. Send one message per hand. |
+| `intensity` | 0 to 1. `0` stops the current pulse. |
+| `duration_ms` | Greater than 0 and at most 150. A new message replaces the current pulse, so sustained rumble needs repeated messages. |
+| `ts_us` | Fabric time in microseconds when the message is sent. |
+
+The viewer drops a message that is more than 250 ms old, more than 50 ms in the future, or not newer than the last one for that hand. The Python SDK doesn't expose fabric time on a robot, so stamp `time.time_ns() // 1000` on a machine whose clock is synchronized with NTP. Without a relay, fabric time is the wall clock.
+
+Rumble plays while the operator holds control: on the XR controllers in VR, and on a connected gamepad on the page, where `left` drives the gamepad's strong motor and `right` its weak one.
+
+Publish with a best-effort publisher. `session.put` and reliable publishers compress their messages, which `adamo-local-viewer` 0.1.0 and earlier web builds can't read.
+
+```python
+import json
+import time
+
+import adamo
+
+robot = adamo.Robot(name="my-arm")
+
+with robot.session.publisher(f"{robot.name}/feedback/haptics", express=True) as haptics:
+    for _ in adamo.Rate(20):
+        message = {"hand": "left", "intensity": 0.6, "duration_ms": 100, "ts_us": time.time_ns() // 1000}
+        haptics.put(json.dumps(message).encode())
+```
+
 ## Custom Control Topics
 
 When you write your own operator (XR app, mobile, GELLO leader, …), you choose the topic name and the payload format. JSON is the default in the Python SDK and works across all three languages.
@@ -1225,3 +1277,26 @@ middle-finger-metacarpal, middle-finger-phalanx-proximal, middle-finger-phalanx-
 ring-finger-metacarpal, ring-finger-phalanx-proximal, ring-finger-phalanx-intermediate, ring-finger-phalanx-distal, ring-finger-tip,
 pinky-finger-metacarpal, pinky-finger-phalanx-proximal, pinky-finger-phalanx-intermediate, pinky-finger-phalanx-distal, pinky-finger-tip
 ```
+
+### Safety heartbeat
+
+While an operator holds control, the page publishes its own state every 500 ms on:
+
+```text
+{robot}/control/cdr/safety
+```
+
+The payload is a [CDR ROS envelope](#cdr-ros-envelope) with inner topic `/safety` and type `std_msgs/msg/UInt8`, whose `data` is the state:
+
+| State | Reason | Sent by |
+|-------|--------|---------|
+| `0` | `ok` | operate page, Local Viewer |
+| `1` | `window_unfocused` | operate page |
+| `2` | `high_latency`: more than 200 ms from capture to display | operate page |
+| `3` | `controller_disconnected`: no gamepad is connected to the page, even when the operator drives with the keyboard | operate page |
+| `4` | `no_video` | operate page, Local Viewer |
+| `5` | `e_stop` | reserved, not sent today |
+
+When several apply, the highest number wins. A frontend built with a non-CDR control encoding publishes on `{robot}/control/json/safety` instead, as `{"type": "Safety", "state": 0, "reason": "ok", "stamp": 1780000000.0}`, with `stamp` in fabric seconds.
+
+Use it as a dead-man signal: stop the robot on state `4` or `5`, or when no heartbeat has arrived for about a second. Whether states `1` to `3` should stop it depends on how the robot is driven; a keyboard operator sends `3` the whole time.
