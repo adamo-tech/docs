@@ -10,7 +10,7 @@ const sections = (prefix) =>
       label: "Building Robots",
       items: ["control", "audio", "ros", "data", "recording", ...(prefix ? [] : ["training", "inference"]), "state", "discovery"],
     },
-    { label: "Operating Robots", items: ["web-interface", "direct-connection", "operator"] },
+    { label: "Operating Robots", items: ["web-interface", "operator"] },
     { label: "SDK References", items: ["python-sdk", "rust-sdk", "c-sdk", "typescript-sdk"] },
   ].map(({ label, items }) => ({
     label,

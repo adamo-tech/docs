@@ -80,7 +80,7 @@ class adamo.Robot:
 
 Connects to your organization's router. `protocol="quic"` is the right choice in every case; `"tcp"` is a diagnostic or telemetry-only fallback for networks that block UDP — don't teleoperate over it. A rejected API key raises `ConnectionError`.
 
-With no API key at all (neither `api_key` nor `ADAMO_API_KEY`), the robot warns and runs locally instead, like `Robot.local()`: it doesn't reach the relay, and receivers connect with `adamo.connect_local()` using the address and pairing key it prints. See [Local teleoperation](/direct-connection/).
+With no API key at all (neither `api_key` nor `ADAMO_API_KEY`), the robot warns and runs locally instead, like `Robot.local()`: it doesn't reach the relay, and receivers connect with `adamo.connect_local()` using the address and pairing key it prints.
 
 Every key the robot uses is scoped to your organization; you write `{robot}/{topic}` (for example `my-arm/sensors/imu`).
 
