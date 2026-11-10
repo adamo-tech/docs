@@ -55,7 +55,7 @@ import adamo
 | `Recording` / `ControllerMask` | What the Adamo data service records for this robot. |
 | `Recordings` / `RecordingInfo` / `Export` / `Struct` | List, download and export your organization's recordings. See [Recording and Exporting Data](/recording/). |
 | `Inference` | A cloud policy run started by `Robot.inference`. |
-| `LoraTraining` / `Dataset` | A LoRA run on a hosted base model, and a dataset built on Adamo from recordings. See [Training Policies](/training/). |
+| `Training` / `Dataset` | A training run on a hosted base model, and a dataset built on Adamo from recordings. See [Training Policies](/training/). |
 | `Datum` / `ModelInput` / `FramePointer` / `AdamParams` | What a training loop sends: examples and optimizer settings. |
 | `Embodiment` / `Joints` / `Gripper` / `Controls` / `BimanualArms` | The layout of a robot's state and action vectors. |
 | `ModelWeights` | Weights saved by a training run, which `Robot.inference` runs by `path`. |
@@ -701,7 +701,7 @@ except adamo.EncoderSelectionError as error:
 
 ## Login
 
-Sign in once per machine so scripts reach your organization without an API key in the code. `adamo login` opens your browser, or on a machine without one prints a link to open anywhere and asks for the code the page shows. It saves an API key for each of your organizations in `~/.config/adamo/credentials`, which `Robot`, `connect`, `Recordings` and `LoraTraining` use when you pass no key and `ADAMO_API_KEY` is unset.
+Sign in once per machine so scripts reach your organization without an API key in the code. `adamo login` opens your browser, or on a machine without one prints a link to open anywhere and asks for the code the page shows. It saves an API key for each of your organizations in `~/.config/adamo/credentials`, which `Robot`, `connect`, `Recordings` and `Training` use when you pass no key and `ADAMO_API_KEY` is unset.
 
 ```sh
 adamo login          # sign in and save a key for each of your organizations

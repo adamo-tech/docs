@@ -16,7 +16,7 @@ dataset = adamo.Dataset(episodes, adamo.Export(
     images=["zed.left", "wrist_left", "wrist_right"],
 ))
 
-with adamo.LoraTraining(base_model="physical-intelligence/pi0.5", rank=32, name="my-fine-tuned-policy") as training:
+with adamo.Training(base_model="physical-intelligence/pi0.5", lora_rank=32, name="my-fine-tuned-policy") as training:
     for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
         training.forward_backward(data, loss_fn="flow_matching")
         training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
@@ -37,7 +37,7 @@ adamo.Dataset(recordings: list[RecordingInfo], export: Export, cache_ttl_seconds
 
 Train on your recordings without downloading them. `adamo.Dataset` builds a training dataset from [recordings](/recording/#finding-recordings) made with Adamo. It runs the same checks as [`Recordings.export`](/recording/#exporting-to-lerobot), keeping everything on the cloud.
 
-It returns at once and builds in the background, so a `LoraTraining` started meanwhile gets its GPU during the build. `result()` waits for the build.
+It returns at once and builds in the background, so a `Training` started meanwhile gets its GPU during the build. `result()` waits for the build.
 
 Training caches the dataset next to its GPUs, so later runs start without downloading it again. The cache expires `cache_ttl_seconds` after its last use, and counts towards your organization's storage.
 
@@ -71,7 +71,7 @@ Without `images`, every camera track is kept whole.
 A `Datum` is one training example. To train on data you did not record with Adamo, build each `Datum` yourself from arrays, so any data loader works:
 
 ```python
-with adamo.LoraTraining(base_model="physical-intelligence/pi0.5") as training:
+with adamo.Training(base_model="physical-intelligence/pi0.5") as training:
     training.compute_norm_stats(episode_arrays)
     for images, states, prompts, actions in loader:
         data = [
@@ -101,10 +101,10 @@ with adamo.LoraTraining(base_model="physical-intelligence/pi0.5") as training:
 ## The training loop
 
 ```python
-adamo.LoraTraining(base_model: str, rank: int = 32, seed: int | None = None, embodiment: Embodiment | None = None, name: str | None = None, tags: list[str] = [])
+adamo.Training(base_model: str, lora_rank: int | None = None, seed: int | None = None, embodiment: Embodiment | None = None, name: str | None = None, tags: list[str] = [])
 ```
 
-You write the training loop, so you control the batches, the learning rate schedule and when to save. `LoraTraining` starts a training run and waits until its worker has a GPU and has loaded the base model. Leaving the `with` block or calling `training.stop()` frees the GPU.
+You write the training loop, so you control the batches, the learning rate schedule and when to save. `Training` starts a training run and waits until its worker has a GPU and has loaded the base model. Leaving the `with` block or calling `training.stop()` frees the GPU.
 
 Pick the base model closest to your robot and task:
 
@@ -118,6 +118,8 @@ Pick the base model closest to your robot and task:
 | `allenai/MolmoAct2-BimanualYAM` | MolmoAct2 fine-tuned by AllenAI on bimanual YAM data. Apache 2.0. | 30 steps | `adamo.BimanualArms()` |
 | `allenai/MolmoAct2-DROID` | MolmoAct2 fine-tuned by AllenAI for the DROID Franka. Apache 2.0. | 15 steps | 7 `Joints`, then a `Gripper` |
 | `allenai/MolmoAct2-SO100_101` | MolmoAct2 fine-tuned by AllenAI for SO-100/101. Apache 2.0. | 30 steps | 5 `Joints`, then a `Gripper` |
+
+`abc/dit-bottles` trains all of its weights and ignores `lora_rank`. The other base models train LoRA adapters of rank `lora_rank`, 32 when left out.
 
 `embodiment` describes the robot's state and action vectors, part by part, in order. It defaults to the robot the base model was trained for.
 
@@ -145,7 +147,7 @@ A datum's `state` then has a `sensors` entry, and its `loss_fn_inputs` a `joysti
 | `optim_step(adam_params)` | `None` | Applies AdamW to the mean of the summed gradients and clears them. |
 | `save_weights(path, ttl_seconds=None, override=False, tags=[])` | `ModelWeights` | Saves the weights for `robot.inference`. |
 | `save_state(path, ttl_seconds=None, override=False, tags=[])` | `ModelWeights` | Saves the weights and the optimizer state, to resume training. |
-| `LoraTraining.from_state(path, name=None, tags=[])` | `LoraTraining` | Starts a run from a saved state. |
+| `Training.from_state(path, name=None, tags=[])` | `Training` | Starts a run from a saved state. |
 | `action_horizon` | `int` | The steps in one action chunk of the base model. |
 
 Several `forward_backward` calls before one `optim_step` act as one larger batch. `"flow_matching"` is the only loss function.
@@ -187,7 +189,7 @@ if (step + 1) % 500 == 0:
     training.save_state(f"my-fine-tuned-policy/step-{step + 1}")
 
 # resume
-with adamo.LoraTraining.from_state("my-fine-tuned-policy/step-1500") as training:
+with adamo.Training.from_state("my-fine-tuned-policy/step-1500") as training:
     ...
 ```
 
