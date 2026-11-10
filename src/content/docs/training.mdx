@@ -111,6 +111,8 @@ Pick the base model closest to your robot and task:
 | Base model | Model | Action chunk | Default embodiment |
 |------------|-------|--------------|--------------------|
 | `physical-intelligence/pi0.5` | Physical Intelligence's `pi05_base`. | 50 steps | Required |
+| `physical-intelligence/pi0.5-droid` | Physical Intelligence's `pi05_droid`, pi0.5 fine-tuned on DROID for the Franka. Its actions are 7 joint velocities and a gripper position. | 15 steps | 7 `Joints`, then a `Gripper` |
+| `physical-intelligence/pi0.5-libero` | Physical Intelligence's `pi05_libero`, pi0.5 fine-tuned on the LIBERO sim. | 10 steps | LIBERO's arm, below |
 | `robocurve/pi0.5-yam` | pi0.5 fully fine-tuned by robocurve on AllenAI's MolmoAct2 bimanual YAM data. Gemma license. | 16 steps | `adamo.BimanualArms()` |
 | `nvidia/GR00T-N1.7` | NVIDIA's GR00T N1.7 3B. | 40 steps | Required |
 | `abc/dit-bottles` | [ABC](https://abc.bot)-DiT trained to put plastic bottles in a bin. | 30 steps | `adamo.BimanualArms()` |
@@ -136,6 +138,12 @@ embodiment = adamo.Embodiment(state={"sensors": adamo.Controls(16)}, action={"jo
 ```
 
 A datum's `state` then has a `sensors` entry, and its `loss_fn_inputs` a `joystick` entry. Parts passed as the first argument appear in both vectors, before the ones passed to `state` and `action`.
+
+`physical-intelligence/pi0.5-libero` is one of these: the LIBERO arm reads its end-effector pose and two finger positions, and is driven by end-effector deltas and a gripper command. Its default embodiment is:
+
+```python
+embodiment = adamo.Embodiment(state={"end_effector": adamo.Controls(6), "fingers": adamo.Gripper(2)}, action={"end_effector_delta": adamo.Controls(6), "gripper": adamo.Gripper()})
+```
 
 `seed` sets the adapters' initial weights, the training noise and the frames `dataset.batches(training, ...)` draws, so two runs with the same seed train on the same data. `name` and `tags` label the run on the [Training page](https://operate.adamohq.com/#/training). A `/` in `name` groups runs into folders there: `pi0.5/stack-cubes` sits in the `pi0.5` folder.
 
