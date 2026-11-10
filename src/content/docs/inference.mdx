@@ -29,6 +29,7 @@ robot.inference(
 |-------|-----------|-------------|
 | `physical-intelligence/pi0.5` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) base model. |
 | `physical-intelligence/pi0.5-libero` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) fine-tuned on LIBERO. |
+| `physical-intelligence/pi0.5-droid` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) fine-tuned on DROID for the Franka. It reads an exterior and a wrist camera and a state of 7 joint positions and the gripper position, and its actions are 7 joint velocities and a gripper position, at 15 Hz. |
 | `abc/dit-bottles` | `prompt` | [ABC](https://abc.bot)-DiT for the bimanual YAM trained on the ABC sim. |
 | `robocurve/pi0.5-yam` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 fine-tuned by robocurve for bimanual YAM. |
 | `allenai/MolmoAct2-BimanualYAM` | `prompt`, `images`, `state`, `action`, `frame_rate` | MolmoAct2 (AllenAI) fine-tuned for bimanual YAM. |
