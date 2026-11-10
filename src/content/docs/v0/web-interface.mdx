@@ -31,7 +31,7 @@ Video streams display in a configurable grid layout. If the robot has multiple t
 
 ### Stereo / VR
 
-Stereo video tracks have a "View Stereo" button that launches an immersive WebXR VR view. A robot that sends its eyes as two tracks (`stereo_left` and `stereo_right`) appears as one stereo view, with frames paired by capture time; see [Stereo Cameras](/v1/cameras/#stereo-cameras). Head pose and VR controller positions are tracked and forwarded to the robot as control topics (see [Control](/v1/control/)).
+Stereo video tracks have a "View Stereo" button that launches an immersive WebXR VR view. Head pose and VR controller positions are tracked and forwarded to the robot as control topics (see [Control](/v0/control/)).
 
 ![Stereo/VR view button on video tracks](../../../assets/screenshots/stereo-vr-button.png)
 
@@ -43,7 +43,7 @@ A collapsible panel at the bottom shows stream stats (latency, FPS, RTT, bitrate
 
 ### Audio
 
-If the robot streams a microphone track (see [Streaming Audio](/v1/audio/)), the
+If the robot streams a microphone track (see [Streaming Audio](/v0/audio/)), the
 operator plays it automatically. Browsers block audio autoplay, so nothing is
 heard until your first click or keypress on the page; entering VR counts as that
 gesture in the stereo view. Robots without an audio track are silently skipped —
@@ -56,7 +56,7 @@ one audio track.
 To talk to people near the robot, turn on the **microphone button** next to
 them. Your browser asks for microphone access the first time, and the robot can
 then play your voice (see
-[Playing audio on a speaker](/v1/audio/#playing-audio-on-a-speaker)). The
+[Playing audio on a speaker](/v0/audio/#playing-audio-on-a-speaker)). The
 microphone is off until you turn it on. Settings has the same switch and volume
 under **Audio**, and remembers them.
 
@@ -77,7 +77,7 @@ header; the holder can press **Release Control** to return to view-only mode.
 Taking control from another operator uses the same ownership mechanism.
 
 The web app also publishes an ownership lease for robot-side gating. See
-[Explicit control ownership](/v1/control/#explicit-control-ownership) for the
+[Explicit control ownership](/v0/control/#explicit-control-ownership) for the
 topic, payload, heartbeat, and receiver requirements.
 
 ### Adding Tracks
@@ -128,7 +128,7 @@ For labelling data collection, the teleoperation view can show a **task list** �
 - **Start / stop** — press the panel button, the `R` key, or (in VR) the bound controller input (default: left stick down). While active the task is marked; in the headset a label is pinned to the top of your view.
 - **Auto-progress** (Settings → Tasks) — after each stop, automatically advance to the next task in the set, so you can capture a set in order with one button. On by default.
 
-Each start/stop publishes a Zenoh signal your own code can consume — see [Task Signals](/v1/control/#task-signals). These signals are independent of video recording.
+Each start/stop publishes a Zenoh signal your own code can consume — see [Task Signals](/v0/control/#task-signals). These signals are independent of video recording.
 
 ## Data
 

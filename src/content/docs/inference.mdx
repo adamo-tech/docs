@@ -1,0 +1,224 @@
+---
+title: "Cloud Inference"
+description: "Run a policy on Adamo's GPUs to drive your robot."
+---
+
+Run your policy on Adamo's hosted GPUs to drive your robot remotely. The robot streams its cameras and state, and receives actions on its control channels.
+
+```python
+robot.inference(policy: str, **arguments) -> Inference
+```
+
+`robot.inference` runs a policy on Adamo's GPUs and drives your robot with it. `policy` is a path you [saved weights or a state at](/training/#saving-states-and-policies), or the name of a model Adamo serves:
+
+```python
+with robot.inference("my-fine-tuned-policy/final", prompt="stack four cubes") as run:
+    run.wait()
+```
+
+Saved weights know which tracks and topics to read and where to publish, so they need only a `prompt`. A served model without its own mapping also takes `images`, `state`, `action` and `frame_rate`:
+
+```python
+robot.inference(
+    "physical-intelligence/pi0.5-libero", prompt="pick up the black bowl and place it on the plate",
+    images=["cam"], state=["proprioception/joints"], action=["control/openpi.action"], frame_rate=20,
+)
+```
+
+| Model | Arguments | Description |
+|-------|-----------|-------------|
+| `physical-intelligence/pi0.5` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) base model. |
+| `physical-intelligence/pi0.5-libero` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) fine-tuned on LIBERO. |
+| `physical-intelligence/pi0.5-droid` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) fine-tuned on DROID for the Franka. It reads an exterior and a wrist camera and a state of 7 joint positions and the gripper position, and its actions are 7 joint velocities and a gripper position, at 15 Hz. |
+| `abc/dit-bottles` | `prompt` | [ABC](https://abc.bot)-DiT for the bimanual YAM trained on the ABC sim. |
+| `robocurve/pi0.5-yam` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 fine-tuned by robocurve for bimanual YAM. |
+| `allenai/MolmoAct2-BimanualYAM` | `prompt`, `images`, `state`, `action`, `frame_rate` | MolmoAct2 (AllenAI) fine-tuned for bimanual YAM. |
+| `allenai/MolmoAct2-DROID` | `prompt`, `images`, `state`, `action`, `frame_rate` | MolmoAct2 (AllenAI) fine-tuned for the DROID Franka. |
+| `allenai/MolmoAct2-SO100_101` | `prompt`, `images`, `state`, `action`, `frame_rate` | MolmoAct2 (AllenAI) fine-tuned for SO-100/101. |
+
+
+## Actions
+
+The policy publishes one action per frame at `frame_rate`:
+
+- An action key that names a topic, such as `left/joint_cmd`, is published under `control/`: `control/left/joint_cmd`, in the field `action`.
+- An action key that names a field of a control channel, such as `control/joint_cmd.positions`, is published in that field.
+- Every message also carries `capture_time_us`, the capture time of the newest frame the policy saw.
+
+```json
+{"capture_time_us": 1791899263877871, "action": [0.12, 0.58, 0.57, -0.11, 0.07, 0.0, 0.95]}
+```
+
+The policy holds the robot like a teleoperator in the web app. When a teleoperator takes control there, the run ends.
+
+- `real_time_chunking=True` guides a chunk to agree with the actions still queued, so the robot moves on without a jump (real-time chunking, Black et al. 2025).
+
+
+
+## Monitoring a run
+
+| `Inference` member | Description |
+|--------|-------------|
+| `status()` | A dict: `policy` (`"waiting"`, `"loading"`, `"ready"`, then `"stopped"`), `run`, `last_stop`, `policy_error`, `start_pending`. |
+| `wait()` | Blocks until the run stops. Raises `RuntimeError` if the policy failed, for example because the robot does not publish one of its keys. |
+| `stop()` | Stops the run. Leaving the `with` block or `robot.close()` also stops it. |
+| `id` | The run's id. |
+
+`status()["run"]` reports progress while the policy drives the robot:
+
+| Field | Description |
+|-------|-------------|
+| `published_count` | Actions published so far. |
+| `step` | Control ticks since the run started, one per frame at `frame_rate`. |
+| `observation_ms` | Time to gather the last observation. |
+| `observation_age_ms` | Age of the last observation's frames. |
+| `inference_ms`, `max_inference_ms` | The last inference, and the longest of the last 100. |
+| `remaining_ms_at_arrival` | How much of the previous chunk was left when the last one arrived. |
+| `trimmed_step_count` | Actions of the last chunk skipped because their time had passed. |
+| `held_step_count` | Steps that repeated the last action because the chunk ran out. |
+
+## HTTP
+
+The same calls are available over HTTP with your organization API key:
+
+```bash
+API=https://api.adamohq.com/api/inference
+INFERENCE_ID=$(curl -X POST $API/start -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
+  -d '{"robot_name": "yam-london", "policy": "my-fine-tuned-policy/final", "arguments": {"prompt": "stack four cubes"}}' | jq -r .inference_id)
+curl "$API/status?inference_id=$INFERENCE_ID" -H "X-API-Key: $ADAMO_API_KEY"
+curl -X POST $API/stop -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
+  -d "{\"inference_id\": \"$INFERENCE_ID\"}"
+```
+
+## Running a policy on your own GPU
+
+To run a policy on your own machine instead, connect with the Python SDK, read the robot's cameras and state, and publish actions on its control channel yourself. A complete server that does this for the [ABC](https://abc.bot) DiT policy, with real-time chunking and a FastAPI front end, is [`deploy/adamo_server.py` in Shade5/abc](https://github.com/Shade5/abc/blob/main/deploy/adamo_server.py). The steps below are a minimal version of it.
+
+Install the SDK with NumPy support (`pip install 'adamo[video]'`, 1.0.18 or later) and set `ADAMO_API_KEY`. Video decoding links against GStreamer's core libraries; on Debian or Ubuntu, `sudo apt-get install gstreamer1.0-plugins-base`.
+
+### 1. Subscribe to video
+
+Open one [`video_receiver`](/python-sdk/#receiving-video) per camera track and keep the newest frame of each. `max_queued_frames=1` drops stale frames when the policy is slower than the camera, so the policy always sees the latest image:
+
+```python
+import threading
+
+import adamo
+import numpy as np
+
+ROBOT = "abc-sim"
+CAMERAS = {"top": "head", "left": "wrist_left", "right": "wrist_right"}  # policy camera -> track
+
+session = adamo.connect()  # reads ADAMO_API_KEY
+latest = {}
+
+def read_camera(cam: str, track: str) -> None:
+    with session.video_receiver(ROBOT, track, max_queued_frames=1) as receiver:
+        while True:
+            try:
+                frame = receiver.recv(timeout=1.0)
+            except TimeoutError:
+                continue
+            latest[cam] = frame.rgba[..., :3].copy()  # uint8 (H, W, 3)
+
+for cam, track in CAMERAS.items():
+    threading.Thread(target=read_camera, args=(cam, track), daemon=True).start()
+```
+
+For a GPU policy, pass `output=adamo.VideoOutput(format="rgba", memory="cuda")` and read `frame.image` through DLPack to keep frames on the GPU. See [Receive RGBA in CUDA memory](/python-sdk/#receive-rgba-in-cuda-memory).
+
+### 2. Subscribe to state
+
+Subscribe to the robot's state key. A robot that publishes joints as in [Publishing](/python-sdk/#publishing) sends a big-endian `u64` timestamp in microseconds, then one `float32` per joint:
+
+```python
+def on_joints(sample: adamo.Sample) -> None:
+    count = (len(sample.payload) - 8) // 4
+    latest["state"] = np.frombuffer(sample.payload, ">f4", count=count, offset=8).astype(np.float32)
+
+state_sub = session.subscribe(f"{ROBOT}/proprioception/joints", callback=on_joints)
+```
+
+Callbacks run on an SDK thread, so keep them short. To find the keys a robot publishes, subscribe to `f"{ROBOT}/**"` for a few seconds and print each `sample.key`.
+
+### 3. Take control
+
+Claim the robot as an operator, the way the web app does: publish `acquired` on `{robot}/control/json/operator_control`, then a `heartbeat` every second while the policy drives it, and `released` when it stops. The web app then shows the policy as the robot's operator, and a robot that [enforces the ownership lease](/control/#robot-facing-ownership-lease) accepts its actions. Watch the same key, and stop sending actions when another operator acquires the robot:
+
+```python
+import json
+import time
+import uuid
+
+from adamo import Priority
+
+OWNERSHIP = f"{ROBOT}/control/json/operator_control"
+operator = {"userId": "my-policy", "sessionId": uuid.uuid4().hex, "displayName": "My policy"}
+ownership = session.publisher(OWNERSHIP, priority=Priority.DATA_HIGH, reliable=True)
+in_control = threading.Event()
+
+def announce(event: str) -> None:
+    ownership.put(json.dumps({
+        "version": 1,
+        "active": event != "released",
+        "event": event,
+        "operator": operator,
+        "timestampMs": session.fabric_now_us() / 1000,
+    }).encode())
+
+def on_ownership(sample: adamo.Sample) -> None:
+    msg = json.loads(sample.payload)
+    other = msg.get("operator", {}).get("sessionId") != operator["sessionId"]
+    if other and msg.get("event") == "acquired":
+        in_control.clear()  # someone took over; stop sending actions
+
+def heartbeat() -> None:
+    while True:
+        time.sleep(1.0)
+        if in_control.is_set():
+            announce("heartbeat")
+
+ownership_sub = session.subscribe(OWNERSHIP, callback=on_ownership)
+threading.Thread(target=heartbeat, daemon=True).start()
+```
+
+Also hold `session.announce_control(robot, controller, session_id)` for as long as the policy drives the robot. It declares the token an operate tab holds while in control, so the operate page shows who is driving, and the data service files the time under that controller: with `"policy"`, a robot recorded with the default [`HUMAN | POLICY` mask](/recording/#when-it-records) keeps recording while the policy drives it, rather than treating the time as unattended. Pass the `sessionId` of your `operator_control` claim. The returned `ControlAnnouncement` holds the token until you call `close()` or leave its `with` block, and closes with the session. Step 4 declares it right after `acquired` and closes it when the policy stops or loses control.
+
+### 4. Run inference and send actions
+
+Publish actions on the robot's control channel with a [`publisher`](/python-sdk/#publishing). `express=True` and `Priority.REAL_TIME` send each action without batching and ahead of bulk traffic. The ABC sim takes `adamo.JointState` JSON on `control/joint_state`; send whatever message your robot's control handler reads.
+
+```python
+from adamo import JointState
+
+JOINT_NAMES = [*(f"left_joint_{i}" for i in range(6)), "left_gripper",
+               *(f"right_joint_{i}" for i in range(6)), "right_gripper"]
+EXECUTE_STEPS = 16  # actions run from each chunk before the next inference
+
+actions_pub = session.publisher(f"{ROBOT}/control/joint_state", priority=Priority.REAL_TIME, express=True)
+policy = load_my_policy()  # your model: observation dict -> (horizon, 14) action chunk
+
+announce("acquired")
+in_control.set()
+control = session.announce_control(ROBOT, "policy", operator["sessionId"])
+rate = adamo.Rate(30)
+try:
+    while in_control.is_set():
+        if not {"state", *CAMERAS} <= latest.keys():
+            rate.sleep()  # wait for the first frame of every camera and the first state
+            continue
+        obs = {"state": latest["state"], "images": {cam: latest[cam] for cam in CAMERAS}}
+        chunk = policy.infer(obs)
+        for action in chunk[:EXECUTE_STEPS]:
+            if not in_control.is_set():
+                break
+            actions_pub.put(JointState(names=JOINT_NAMES, positions=action.tolist()).to_json())
+            rate.sleep()
+finally:
+    control.close()
+    if in_control.is_set():
+        announce("released")
+    session.close()
+```
+
+This loop pauses the robot while each chunk is computed. To keep it moving, run inference on its own thread and start the next chunk a few steps before the current one runs out, conditioning it on the actions still queued (real-time chunking), as `adamo_server.py` does. That server also reopens a camera receiver after a connection error, stops the run when a camera sends no frames, and reports camera ages, inference latency and who holds control at `GET /status`.

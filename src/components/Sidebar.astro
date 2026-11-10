@@ -1,28 +1,33 @@
 ---
 import Sidebar from "@astrojs/starlight/components/Sidebar.astro";
-import { Icon } from "@astrojs/starlight/components";
 import logomarkUrl from "../assets/logomark.svg";
 
+const iconFiles = import.meta.glob(
+  ["/node_modules/heroicons/24/outline/*.svg", "/node_modules/@tabler/icons/icons/outline/{brand-python,brand-rust,brand-typescript,letter-c}.svg"],
+  { query: "?raw", import: "default", eager: true },
+);
+const icons = Object.fromEntries(Object.entries(iconFiles).map(([path, svg]) => [path.split("/").at(-1).slice(0, -4), svg]));
+
 const pageIcons = [
-  ["quickstart", "rocket"],
-  ["cameras", "seti:video"],
-  ["local-streaming", "laptop"],
-  ["control", "setting"],
-  ["audio", "seti:audio"],
-  ["ros", "puzzle"],
-  ["data", "seti:db"],
-  ["recording", "download"],
-  ["training", "star"],
-  ["state", "list-format"],
-  ["discovery", "magnifier"],
-  ["web-interface", "laptop"],
-  ["direct-connection", "random"],
-  ["operator", "setting"],
-  ["python-sdk", "seti:python"],
-  ["rust-sdk", "seti:rust"],
-  ["c-sdk", "seti:c"],
-  ["typescript-sdk", "seti:typescript"],
-  ["default", "open-book"],
+  ["quickstart", "rocket-launch"],
+  ["cameras", "video-camera"],
+  ["local-streaming", "signal"],
+  ["control", "cursor-arrow-rays"],
+  ["audio", "speaker-wave"],
+  ["ros", "puzzle-piece"],
+  ["data", "arrows-right-left"],
+  ["recording", "film"],
+  ["training", "cpu-chip"],
+  ["inference", "cloud"],
+  ["state", "adjustments-horizontal"],
+  ["discovery", "magnifying-glass"],
+  ["web-interface", "globe-alt"],
+  ["operator", "code-bracket"],
+  ["python-sdk", "brand-python"],
+  ["rust-sdk", "brand-rust"],
+  ["c-sdk", "letter-c"],
+  ["typescript-sdk", "brand-typescript"],
+  ["default", "book-open"],
 ] as const;
 ---
 
@@ -37,7 +42,7 @@ const pageIcons = [
 </div>
 
 {pageIcons.map(([page, icon]) => (
-  <template data-sidebar-icon={page}><Icon name={icon} /></template>
+  <template data-sidebar-icon={page}><Fragment set:html={icons[icon]} /></template>
 ))}
 
 <script is:inline>

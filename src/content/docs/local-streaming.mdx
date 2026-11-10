@@ -1,0 +1,143 @@
+---
+title: "Fully Local Streaming"
+description: "Stream from the Python SDK with no account or API key, and watch or drive the robot from local.adamohq.com in a browser or VR headset"
+---
+
+import { Steps } from "@astrojs/starlight/components";
+
+A robot can stream with **no Adamo account, API key, or sign-in**. The robot serves its video itself, and you open it at **[local.adamohq.com](https://local.adamohq.com)** with only the robot's address and a **pairing key**. The page is a static viewer: once it loads, video and control go straight between your browser and the robot over your network. Nothing goes through the Adamo cloud.
+
+The viewer is the same robot view as operate.adamohq.com: camera layouts, the latency breakdown, and VR, including driving the robot from VR controllers.
+
+You need:
+
+- Adamo Python SDK **1.0.18** or later on the robot.
+- A browser with WebTransport: Chrome, Edge, or the Meta Quest browser.
+- A network path from the browser to the robot, such as the same LAN or a VPN like Tailscale.
+
+## Stream from the robot
+
+<Steps>
+
+1. Install the SDK:
+
+   ```sh
+   pip install adamo
+   ```
+
+2. Write a robot program. With no API key, `adamo.Robot()` runs locally instead of connecting to the cloud:
+
+   ```python title="robot.py"
+   import adamo
+   import numpy as np
+
+   robot = adamo.Robot(name="my-arm")  # local when ADAMO_API_KEY is not set
+   print(f"local.adamohq.com/#robot=<robot IP>:{robot.local_port}&key={robot.local_pairing_key}")
+
+   track = robot.video("front", pixel_format="BGR", width=640, height=360, fps=30)
+   frame = np.zeros((360, 640, 3), dtype=np.uint8)
+   for _ in adamo.Rate(30):
+       track.send(frame)  # or a frame from your camera
+   ```
+
+   A [camera](/cameras/) attached with `robot.attach_video(...)` and `robot.run()` works the same way.
+
+3. Run it with `ADAMO_API_KEY` unset:
+
+   ```sh
+   python robot.py
+   ```
+
+   It prints the link to open, with the port and pairing key filled in:
+
+   ```
+   local.adamohq.com/#robot=<robot IP>:17447&key=<pairing key>
+   ```
+
+</Steps>
+
+The robot listens on port **17447**, or on a free port when another process already holds it. `robot.local_port` always reports the port in use.
+
+## Open the viewer
+
+On any device that can reach the robot, open the printed link with `<robot IP>` replaced by the robot's address, for example:
+
+```
+https://local.adamohq.com/#robot=192.168.1.20:17447&key=<pairing key>
+```
+
+The address and key stay in the part of the link after `#`, which the browser never sends to any server. The page connects to the robot straight away and shows every camera it publishes, with live latency at the bottom. Click the latency figure for the full breakdown, from capture on the robot to display in the browser.
+
+If the browser asks to **allow access to devices on your local network**, allow it; the page needs it to reach the robot.
+
+You can also open [local.adamohq.com](https://local.adamohq.com) with no link and enter the address and pairing key on the page. The browser remembers them for next time.
+
+## Keep the same link
+
+The pairing key is generated when the robot starts, so the link changes on every run unless you fix the port and key:
+
+```python
+robot = adamo.Robot(name="my-arm", port=17447, pairing_key="<key printed on the first run>")
+```
+
+From SDK **1.0.19**, `pairing_key` can also be a password. Any value that is not a generated 43-character key is stretched into one, and the viewer and `adamo.connect_local()` accept the same password:
+
+```python
+robot = adamo.Robot(name="my-arm", port=17447, pairing_key="long-robot-password-42")
+```
+
+```
+https://local.adamohq.com/#robot=192.168.1.20:17447&key=long-robot-password-42
+```
+
+URL-encode the password in a link: spaces, `&`, `#`, `+`, and `%` must be escaped. Anyone on the robot's network can guess a short password offline, so use a long one; the robot warns below 12 characters.
+
+## View in VR
+
+The viewer is already served over HTTPS, so a headset opens the same link with no certificate setup.
+
+<Steps>
+
+1. On the headset, open the link in the browser.
+2. Allow local network access if asked.
+3. Click **Enter XR**. A stereo pair of tracks is shown in 3D, and other cameras appear as panels around you.
+
+</Steps>
+
+## Drive the robot
+
+The viewer only watches until you press **Take control**, in the header or inside VR. While you hold control, it sends your headset and controller poses to the robot, the same messages operate.adamohq.com sends. It stops sending whenever the video freezes. Press **Release** to stop.
+
+Read them on the robot with `subscribe_xr_control`, exactly as for [VR from operate.adamohq.com](/control/#vr-headset-from-operateadamohqcom):
+
+```python
+from adamo.xr import XrFrame, subscribe_xr_control
+
+@subscribe_xr_control(robot, max_age=0.5)
+def on_xr(sample):
+    if isinstance(sample.message, XrFrame) and sample.message.right:
+        print("right hand", sample.message.right.pose.position.as_tuple())
+```
+
+While you hold control, the viewer also publishes a [safety heartbeat](/control/#safety-heartbeat) every 500 ms, `0` while video arrives and `4` when it stops, and plays [controller rumble](/control/#controller-rumble) the robot sends. Some controller buttons [belong to the viewer](/control/#buttons-the-viewer-keeps), and after the menu closes you squeeze both grips to [resume](/control/#pausing-and-resuming).
+
+Nothing stops two viewers from taking control at the same time, so make sure only one person drives.
+
+## Local viewing of a cloud robot
+
+A robot that does have an API key also accepts the local viewer, alongside operate.adamohq.com. Print the link the same way:
+
+```python
+robot = adamo.Robot(api_key=os.environ["ADAMO_API_KEY"], name="my-arm")
+print(f"local.adamohq.com/#robot=<robot IP>:{robot.local_port}&key={robot.local_pairing_key}")
+```
+
+Taking control from the local viewer then shows the robot as in use by **Local operator** on operate.adamohq.com. The robot also records the session, as it does for any operator.
+
+## Things to know
+
+- **The robot's firewall must allow its port on UDP and TCP**, for example `sudo ufw allow 17447` with `ufw`.
+- **Treat the pairing key like a password.** Anyone on the network who has it, or the link, can watch the robot and drive it.
+- **The browser loads the page from local.adamohq.com**, so the viewing device needs to reach it once per visit. The robot itself needs no internet connection.
+- **Local robots are invisible to the cloud.** A robot with no API key doesn't appear on operate.adamohq.com, and recording and inference are unavailable.
+- **Other ways to receive.** To process frames in code instead of watching them, connect with `adamo.connect_local(address, pairing_key)`.

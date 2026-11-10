@@ -1,0 +1,206 @@
+---
+title: "Training Policies"
+description: "Fine-tune a policy on your dataset, and deploy it on your robots."
+---
+
+Use Adamo to fine-tune a base policy on your datasets and deploy it to your robot in a few lines of code, all on Adamo's hosted GPUs. Inspect your runs on the [Training page](https://operate.adamohq.com/#/training) and manage your weights on the [Policies page](https://operate.adamohq.com/#/policies).
+
+```python
+import adamo
+
+episodes = adamo.Recordings().list(folder="yam-london", tasks=["StackCubes"])
+dataset = adamo.Dataset(episodes, adamo.Export(
+    state=["left/joint_pos", "right/joint_pos"],
+    action=["left/joint_cmd", "right/joint_cmd"],
+    tasks={"StackCubes": "stack four cubes"},
+    images=["zed.left", "wrist_left", "wrist_right"],
+))
+
+with adamo.Training(base_model="physical-intelligence/pi0.5", lora_rank=32, name="my-fine-tuned-policy") as training:
+    for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
+        training.forward_backward(data, loss_fn="flow_matching")
+        training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
+    weights = training.save_weights("my-fine-tuned-policy/final", ttl_seconds=30 * 24 * 3600).result()
+
+with adamo.Robot(name="yam-london") as robot:
+    with robot.inference(weights.path, prompt="stack four cubes") as run:
+        run.wait()
+```
+
+The training loop runs in your script, so you control every step. See [Cloud Inference](/inference/) to run the policy on your robot.
+
+## Datasets
+
+```python
+adamo.Dataset(recordings: list[RecordingInfo], export: Export, cache_ttl_seconds: int | None = 86400, decoders: dict[str, Struct] | None = None)
+```
+
+Train on your recordings without downloading them. `adamo.Dataset` builds a training dataset from [recordings](/recording/#finding-recordings) made with Adamo. It runs the same checks as [`Recordings.export`](/recording/#exporting-to-lerobot), keeping everything on the cloud.
+
+It returns at once and builds in the background, so a `Training` started meanwhile gets its GPU during the build. `result()` waits for the build.
+
+Training caches the dataset next to its GPUs, so later runs start without downloading it again. The cache expires `cache_ttl_seconds` after its last use, and counts towards your organization's storage.
+
+Binary topics need an [`adamo.Struct` decoder](/recording/#decoders): `decoders={"proprioception/joints": adamo.Struct(">8x14f")}`.
+
+| Member | Description |
+|--------|-------------|
+| `batches(training, batch_size)` | An endless iterator of `Datum` lists, with frames drawn at random. |
+| `result(timeout=None)` | Waits until the dataset is built. Raises why the build failed. |
+| `frame_rate`, `frame_count`, `episode_count`, `id` | What was built. |
+
+### Choosing cameras
+
+Choose which cameras the policy sees, and in which order. `Export(images=...)` names the cameras each example holds. Use a track's name for its whole picture. Add `.left` or `.right` to a side-by-side stereo track for one eye:
+
+```python
+images=["wrist_left", "wrist_right", "zed"]               # zed: (1080, 3840, 3), both eyes in one picture
+images=["wrist_left", "wrist_right", "zed.left"]          # zed.left: (1080, 1920, 3)
+images=["wrist_left", "wrist_right", "zed.left", "zed.right"]  # each eye as its own picture
+```
+
+Without `images`, every camera track is kept whole.
+
+- The base model resizes each picture to its input size. A whole stereo picture squeezes both eyes into one input, so prefer one or two eye keys.
+- Use `.left` and `.right` only on side-by-side tracks. A stereo pair sent as [two eye tracks](/cameras/#stereo-cameras) needs no suffix: `images=["head_left", "head_right"]`.
+- Choosing an eye costs nothing: the dataset keeps the recorded video, and the worker crops each frame.
+- `robot.inference` crops the same eye from the live track, so a policy trained on `zed.left` runs on a robot that sends the whole `zed` track.
+
+## Datum
+
+A `Datum` is one training example. To train on data you did not record with Adamo, build each `Datum` yourself from arrays, so any data loader works:
+
+```python
+with adamo.Training(base_model="physical-intelligence/pi0.5") as training:
+    training.compute_norm_stats(episode_arrays)
+    for images, states, prompts, actions in loader:
+        data = [
+            adamo.Datum(
+                model_input=adamo.ModelInput(images={"top": image}, state={"proprioception/joints": state}, prompt=prompt, frame_rate=30),
+                loss_fn_inputs={"control/joint_cmd.positions": chunk},
+            )
+            for image, state, prompt, chunk in zip(images, states, prompts, actions)
+        ]
+        training.forward_backward(data)
+        training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
+```
+
+`compute_norm_stats(episode_arrays, fraction=1.0)` sends the state and action values of your episodes, each a `{key: (frame_count, size) array}`, so the worker computes the base model's normalization stats. Call it before the first `forward_backward`. An `adamo.Dataset` does this for you.
+
+| Input | Shape | Type | Notes |
+|-------|-------|------|-------|
+| `images[key]` | (height, width, 3) | `uint8`, floats in 0..1, or PNG or JPEG bytes | PNG and JPEG bytes are usually smaller to send. |
+| `state[key]` | (size,) | floats | Raw values, such as radians. |
+| `loss_fn_inputs[key]` | (`training.action_horizon`, size) | floats | Raw actions of this frame and the next ones. Where an episode ends sooner, repeat its last action. |
+| `prompt` | | `str` | The task. |
+| `frame_rate` | | `int` | Frames per second of the state and actions. |
+
+- Keys are the robot's track and topic names. Saved weights keep them, so `robot.inference` knows what to read and where to publish.
+- A run keeps one set of keys and one frame rate. A datum with other keys raises.
+
+## The training loop
+
+```python
+adamo.Training(base_model: str, lora_rank: int | None = None, seed: int | None = None, embodiment: Embodiment | None = None, name: str | None = None, tags: list[str] = [])
+```
+
+You write the training loop, so you control the batches, the learning rate schedule and when to save. `Training` starts a training run and waits until its worker has a GPU and has loaded the base model. Leaving the `with` block or calling `training.stop()` frees the GPU.
+
+Pick the base model closest to your robot and task:
+
+| Base model | Model | Action chunk | Default embodiment |
+|------------|-------|--------------|--------------------|
+| `physical-intelligence/pi0.5` | Physical Intelligence's `pi05_base`. | 50 steps | Required |
+| `robocurve/pi0.5-yam` | pi0.5 fully fine-tuned by robocurve on AllenAI's MolmoAct2 bimanual YAM data. Gemma license. | 16 steps | `adamo.BimanualArms()` |
+| `nvidia/GR00T-N1.7` | NVIDIA's GR00T N1.7 3B. | 40 steps | Required |
+| `abc/dit-bottles` | [ABC](https://abc.bot)-DiT trained to put plastic bottles in a bin. | 30 steps | `adamo.BimanualArms()` |
+| `allenai/MolmoAct2` | AllenAI's MolmoAct2 | 30 steps | Required |
+| `allenai/MolmoAct2-BimanualYAM` | MolmoAct2 fine-tuned by AllenAI on bimanual YAM data. Apache 2.0. | 30 steps | `adamo.BimanualArms()` |
+| `allenai/MolmoAct2-DROID` | MolmoAct2 fine-tuned by AllenAI for the DROID Franka. Apache 2.0. | 15 steps | 7 `Joints`, then a `Gripper` |
+| `allenai/MolmoAct2-SO100_101` | MolmoAct2 fine-tuned by AllenAI for SO-100/101. Apache 2.0. | 30 steps | 5 `Joints`, then a `Gripper` |
+
+`abc/dit-bottles` trains all of its weights and ignores `lora_rank`. The other base models train LoRA adapters of rank `lora_rank`, 32 when left out.
+
+`embodiment` describes the robot's state and action vectors, part by part, in order. It defaults to the robot the base model was trained for.
+
+```python
+embodiment = adamo.Embodiment({"arm": adamo.Joints(7, side="right"), "gripper": adamo.Gripper(side="right")})
+```
+
+`side`, `"left"` or `"right"`, lets a base model start from a pretrained robot with the same parts.
+
+A vehicle such as a forklift is driven by commands, not joint targets. Describe them with `adamo.Controls`: the model predicts them as absolute values, and since no pretrained robot has them, it learns them from scratch.
+
+When the robot observes something other than what it commands, pass `state` and `action` instead of one set of parts. Each vector then holds only its own parts, so nothing is padded with zeros. Here the forklift reads 16 sensor values and is driven by 12 joystick commands:
+
+```python
+embodiment = adamo.Embodiment(state={"sensors": adamo.Controls(16)}, action={"joystick": adamo.Controls(12)})
+```
+
+A datum's `state` then has a `sensors` entry, and its `loss_fn_inputs` a `joystick` entry. Parts passed as the first argument appear in both vectors, before the ones passed to `state` and `action`.
+
+`seed` sets the adapters' initial weights, the training noise and the frames `dataset.batches(training, ...)` draws, so two runs with the same seed train on the same data. `name` and `tags` label the run on the [Training page](https://operate.adamohq.com/#/training). A `/` in `name` groups runs into folders there: `pi0.5/stack-cubes` sits in the `pi0.5` folder.
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `forward_backward(data, loss_fn="flow_matching")` | `ForwardBackwardOutput` | Adds the gradients of a list of `Datum` to the run's gradient sum. `.loss` is the mean loss of the call. `.metrics["example_count"]` counts the datums since the last `optim_step`. |
+| `optim_step(adam_params)` | `None` | Applies AdamW to the mean of the summed gradients and clears them. |
+| `save_weights(path, ttl_seconds=None, override=False, tags=[])` | `ModelWeights` | Saves the weights for `robot.inference`. |
+| `save_state(path, ttl_seconds=None, override=False, tags=[])` | `ModelWeights` | Saves the weights and the optimizer state, to resume training. |
+| `Training.from_state(path, name=None, tags=[])` | `Training` | Starts a run from a saved state. |
+| `action_horizon` | `int` | The steps in one action chunk of the base model. |
+
+Several `forward_backward` calls before one `optim_step` act as one larger batch. `"flow_matching"` is the only loss function.
+
+`AdamParams(learning_rate, beta1=0.9, beta2=0.95, eps=1e-8, weight_decay=1e-10, grad_clip_norm=1.0)` holds the optimizer settings of one step, so the learning rate can follow any schedule. `grad_clip_norm=0` turns clipping off.
+
+### Futures
+
+Every method returns immediately with a future. The worker runs calls in the order they were made, so don't wait on each step: while the GPU trains on one batch, the worker loads the next. To follow the loss, keep the futures and read them every few steps:
+
+```python
+in_flight = []
+for step, data in zip(range(3000), dataset.batches(training, batch_size=32)):
+    in_flight.append(training.forward_backward(data, loss_fn="flow_matching"))
+    training.optim_step(adamo.AdamParams(learning_rate=2.5e-5))
+    if (step + 1) % 10 == 0:
+        print(step + 1, sum(future.result().loss for future in in_flight) / len(in_flight))
+        in_flight.clear()
+```
+
+- `result(timeout=None)` waits for the result. A timeout raises `TimeoutError` and leaves the call running.
+- In async code, use `forward_backward_async`, `optim_step_async`, `save_weights_async` and `save_state_async`, then `await future.result_async()`.
+- Once a `forward_backward` or `optim_step` fails, no later call runs, and their futures say which call failed. A failed save stops nothing.
+
+### Saving states and policies
+
+Keep your script running: the SDK checks in with the worker every 30 s, and a run whose client is gone for 10 minutes ends. Anything not saved by then is lost.
+
+| Method | Use it to |
+|--------|-----------|
+| `save_weights` | Run the policy on a robot with `robot.inference`. |
+| `save_state` | Resume training. It saves the optimizer state with the weights, and `robot.inference` runs it too. |
+
+Save a state every few hundred steps, and resume from the latest one after a crash or a lost connection:
+
+```python
+# save
+if (step + 1) % 500 == 0:
+    training.save_state(f"my-fine-tuned-policy/step-{step + 1}")
+
+# resume
+with adamo.Training.from_state("my-fine-tuned-policy/step-1500") as training:
+    ...
+```
+
+Each save returns a `ModelWeights`:
+
+```python
+weights = training.save_weights("my-fine-tuned-policy/final").result()
+print(weights.path)  # my-fine-tuned-policy/final
+print(weights.expires_at)  # None: kept forever
+```
+
+A path is any name you choose, unique in your organization. A `/` groups saves into folders on the [Policies page](https://operate.adamohq.com/#/policies), so name a run's saves after it: `my-fine-tuned-policy/step-1500` and `my-fine-tuned-policy/final` sit in the `my-fine-tuned-policy` folder. Saving at a taken path asks you to confirm, and raises `FileExistsError` without a yes. `override=True` replaces it without asking.
+
+Saves are kept for `ttl_seconds`, or forever with `ttl_seconds=None`. `tags` label them on the [Policies page](https://operate.adamohq.com/#/policies).
