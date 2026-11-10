@@ -64,9 +64,15 @@ target_link_libraries(my_robot PRIVATE Adamo::adamo)
 
 ## Get an API Key
 
-Sign up at [operate.adamohq.com](https://operate.adamohq.com) and go to **Settings → API Keys**. Create a key (it starts with `ak_`) and copy it. The SDK uses this key to find the right router for your organisation.
+Sign up at [operate.adamohq.com](https://operate.adamohq.com), then sign in from the machine that runs the SDK, so your programs reach your organisation without a key in the code:
 
-You can pass the key inline or read it from the `ADAMO_API_KEY` environment variable.
+```sh
+adamo login
+```
+
+It opens your browser. On a machine without one, such as a robot over SSH, open the link it prints on any computer and paste back the code the page shows. It saves an API key for each of your organisations, and the SDK uses it whenever you pass no key. `adamo orgs` lists them and `adamo use <org>` switches the one the SDK uses.
+
+`adamo login` comes with the Python SDK. You can also create a key in **Settings → API Keys** (it starts with `ak_`) and pass it inline or set `ADAMO_API_KEY`, which takes precedence over the saved key. The SDK uses the key to find the right router for your organisation.
 
 ## Write Your Robot Program
 
@@ -126,7 +132,7 @@ int main(void) {
 ### First step: run the doctor
 
 ```sh
-adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
+adamo doctor   # uses the key adamo login saved, or pass --api-key ak_...
 ```
 
 It checks API key validity, QUIC reachability (including whether this network blocks UDP), encoder availability, and the video extras — and prints output you can paste straight into a support request.

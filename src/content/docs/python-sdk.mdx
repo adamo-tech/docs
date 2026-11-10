@@ -71,7 +71,7 @@ import adamo
 class adamo.Robot:
     def __init__(
         self,
-        api_key: str | None = None,   # defaults to the ADAMO_API_KEY environment variable
+        api_key: str | None = None,   # defaults to ADAMO_API_KEY, then the key adamo login saved
         name: str | None = None,
         protocol: str = "quic",       # "quic", "tcp", or "udp"
         record: bool | Recording = False,
@@ -80,7 +80,7 @@ class adamo.Robot:
 
 Connects to your organization's router. `protocol="quic"` is the right choice in every case; `"tcp"` is a diagnostic or telemetry-only fallback for networks that block UDP — don't teleoperate over it. A rejected API key raises `ConnectionError`.
 
-With no API key at all (neither `api_key` nor `ADAMO_API_KEY`), the robot warns and runs locally instead, like `Robot.local()`: it doesn't reach the relay, and receivers connect with `adamo.connect_local()` using the address and pairing key it prints.
+With no API key at all (no `api_key`, no `ADAMO_API_KEY` and no key saved by `adamo login`), the robot warns and runs locally instead, like `Robot.local()`: it doesn't reach the relay, and receivers connect with `adamo.connect_local()` using the address and pairing key it prints.
 
 Every key the robot uses is scoped to your organization; you write `{robot}/{topic}` (for example `my-arm/sensors/imu`).
 
@@ -393,7 +393,7 @@ video. By default, frames are available as CPU NumPy arrays. Receivers also
 support CUDA NV12 and CUDA RGBA output for GPU perception or inference.
 
 Open a shared client session with `adamo.connect()`. It reads `ADAMO_API_KEY`
-by default, or accepts an API key explicitly. Select the robot and track, and
+or the key `adamo login` saved by default, or accepts an API key explicitly. Select the robot and track, and
 set `codec` to match the publisher's encoded stream:
 
 ```python
@@ -419,7 +419,7 @@ from a robot's camera track:
 ```python
 import adamo
 
-with adamo.connect() as session:  # reads ADAMO_API_KEY
+with adamo.connect() as session:  # reads ADAMO_API_KEY or the saved key
     with session.video_receiver(
         "my-robot", "head", max_queued_frames=1
     ) as receiver:
@@ -623,7 +623,7 @@ What the Adamo data service records for a robot; pass it as `adamo.Robot(record=
 ### `Recordings`
 
 ```python
-recordings = adamo.Recordings(api_key=None)   # defaults to ADAMO_API_KEY
+recordings = adamo.Recordings(api_key=None)   # defaults to ADAMO_API_KEY, then the saved key
 
 recordings.list(
     *,
@@ -699,12 +699,24 @@ except adamo.EncoderSelectionError as error:
     print(error.track, error.attempts)
 ```
 
+## Login
+
+Sign in once per machine so scripts reach your organization without an API key in the code. `adamo login` opens your browser, or on a machine without one prints a link to open anywhere and asks for the code the page shows. It saves an API key for each of your organizations in `~/.config/adamo/credentials`, which `Robot`, `connect`, `Recordings` and `LoraTraining` use when you pass no key and `ADAMO_API_KEY` is unset.
+
+```sh
+adamo login          # sign in and save a key for each of your organizations
+adamo orgs           # list them, marking the one the SDK uses
+adamo use my-org     # make the SDK use my-org
+```
+
+`ADAMO_ORG=my-org` picks another saved organization for one command.
+
 ## Doctor
 
 `adamo doctor` diagnoses the local setup: Python and SDK versions, platform and glibc, API key validity, QUIC reachability (with a TCP probe that detects networks that block UDP), and hardware encoder availability. Run it first when anything misbehaves — the output is designed to be pasted into a support request. It exits non-zero when it finds a problem.
 
 ```text
-$ adamo doctor --api-key ak_...   # or set ADAMO_API_KEY
+$ adamo doctor   # or pass --api-key ak_...
 adamo doctor
 
   ✓ python 3.12.3
