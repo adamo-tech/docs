@@ -38,8 +38,6 @@ robot.inference(
 | `vernerobotics/v0.5-robotwin` | `prompt`, `images`, `state`, `action`, `frame_rate` | Verne V0.5 (Verne Robotics) fine-tuned on the RoboTwin 2.0 simulator's aloha-agilex robot. It reads the left wrist, right wrist and head cameras and a state of each arm's 6 joints and gripper, left then right, then the left and right end-effector poses as RoboTwin gives them (position, then quaternion w first). Its actions are each arm's 6 joints and gripper, at 50/3 Hz (`frame_rate=50 / 3`). |
 
 
-Built with Verne V0.5. Verne V0.5 is licensed under the [Verne V0.5 Model License](https://github.com/vernerobotics/v0.5/blob/main/LICENSE).
-
 ## Actions
 
 The policy publishes one action per frame at `frame_rate`:
