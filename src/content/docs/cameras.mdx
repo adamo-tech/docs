@@ -178,10 +178,13 @@ each sample must contain exactly `1280 * 720 * 4 = 3,686,400` bytes.
 
 Run the publisher and Adamo bridge as separate processes on the same host. The
 publisher needs the iceoryx2 Python package at the version the SDK links; the
-Adamo side needs nothing extra:
+Adamo side needs nothing extra. On Jetson and other Linux ARM64 machines, install
+`adamo-shm-runtime`, Adamo's prebuilt ARM64 wheel of the same iceoryx2 release
+(upstream has none). It provides the same `import iceoryx2`:
 
 ```sh
-pip install 'iceoryx2==0.8.1' numpy
+pip install 'iceoryx2==0.8.1' numpy              # x86_64 Linux, macOS, Windows
+pip install 'adamo-shm-runtime==0.8.1.post1' numpy  # Jetson / Linux ARM64
 export ADAMO_API_KEY="ak_..."
 python zed_left_to_shm.py
 python shm_to_adamo.py

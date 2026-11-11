@@ -17,13 +17,19 @@ The 1.0 package primarily provides robot-side APIs. The older standalone session
 pip install adamo
 ```
 
-Pre-built wheels are published for Linux x86_64, Linux aarch64 (Jetson), and macOS arm64. There are no extras: video support is built in.
+Pre-built wheels are published for Linux x86_64, Linux aarch64 (Jetson), and macOS arm64. Video support is built in.
 
-Shared-memory **producers** written in Python (see [Adding Cameras](/cameras/#shared-memory-iceoryx2)) also need the iceoryx2 Python package at the version the SDK links:
+Shared-memory **producers** written in Python (see [Adding Cameras](/cameras/#shared-memory-iceoryx2)) also need the iceoryx2 Python package at the version the SDK links (0.8.1):
 
 ```sh
+# Linux x86_64, macOS, Windows
 pip install 'iceoryx2==0.8.1' numpy
+
+# Jetson and other Linux ARM64 machines
+pip install 'adamo-shm-runtime==0.8.1.post1' numpy
 ```
+
+Upstream iceoryx2 publishes no Linux ARM64 wheel, so `pip install iceoryx2` on a Jetson tries to compile it from source and usually fails. `adamo-shm-runtime` is Adamo's prebuilt ARM64 wheel of the same iceoryx2 release. Your code still uses `import iceoryx2`. Install one package or the other, never both. `adamo doctor` reports which one is installed.
 
 The consumer side (`attach_video(shm=...)`) needs nothing extra.
 
