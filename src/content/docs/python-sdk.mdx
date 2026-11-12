@@ -139,7 +139,7 @@ Attach a camera track that the SDK captures, encodes, and publishes. Pass exactl
 | `pipeline=` | Optional. Omit it to accept the pipeline's raw output, or pass `"NV12"`, `"YUY2"`, `"UYVY"`, or `"MJPEG"`. |
 | `shm=` | Required, together with `width` and `height`, matching the producer exactly. Raw formats only: `NV12`, `NV21`, `I420`, `YUY2`, `UYVY`, `BGRA`, `RGBA`, `BGRX`, `RGBX`, `RGB`, `BGR`, `GRAY8`, `GRAY16_LE`. |
 
-Omitting `encoder` selects a hardware encoder for `codec`; there is no automatic software fallback. Explicit choices on Linux are `"nvenc"`, `"vaapi"`, `"x264"` (software), and `"jetson"` (aarch64 builds with Jetson support); `"vtenc_h264"` on macOS. GStreamer element names such as `"nvh264enc"`, `"vah264enc"`, and `"nvv4l2h264enc"` are accepted as aliases.
+Omitting `encoder` selects a hardware encoder for `codec`; there is no automatic software fallback. Explicit choices on Linux are `"nvenc"`, `"vaapi"`, and `"jetson"` (aarch64 builds with Jetson support); `"vtenc_h264"` on macOS. `"openh264"` selects software H.264 encoding on either platform, as a last resort, after you enable it with `adamo get openh264`; see [Software encoding with OpenH264](/cameras/#software-encoding-with-openh264). GStreamer element names such as `"nvh264enc"`, `"vah264enc"`, and `"nvv4l2h264enc"` are accepted as aliases.
 
 `width`, `height`, and `fps` set the track's output for every source and default to 1280x720 at 30 fps. A `pipeline=` source is converted and scaled to them rather than published at its own size, so pass the pipeline's output size explicitly. The pipeline must end in system memory; see [GStreamer Pipelines](/cameras/#gstreamer-pipelines).
 

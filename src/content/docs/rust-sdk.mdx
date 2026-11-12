@@ -603,7 +603,7 @@ Push one frame. `frame.len()` must equal `width × height × bytes-per-pixel` fo
 pub fn detect_encoder() -> Result<&'static str>;
 ```
 
-Returns the best available H.264 encoder for the host (NVENC, VA-API, VideoToolbox, x264) or `"none"` if no encoder is available.
+Opens the best available hardware H.264 encoder for the host and returns its name: `"nvenc"`, `"vaapi"`, `"jetson"`, or `"vtenc_h264"`. Returns an error if no hardware encoder is available. It never selects software encoding; see [Software encoding with OpenH264](/cameras/#software-encoding-with-openh264).
 
 ### `VideoReceiver`
 
