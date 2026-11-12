@@ -120,6 +120,7 @@ Pick the base model closest to your robot and task:
 | `allenai/MolmoAct2-BimanualYAM` | MolmoAct2 fine-tuned by AllenAI on bimanual YAM data. Apache 2.0. | 30 steps | `adamo.BimanualArms()` |
 | `allenai/MolmoAct2-DROID` | MolmoAct2 fine-tuned by AllenAI for the DROID Franka. Apache 2.0. | 15 steps | 7 `Joints`, then a `Gripper` |
 | `allenai/MolmoAct2-SO100_101` | MolmoAct2 fine-tuned by AllenAI for SO-100/101. Apache 2.0. | 30 steps | 5 `Joints`, then a `Gripper` |
+| `black-forest-labs/flux-3-action-base` | Black Forest Labs' FLUX 3 Action world action model, with new action heads for your robot. It learns from the frames each action leads to, so it trains only on `dataset.batches`, with 1 to 3 cameras and as many state values as action values. FLUX Kommunity License. | 33 steps, of which it learns the first 32 | Required |
 
 `abc/dit-bottles` trains all of its weights and ignores `lora_rank`. The other base models train LoRA adapters of rank `lora_rank`, 32 when left out.
 
