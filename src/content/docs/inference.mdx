@@ -150,7 +150,6 @@ Claim the robot as an operator, the way the web app does: publish `acquired` on 
 
 ```python
 import json
-import time
 import uuid
 
 from adamo import Priority
@@ -176,8 +175,7 @@ def on_ownership(sample: adamo.Sample) -> None:
         in_control.clear()  # someone took over; stop sending actions
 
 def heartbeat() -> None:
-    while True:
-        time.sleep(1.0)
+    for _ in adamo.Rate(1):
         if in_control.is_set():
             announce("heartbeat")
 
@@ -265,11 +263,12 @@ def read_camera(cam: str, track: str) -> None:
 Then time each inference in step 4 and publish once a second from a thread:
 
 ```python
+import time
+
 metrics = {"policy": "my-policy", "host": {"provider": "On-prem", "region": "London", "gpu": "RTX 4090"}, "frame_rate": 30}
 
 def publish_metrics() -> None:
-    while True:
-        time.sleep(1.0)
+    for _ in adamo.Rate(1):
         rtt = session.relay_rtt()
         metrics["relay_rtt_ms"] = None if rtt is None else rtt * 1000
         session.put(f"{ROBOT}/stats/inference", json.dumps(metrics).encode())
