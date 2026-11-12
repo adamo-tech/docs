@@ -78,6 +78,8 @@ The policy holds the robot like a teleoperator in the web app. When a teleoperat
 | `trimmed_step_count` | Actions of the last chunk skipped because their time had passed. |
 | `held_step_count` | Steps that repeated the last action because the chunk ran out. |
 
+The web app shows the same numbers live. Open the latency breakdown on the robot's page while the policy drives it: the Policy section shows where the model runs, how old its observations are, how long each inference takes, and how old the frames behind the robot's current actions are.
+
 ## HTTP
 
 The same calls are available over HTTP with your organization API key:
@@ -223,3 +225,63 @@ finally:
 ```
 
 This loop pauses the robot while each chunk is computed. To keep it moving, run inference on its own thread and start the next chunk a few steps before the current one runs out, conditioning it on the actions still queued (real-time chunking), as `adamo_server.py` does. That server also reopens a camera receiver after a connection error, stops the run when a camera sends no frames, and reports camera ages, inference latency and who holds control at `GET /status`.
+
+### 5. Show metrics in the web app
+
+A policy that drives a robot well in one place can stall in another: a farther GPU adds network time, a slower one adds inference time, and a camera that drops frames feeds the policy old images. To see this while you watch the robot, publish your loop's timings on `{robot}/stats/inference`, as plain JSON, about once a second. The web app adds a Policy section to the robot's latency breakdown while the topic is live, and hides it 3 s after the last message.
+
+Every field is optional; the web app shows the ones you send:
+
+| Field | Description |
+|-------|-------------|
+| `policy`, `task` | The policy's name and the prompt it runs. |
+| `owner` | `"model"` while the policy drives, `"human"` while an operator has taken over. |
+| `host` | Where the policy runs: `provider`, `region` and `gpu`, for example `{"provider": "On-prem", "region": "London", "gpu": "RTX 4090"}`. |
+| `relay_rtt_ms` | Round trip from your machine to its relay, from `session.relay_rtt()`. With the robot's own relay round trip, it gives the model-to-robot leg. |
+| `frame_rate` | The rate actions should reach the robot, in Hz. |
+| `observation_age_ms` | How old the oldest frame in the last observation was when inference started. |
+| `observation_ms` | Time to gather that observation. |
+| `inference_ms`, `max_inference_ms` | The last inference, and the longest recent one. |
+| `inference_rate_hz` | Inferences in the last second. |
+| `action_age_ms` | Mean age of the frames behind the actions sent in the last second, at the moment each was sent. The web app adds the model-to-robot leg and shows it as glass-to-action. |
+| `publish_rate_hz` | Actions sent in the last second. |
+| `remaining_ms_at_arrival` | How much of the previous chunk was left when the last one arrived. |
+| `inference_delay_steps`, `chunk_length` | The real-time chunking delay the last inference was given, and the length of the current chunk. |
+| `trimmed_step_count`, `held_step_count` | Actions skipped because their time had passed, and steps that repeated the last action because the chunk ran out, in the last second. |
+| `cameras` | Per track: `age_ms`, the age of its newest frame, and `fps`, frames received in the last second. |
+| `state` | Per state topic: `age_ms`, the time since its last message. |
+
+Glass-to-action is to a policy what glass-to-glass is to a teleoperator: how old the world was when the robot acted on it. Times are on the fabric clock, so they compare across machines. Keep each frame's capture time in step 1:
+
+```python
+captured = {}
+
+def read_camera(cam: str, track: str) -> None:
+    ...
+            latest[cam] = frame.rgba[..., :3].copy()
+            captured[cam] = frame.capture_time_us
+```
+
+Then time each inference in step 4 and publish once a second from a thread:
+
+```python
+metrics = {"policy": "my-policy", "host": {"provider": "On-prem", "region": "London", "gpu": "RTX 4090"}, "frame_rate": 30}
+
+def publish_metrics() -> None:
+    while True:
+        time.sleep(1.0)
+        rtt = session.relay_rtt()
+        metrics["relay_rtt_ms"] = None if rtt is None else rtt * 1000
+        session.put(f"{ROBOT}/stats/inference", json.dumps(metrics).encode())
+
+threading.Thread(target=publish_metrics, daemon=True).start()
+
+# in the loop of step 4
+        capture_time_us = min(captured[cam] for cam in CAMERAS)
+        metrics["observation_age_ms"] = (session.fabric_now_us() - capture_time_us) / 1000
+        started = time.monotonic()
+        chunk = policy.infer(obs)
+        metrics["inference_ms"] = (time.monotonic() - started) * 1000
+```
+
+Policies Adamo hosts publish every field above.
