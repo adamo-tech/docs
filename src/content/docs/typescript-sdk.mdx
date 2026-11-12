@@ -645,7 +645,7 @@ type TrackRequestParams = {
   v4l2_capture_resolution?: [number, number]; // [width, height] for V4L2 capture
 
   // Encoding
-  encoder?: string;                    // Encoder name (e.g., "nvenc", "x264")
+  encoder?: string;                    // Encoder name (e.g., "nvenc", "vaapi")
   bitrate?: number;                    // Target bitrate in kbps
   fps?: number;                        // Target frame rate
   passthrough?: boolean;               // Pass compressed data through without re-encoding

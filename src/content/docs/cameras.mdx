@@ -392,9 +392,11 @@ adamo-network --config h265-to-h264.yaml
 ```
 
 Use `vtenc_h264` on Apple Silicon, `nvh264enc` on an NVIDIA desktop GPU,
-`vah264enc` on Intel/AMD Linux, or `x264enc` for CPU encoding. On Jetson,
-`nvv4l2h264enc` selects the hardware encoder shown above. To produce H.265,
-choose the corresponding H.265 encoder and set the output codec accordingly.
+or `vah264enc` on Intel/AMD Linux. On Jetson, `nvv4l2h264enc` selects the
+hardware encoder shown above. To produce H.265, choose the corresponding H.265
+encoder and set the output codec accordingly. A host with no hardware encoder
+can encode H.264 on the CPU; see
+[Software encoding with OpenH264](#software-encoding-with-openh264).
 
 #### Rust SDK
 
@@ -909,11 +911,54 @@ Adamo picks the best available hardware H.264 encoder for the host at startup:
 | x86 with NVIDIA discrete GPU   | NVENC |
 | Intel / AMD integrated graphics | VA-API |
 | macOS                          | VideoToolbox |
-| Anything else                  | CPU (x264) |
+| Anything else                  | None: startup fails |
 
 To see what the SDK picked, check the log line printed at connect.
 
 The Python SDK 1.0 never falls back to software encoding on its own: if no
 hardware encoder starts, startup fails with an `EncoderSelectionError` naming
-each encoder it tried. Pass `encoder="x264"` to opt into CPU encoding, and run
-`adamo doctor` to see which encoder the host provides.
+each encoder it tried. Run `adamo doctor` to see which encoder the host
+provides. CPU encoding is opt-in, described next.
+
+### Software encoding with OpenH264
+
+Software H.264 encoding is a last resort for a robot with no hardware encoder.
+It costs a CPU core or more per camera and adds latency under load, so use a
+hardware encoder wherever one exists. Automatic selection never picks software:
+you enable it on the machine, then select it explicitly.
+
+```sh
+adamo get openh264            # download, verify, and enable Cisco's binary
+adamo get openh264 --remove   # disable it again
+```
+
+```python
+robot.attach_video("front", device="/dev/video0", encoder="openh264")
+```
+
+OpenH264 Video Codec provided by Cisco Systems, Inc.
+
+The SDK does not ship OpenH264. `adamo get openh264` downloads Cisco's prebuilt
+OpenH264 2.7.0 binary to this machine (Linux x86-64 and arm64, macOS arm64 and
+x86-64), checks its SHA-256 against Cisco's release, prints Cisco's license, and
+installs it under the SDK state directory (`ADAMO_STATE_DIR` when set). Run the
+command again to re-enable it after `--remove`. `adamo doctor` reports whether
+OpenH264 is enabled.
+
+For a robot without internet access, download the binary for its platform from
+`https://ciscobinary.openh264.org/` on another machine, decompress it with
+`bunzip2`, copy it to the robot, and set `ADAMO_OPENH264_LIBRARY` to its path.
+The same SHA-256 check applies, and any library other than Cisco's is refused.
+
+The binary is covered by
+[Cisco's binary license](https://www.openh264.org/BINARY_LICENSE.txt); see
+Cisco's [binary licensing FAQ](https://www.openh264.org/faq.html#binary) for
+background. The source is at
+[github.com/cisco/openh264](https://github.com/cisco/openh264).
+
+<Aside type="caution">
+The encoder names `x264`, `x264enc`, and `software` stopped working in SDK
+1.0.21, which removed the x264 encoder. They now fail with an error that points
+to a hardware encoder or to `encoder="openh264"`. GStreamer pipelines you write
+yourself, naming their own elements, are unaffected.
+</Aside>

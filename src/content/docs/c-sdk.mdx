@@ -569,7 +569,7 @@ Blocks indefinitely. Call from a dedicated thread. Consumes the robot — multip
 const char *adamo_detect_encoder(void);
 ```
 
-Returns the best available H.264 encoder name for the host (NVENC, VA-API, VideoToolbox, x264) or `"none"`. Pointer valid for the lifetime of the process.
+Returns the best available hardware H.264 encoder name for the host (NVENC, VA-API, VideoToolbox) or `"none"`. Pointer valid for the lifetime of the process.
 
 <Aside>The `adamo_robot_attach_video_gst(...)` GStreamer pipeline path is still present in the library but deprecated for new code; use V4L2 or shared-memory tracks instead.</Aside>
 
