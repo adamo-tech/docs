@@ -945,9 +945,10 @@ installs it under the SDK state directory (`ADAMO_STATE_DIR` when set). Run the
 command again to re-enable it after `--remove`. `adamo doctor` reports whether
 OpenH264 is enabled.
 
-For a robot without internet access, download the binary for its platform from
-`https://ciscobinary.openh264.org/` on another machine, decompress it with
-`bunzip2`, copy it to the robot, and set `ADAMO_OPENH264_LIBRARY` to its path.
+A robot that cannot reach the internet when the SDK runs can use a copy of
+Cisco's binary for its platform, obtained from
+`https://ciscobinary.openh264.org/` and decompressed with `bunzip2`: set
+`ADAMO_OPENH264_LIBRARY` to its path.
 The same SHA-256 check applies, and any library other than Cisco's is refused.
 
 The binary is covered by
