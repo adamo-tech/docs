@@ -9,13 +9,13 @@ import { Aside } from "@astrojs/starlight/components";
 
 ## Install
 
-The C SDK is built from [`adamo-tech/adamo`](https://github.com/adamo-tech/adamo/tree/main/sdks/c). Version **1.0.22** includes the session, pub/sub, robot, media and diagnostics bindings over the canonical Rust SDK. The same verified build is published to [GitHub Releases](https://github.com/adamo-tech/adamo/releases/tag/c-sdk-v1.0.22) and `install.adamohq.com/sdk/`.
+The C SDK is built from [`adamo-tech/adamo`](https://github.com/adamo-tech/adamo/tree/main/sdks/c). Version **1.0.23** fixes generic C sessions opening with the wrong relay role and includes the session, pub/sub, robot, media and diagnostics bindings over the canonical Rust SDK. The same verified build is published to [GitHub Releases](https://github.com/adamo-tech/adamo/releases/tag/c-sdk-v1.0.23) and `install.adamohq.com/sdk/`.
 
 Pin a version in production. For Linux arm64 (Jetson / Ubuntu 22.04 aarch64):
 
 ```sh
-sdk=adamo-sdk-linux-arm64-video-1.0.22
-base=https://install.adamohq.com/sdk/v1.0.22
+sdk=adamo-sdk-linux-arm64-video-1.0.23
+base=https://install.adamohq.com/sdk/v1.0.23
 curl -fLO "$base/$sdk.tar.gz"
 curl -fLO "$base/$sdk.tar.gz.sha256"
 shasum -a 256 -c "$sdk.tar.gz.sha256"
@@ -49,7 +49,7 @@ Software H.264 encoding requires Cisco's separately downloaded OpenH264 binary (
 Then in your project's `CMakeLists.txt`:
 
 ```cmake
-list(APPEND CMAKE_PREFIX_PATH "/opt/adamo-sdk-linux-arm64-video-1.0.22")
+list(APPEND CMAKE_PREFIX_PATH "/opt/adamo-sdk-linux-arm64-video-1.0.23")
 find_package(Adamo CONFIG REQUIRED)
 target_link_libraries(my_robot PRIVATE Adamo::adamo)
 # C++17 wrapper:
@@ -141,7 +141,7 @@ const char *adamo_session_org(const adamo_session_t *sess);     // NUL-terminate
 size_t      adamo_session_org_len(const adamo_session_t *sess); // bytes, excluding NUL
 ```
 
-`adamo_open_default` opens with the default transport. `adamo_open` is available when you need to select a specific transport. `adamo_open_mtls` additionally mints a per-session mTLS client certificate and presents it on the QUIC handshake — required once your routers enforce mTLS. All three return `NULL` on failure. `adamo_session_free` is NULL-safe and closes the underlying connection if this was the last reference.
+`adamo_open_default` opens with the default transport. `adamo_open` is available when you need to select a specific transport. `adamo_open_mtls` is a deprecated compatibility alias; all three authenticate with mTLS. These generic sessions use the relay client role for pub/sub and receiving robot tracks. Robot constructors use the peer role required for robot publishing and direct connections. All three return `NULL` on failure. `adamo_session_free` is NULL-safe and closes the underlying connection if this was the last reference.
 
 `adamo_session_org` returns a NUL-terminated C string valid for the lifetime of the session. `adamo_session_org_len` is provided for callers that prefer length-prefixed reads.
 
@@ -1209,3 +1209,7 @@ while (auto frame = receiver.recv(100)) {
 ```
 
 Define `ADAMO_HAS_VIDEO` in your build to enable these — the CMake build does this automatically when `ADAMO_BUILD_VIDEO=ON`.
+
+## Live publisher and receiver test
+
+The SDK archive includes `examples/pubsub_media_smoke.c` and its build instructions. Run its receiver and publisher in separate processes to verify H.264 video, Opus audio, and 600 byte-checked binary messages through the relay. The publisher waits for the receiver acknowledgement before closing. Both processes must exit successfully.
