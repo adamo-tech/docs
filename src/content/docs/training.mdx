@@ -121,6 +121,9 @@ Pick the base model closest to your robot and task:
 | `allenai/MolmoAct2-DROID` | MolmoAct2 fine-tuned by AllenAI for the DROID Franka. Apache 2.0. | 15 steps | 7 `Joints`, then a `Gripper` |
 | `allenai/MolmoAct2-SO100_101` | MolmoAct2 fine-tuned by AllenAI for SO-100/101. Apache 2.0. | 30 steps | 5 `Joints`, then a `Gripper` |
 | `black-forest-labs/flux-3-action-base` | Black Forest Labs' FLUX 3 Action world action model, with new action heads for your robot. It learns from the frames each action leads to, so it trains only on `dataset.batches`, with 1 to 3 cameras and as many state values as action values. FLUX Kommunity License. | 33 steps, of which it learns the first 32 | Required |
+| `openwam/OpenWAM-Alpha` | The pretrained [OpenWAM](https://openwam-official.github.io/)-α world-action model. Apache 2.0. | 32 steps | Required |
+
+OpenWAM learns to predict the video of the 32 frames after each datum along with its actions, so it trains only on datums from an `adamo.Dataset`, whose images point at recorded frames. It sees up to three cameras, a main camera then two wrist cameras. It was pretrained on end-effector poses, and each arm's joints take the slots of its arm's pose, so the first steps start further from the pretrained robot than with the other models. `lora_rank` sets the adapters of its video and action models.
 
 `abc/dit-bottles` trains all of its weights and ignores `lora_rank`. The other base models train LoRA adapters of rank `lora_rank`, 32 when left out.
 
