@@ -9,48 +9,48 @@ import { Aside } from "@astrojs/starlight/components";
 
 ## Install
 
-The C SDK ships as a prebuilt tarball from `install.adamohq.com/sdk/`. Pick the build that matches your host OS, architecture, and whether you need video support, then extract it into a CMake-discoverable prefix (e.g. `/opt`).
+The C SDK is built from [`adamo-tech/adamo`](https://github.com/adamo-tech/adamo/tree/main/sdks/c). Version **1.0.22** includes the session, pub/sub, robot, media and diagnostics bindings over the canonical Rust SDK. The same verified build is published to [GitHub Releases](https://github.com/adamo-tech/adamo/releases/tag/c-sdk-v1.0.22) and `install.adamohq.com/sdk/`.
+
+Pin a version in production. For Linux arm64 (Jetson / Ubuntu 22.04 aarch64):
 
 ```sh
-# Linux arm64 (Jetson / Ubuntu 22.04 aarch64), with video:
-curl -fsSL -o adamo-sdk.tar.gz \
-  https://install.adamohq.com/sdk/adamo-sdk-linux-arm64-video-latest.tar.gz
-
-# Verify the checksum (recommended)
-curl -fsSL https://install.adamohq.com/sdk/adamo-sdk-linux-arm64-video-latest.tar.gz.sha256 | shasum -a 256 -c
-
-# Extract — the tarball expands to a top-level directory
-sudo tar xzf adamo-sdk.tar.gz -C /opt
+sdk=adamo-sdk-linux-arm64-video-1.0.22
+base=https://install.adamohq.com/sdk/v1.0.22
+curl -fLO "$base/$sdk.tar.gz"
+curl -fLO "$base/$sdk.tar.gz.sha256"
+shasum -a 256 -c "$sdk.tar.gz.sha256"
+sudo tar xzf "$sdk.tar.gz" -C /opt
 ```
 
 Available builds:
 
 | Tarball stem | Host |
 |--------------|------|
-| `adamo-sdk-linux-arm64-video` | Jetson / Ubuntu 22.04 aarch64, with video |
-| `adamo-sdk-linux-arm64`       | Jetson / Ubuntu 22.04 aarch64, pub/sub only |
-| `adamo-sdk-linux-x86_64-video`| Ubuntu 22.04 x86_64, with video |
-| `adamo-sdk-linux-x86_64`      | Ubuntu 22.04 x86_64, pub/sub only |
-| `adamo-sdk-macos-arm64-video` | macOS arm64, with video |
-| `adamo-sdk-macos-arm64`       | macOS arm64, pub/sub only |
-Replace `latest` with a pinned version (at least `0.1.103`) in production. Intel macOS is not currently supported.
+| `adamo-sdk-linux-arm64-video` | Jetson / Ubuntu 22.04+ aarch64 |
+| `adamo-sdk-linux-x86_64-video` | Ubuntu 22.04+ x86_64 |
+| `adamo-sdk-macos-arm64-video` | Apple silicon macOS |
 
-The `-video` builds need the GStreamer runtime installed on the host:
+The existing stems without `-video` remain compatibility aliases to the same full SDK, with the same runtime dependencies. Rolling `*-latest.tar.gz` aliases are still available. Intel macOS and Windows are not included in this release; legacy artifacts are separate from this SDK.
+
+Install the native runtime dependencies before loading `libadamo`:
 
 ```sh
-# Ubuntu / Debian
-sudo apt-get install -y gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad gstreamer1.0-libav
+# Ubuntu 22.04
+sudo apt-get install -y libdav1d5 libopus0 libasound2 libgstreamer1.0-0 \
+  libgstreamer-plugins-base1.0-0 gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
 
 # macOS
-brew install gstreamer
+brew install dav1d opus gstreamer
 ```
+
+Software H.264 encoding requires Cisco's separately downloaded OpenH264 binary (`adamo get openh264`); hardware encoding remains the default. Native decoded receivers support H.264 and AV1. Leave the receiver's `decoder` option NULL: legacy GStreamer decoder factory overrides and H.265 decoding return an error. Optional audio capture (`allow_missing=true`) is not supported; attach a required source.
 
 Then in your project's `CMakeLists.txt`:
 
 ```cmake
-list(APPEND CMAKE_PREFIX_PATH "/opt/adamo-sdk-linux-arm64-video-latest")
-find_package(Adamo REQUIRED)
+list(APPEND CMAKE_PREFIX_PATH "/opt/adamo-sdk-linux-arm64-video-1.0.22")
+find_package(Adamo CONFIG REQUIRED)
 target_link_libraries(my_robot PRIVATE Adamo::adamo)
 # C++17 wrapper:
 # target_link_libraries(my_robot PRIVATE Adamo::adamo_cpp)
@@ -58,10 +58,13 @@ target_link_libraries(my_robot PRIVATE Adamo::adamo)
 
 Each tarball ships:
 
-- `lib/libadamo.{so,dylib}` — the shared library
-- `include/adamo/adamo.h` — the C header
-- `include/adamo/adamo.hpp` — the C++17 RAII wrapper (when `ADAMO_BUILD_CPP=ON` was set, which is the default)
-- `lib/cmake/Adamo/` — CMake package config so `find_package(Adamo)` works
+- `lib/libadamo.{so,dylib}` and `lib/libadamo.a` — shared and static libraries
+- `include/adamo/adamo.h` and the additional media/diagnostics headers
+- `include/adamo/adamo.hpp` — the C++17 RAII wrapper
+- `lib/cmake/Adamo/` — CMake package configuration
+- `build-manifest.json` — the exact source repository, commit, version and target
+
+Every packaged header's exports are linked during release validation. The published [SDK manifest](https://install.adamohq.com/sdk/latest.json) identifies the current version and checksums.
 
 ## Conventions
 
