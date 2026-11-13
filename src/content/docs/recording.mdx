@@ -210,8 +210,11 @@ To save tasks into the `.rrd` directly, `PUT $API/labels` with the same `interva
 | `PUT /labels` | Save tasks into the `.rrd`: `{"intervals", "labels_revision"}` |
 | `PUT /labels/draft` | Save a draft: `{"intervals"}` |
 | `DELETE /labels/draft` | Discard the draft |
+| `POST /split` | Split into separate recordings: `{"times_us", "intervals"}` |
 
 Each interval has a `task_name`, `start_us`, `end_us` and an `outcome` of `"success"`, `"failure"` or `"abort"`.
+
+When one long recording holds several takes, split it so each take can be tagged, labelled, kept or deleted on its own. `POST $API/split` cuts the recording at each capture time in `times_us` and returns the new recordings' `ids` in order. The first keeps the recording's id, and each other is named after the time it starts, like any new recording. `intervals` are the tasks to save, each clipped to the recordings it spans.
 
 ## Finding recordings
 
@@ -239,7 +242,7 @@ The Copy Query button on the [Recordings page](https://operate.adamohq.com/#/rec
 
 Export your recordings to train outside Adamo, with LeRobot's training scripts or your own code. To train on Adamo, skip the export and use [`adamo.Dataset`](/training/#datasets).
 
-`Recordings.export` writes recordings as a LeRobot dataset, one episode per recording, and returns the `LeRobotDataset`. It cleans them on the way, so a model trains only on frames worth learning from. It needs `pip install "adamo[export]"` and Python 3.12 or newer.
+`Recordings.export` writes recordings as a LeRobot dataset and returns the `LeRobotDataset`. Each labelled task is one episode, from its start to its end, so tasks that overlap, such as a whole sort and each cube it moves, give episodes that share frames. A recording without tasks is one episode. It cleans them on the way, so a model trains only on frames worth learning from. It needs `pip install "adamo[export]"` and Python 3.12 or newer.
 
 ```python
 dataset = client.export(recordings, adamo.Export(
@@ -260,7 +263,7 @@ dataset = client.export(recordings, adamo.Export(
 | `gop` | The most frames between two keyframes of the dataset's videos, 2 by default, so a training loop decodes any frame quickly. A recording with longer gaps between keyframes is encoded again. |
 | `idle_seconds` | Drops frames whose action stays the same for longer than this, such as while the operator lets go of the controls. 10 by default; `None` keeps every frame. |
 
-Frames where a camera has no fresh picture are always dropped: after a lost video packet, the pictures until the next keyframe decode as smears, and a camera can stall. A frame is dropped when any camera's latest picture that decodes is 300 ms old or more. When frames are dropped from the middle of a recording, each run of frames left becomes its own episode, so an action chunk never spans a cut. [`adamo.Dataset`](/training/#datasets) takes the same `Export` and cleans the same way.
+Frames where a camera has no fresh picture are always dropped: after a lost video packet, the pictures until the next keyframe decode as smears, and a camera can stall. A frame is dropped when any camera's latest picture that decodes is 300 ms old or more. A value that cannot be read, or whose size differs from the topic's usual size, is dropped too, and the value before it is held. When frames are dropped from the middle of a recording, each run of frames left becomes its own episode, so an action chunk never spans a cut. [`adamo.Dataset`](/training/#datasets) takes the same `Export` and cleans the same way.
 
 The Export Dataset button on the [Recordings page](https://operate.adamohq.com/#/recordings) writes this code for the current filters.
 
