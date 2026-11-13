@@ -5,7 +5,7 @@ import starlight from "@astrojs/starlight";
 // The 1.0 docs (no prefix) have pages the 0.x docs lack.
 const sections = (prefix) =>
   [
-    { label: "Getting Started", items: ["index", "quickstart", ...(prefix ? [] : ["simulator"]), "cameras", ...(prefix ? [] : ["local-streaming"])] },
+    { label: "Getting Started", items: ["index", "quickstart", ...(prefix ? [] : ["simulator"]), "cameras", ...(prefix ? [] : ["local-streaming", "mcp"])] },
     {
       label: "Building Robots",
       items: ["control", "audio", "ros", "data", "recording", ...(prefix ? [] : ["training", "inference"]), "state", "discovery"],

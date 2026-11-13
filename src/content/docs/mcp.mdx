@@ -1,0 +1,53 @@
+---
+title: "MCP Server"
+description: "Let an AI agent find, label and train on your recordings, and run policies on your robots."
+---
+
+Hand the busywork to an agent. Adamo's MCP server lets Claude, Codex, Cursor or any MCP client list your recordings, look at their frames and signals, label them into tasks, split them, build datasets, train policies and start them on your robots, in your organization and with your permissions.
+
+## Local server
+
+`adamo-mcp` runs on your computer. It forwards every hosted tool to Adamo and adds the tools that need your machine: looking at frames and reading signals without downloading whole recordings, downloading them, and running training loops.
+
+```bash
+adamo login                              # once per machine
+claude mcp add adamo -- uvx adamo-mcp    # Claude Code
+codex mcp add adamo -- uvx adamo-mcp     # Codex
+```
+
+Any other client takes the command `uvx adamo-mcp`, for example in Cursor's `.cursor/mcp.json` or Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "adamo": { "command": "uvx", "args": ["adamo-mcp"] }
+  }
+}
+```
+
+It signs in with the key `adamo login` saved, or `ADAMO_API_KEY` when set. `adamo-mcp --help` prints the same. Its tools on top of the hosted ones:
+
+| Tool | What it does |
+|---|---|
+| `recording_info` | The cameras and signals of a recording, and the span that has frames. |
+| `zoom` | A grid of the chosen cameras at many frames, labelled with their times. |
+| `view_frame` | One frame of the chosen cameras at full resolution. |
+| `read_signals` | Signal values at each frame of a span, as CSV, at most 100 rows. |
+| `save_signals` | Every recorded value of the signals over the whole recording, to a CSV file. |
+| `download_recordings` | Recordings as `.rrd` files on your computer. |
+| `start_training` | A training run on Adamo's GPUs, driven by a process on your computer. |
+| `training_log` | The output of a run `start_training` started. |
+
+`zoom` and `view_frame` take `cameras`, the cameras to show in order. `zed.left` or `zed.right` shows one half of a side-by-side stereo camera.
+
+`start_training` follows the base model's recipe from `list_base_models`: steps, batch size, learning rate schedule, weight decay and checkpoint interval. Pass any of them to change it, and `embodiment` for a base model pretrained on several robots. Each checkpoint is saved at `path/step-N`, so you can compare them on the robot.
+
+## Hosted server
+
+Clients that connect to remote MCP servers can use Adamo without installing anything, signing in through the browser:
+
+```bash
+claude mcp add --transport http adamo https://api.adamohq.com/mcp
+```
+
+The hosted server has every tool except those of the local server above.
