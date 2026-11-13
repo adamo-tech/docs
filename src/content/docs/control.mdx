@@ -65,6 +65,13 @@ The `event` field is one of:
 | `heartbeat` | The same session still holds control; sent once per second |
 | `released` | The session deliberately released control or left the robot page |
 
+For as long as it holds control, the web app also holds the liveliness token
+`adamo/{org}/{robot}/operator/active/{userId}/{sessionId}`. The operate page
+and the data service read the token, not this stream: the data service records
+time as unattended while nobody holds it. An operator station of your own sends
+both, the stream for the robot and the token with `announce_control` in Python
+and Rust or `announceControl` in TypeScript.
+
 Track ownership by `operator.sessionId`, not display name. A `released` event
 should only clear the matching session: during a takeover, the old holder's
 release can race with the new holder's acquisition.

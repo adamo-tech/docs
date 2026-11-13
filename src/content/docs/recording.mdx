@@ -79,6 +79,8 @@ Record only the time you need. `controller_mask` picks it:
 
 The default is `HUMAN | POLICY`. To record regardless of who is in control, call `robot.start_recording()`, then `robot.stop_recording()`.
 
+The data service tells who is in control from the robot's control token, not from the commands the robot receives. The operate page holds the token while an operator drives. An operator station or policy of your own holds it with `announce_control` in Python and Rust ([Take control](/inference/#3-take-control)) or `announceControl` in TypeScript ([Announcing control](/typescript-sdk/#announcing-control)). Without it, the time counts as `UNATTENDED` even while commands drive the robot.
+
 ### Modes
 
 Adamo supports three recording modes, set with `mode`:
