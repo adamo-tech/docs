@@ -527,6 +527,29 @@ function TeleoperationPage({ robotId, org }: { robotId: string; org: string }) {
 | `onButtonUp` | `(buttonIndex: number) => void` | Called when a button transitions from 1 to 0. |
 | `onConnectionChange` | `(connected: boolean) => void` | Called when a gamepad connects or disconnects. |
 
+### Announcing control
+
+The operate page shows who is driving a robot, and the data service records the time as theirs, only while a client holds the robot's control token. Joy messages alone are recorded as unattended. Hold the token with `announceControl` from the moment your station takes the robot until it lets go:
+
+```tsx
+import { useEffect } from "react";
+import { useOrg, useSession } from "adamo-react";
+import { announceControl } from "adamo/teleop";
+
+function InControl({ robotId, userId, sessionId }: { robotId: string; userId: string; sessionId: string }) {
+  const session = useSession();
+  const org = useOrg();
+  useEffect(() => {
+    if (!session || !org) return;
+    const token = announceControl(session, org, robotId, userId, sessionId);
+    return () => void token.then((held) => held.undeclare());
+  }, [session, org, robotId, userId, sessionId]);
+  return null;
+}
+```
+
+Render it next to `<GamepadController>` while the operator is in control. Pass the operator's user id as the controller, or `"policy"` for a policy, and the `sessionId` of your `operator_control` claim. Each must be one non-empty key segment without `/`, `*`, `$`, `?` or `#`.
+
 ### `JoypadConfig` type
 
 ```ts
