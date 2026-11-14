@@ -258,11 +258,11 @@ Pass `record=True` (or a `Recording`) to the constructor to have the Adamo data 
 robot.inference(policy: str, **arguments) -> Inference
 ```
 
-Run a policy against this robot. `policy` is the path your organization saved weights or a training state at, or the name of a model Adamo serves, and the other arguments go to the policy, most often `prompt`. It reads the robot's cameras and state and publishes actions on its control channels. `inference` returns as soon as the service accepts the request; the run then waits for a GPU and for the policy to load.
+Run a policy against this robot. `policy` is the path your organization saved weights or a training state at, or the name of a model Adamo serves, and the other arguments go to the policy, most often `task`. It reads the robot's cameras and state and publishes actions on its control channels. `inference` returns as soon as the service accepts the request; the run then waits for a GPU and for the policy to load.
 
 ```python
 with adamo.Robot(name="yam-london") as robot:
-    with robot.inference("my-fine-tuned-policy/final", prompt="stack four cubes") as run:
+    with robot.inference("my-fine-tuned-policy/final", task="stack four cubes") as run:
         run.wait()
 ```
 

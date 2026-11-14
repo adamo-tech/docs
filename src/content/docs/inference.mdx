@@ -12,42 +12,42 @@ robot.inference(policy: str, **arguments) -> Inference
 `robot.inference` runs a policy on Adamo's GPUs and drives your robot with it. `policy` is a path you [saved weights or a state at](/training/#saving-states-and-policies), or the name of a model Adamo serves:
 
 ```python
-with robot.inference("my-fine-tuned-policy/final", prompt="stack four cubes") as run:
+with robot.inference("my-fine-tuned-policy/final", task="stack four cubes") as run:
     run.wait()
 ```
 
-Saved weights know which tracks and topics to read and where to publish, so they need only a `prompt`. A served model without its own mapping also takes `images`, `state`, `action` and `frame_rate`:
+Saved weights know which tracks and topics to read and where to publish, so they need only a `task`. A served model without its own mapping also takes `images`, `state`, `action` and `frame_rate`:
 
 ```python
 robot.inference(
-    "physical-intelligence/pi0.5-libero", prompt="pick up the black bowl and place it on the plate",
+    "physical-intelligence/pi0.5-libero", task="pick up the black bowl and place it on the plate",
     images=["cam"], state=["proprioception/joints"], action=["control/openpi.action"], frame_rate=20,
 )
 ```
 
 | Model | Arguments | Description |
 |-------|-----------|-------------|
-| `physical-intelligence/pi0.5` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) base model. |
-| `physical-intelligence/pi0.5-libero` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) fine-tuned on LIBERO. |
-| `physical-intelligence/pi0.5-droid` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) fine-tuned on DROID for the Franka. It reads an exterior and a wrist camera and a state of 7 joint positions and the gripper position, and its actions are 7 joint velocities and a gripper position, at 15 Hz. |
-| `abc/dit-bottles` | `prompt` | [ABC](https://abc.bot)-DiT for the bimanual YAM trained on the ABC sim. |
-| `robocurve/pi0.5-yam` | `prompt`, `images`, `state`, `action`, `frame_rate` | pi0.5 fine-tuned by robocurve for bimanual YAM. |
-| `allenai/MolmoAct2-BimanualYAM` | `prompt`, `images`, `state`, `action`, `frame_rate` | MolmoAct2 (AllenAI) fine-tuned for bimanual YAM. |
-| `allenai/MolmoAct2-DROID` | `prompt`, `images`, `state`, `action`, `frame_rate` | MolmoAct2 (AllenAI) fine-tuned for the DROID Franka. |
-| `allenai/MolmoAct2-SO100_101` | `prompt`, `images`, `state`, `action`, `frame_rate` | MolmoAct2 (AllenAI) fine-tuned for SO-100/101. |
-| `vernerobotics/v0.5-libero` | `prompt`, `images`, `state`, `action`, `frame_rate` | Verne V0.5 (Verne Robotics) fine-tuned on the LIBERO simulator. It reads the wrist and agent-view cameras, upright, and a state of the hand pose the controller is driving to (position, then axis-angle rotation) and the gripper, 1 open and 0 closed. Its actions are the hand pose to reach next and the gripper, in the same layout, at 20 Hz. Turn each target into LIBERO's end-effector delta from the measured hand pose, as Verne's LIBERO example does. |
-| `vernerobotics/v0.5-robotwin` | `prompt`, `images`, `state`, `action`, `frame_rate` | Verne V0.5 (Verne Robotics) fine-tuned on the RoboTwin 2.0 simulator's aloha-agilex robot. It reads the left wrist, right wrist and head cameras and a state of each arm's 6 joints and gripper, left then right, then the left and right end-effector poses as RoboTwin gives them (position, then quaternion w first). Its actions are each arm's 6 joints and gripper, at 50/3 Hz (`frame_rate=50 / 3`). |
-| `black-forest-labs/flux-3-action-droid` | `prompt`, `images`, `state`, `action`, `frame_rate` | FLUX 3 Action (Black Forest Labs), a world action model fine-tuned on DROID for the Franka. It reads the wrist, left exterior and right exterior cameras, in that order, and a state of 7 joint positions and the gripper closed fraction, and its actions are 7 joint positions and the gripper closed fraction, at 15 Hz. It does not use real-time chunking. FLUX Kommunity License. |
-| `black-forest-labs/flux-3-action-so101` | `prompt`, `images`, `state`, `action`, `frame_rate` | FLUX 3 Action (Black Forest Labs) fine-tuned for SO-101, a base to adapt to a task rather than a zero-shot policy. It reads a scene and a wrist camera, in that order, and a state of 5 joint positions in degrees and the gripper in percent, as LeRobot reads a calibrated SO-101, and its actions are the same 6 values. Run it at `frame_rate=30`: it conditions on the last 8 ticks and the actions it sent. It does not use real-time chunking. FLUX Kommunity License. |
-| `openwam/OpenWAM-Alpha-LIBERO` | `prompt`, `images`, `state`, `action`, `frame_rate` | [OpenWAM](https://openwam-official.github.io/)-α fine-tuned on LIBERO. It reads the agent view and wrist cameras, turned upright as in openpi's LIBERO example, and the same state and actions as `physical-intelligence/pi0.5-libero`: the end-effector position and axis-angle and the two finger positions, then end-effector deltas and a gripper command, at 20 Hz. |
-| `openwam/OpenWAM-Alpha-RoboTwin` | `prompt`, `images`, `state`, `action`, `frame_rate` | [OpenWAM](https://openwam-official.github.io/)-α fine-tuned on the RoboTwin 2.0 simulator's aloha-agilex robot. It reads the head, left wrist and right wrist cameras, in that order, and the same state as `vernerobotics/v0.5-robotwin`. Its actions are each arm's end-effector pose and gripper, left then right, as RoboTwin's `take_action(action, action_type="ee")` takes them. |
+| `physical-intelligence/pi0.5` | `task`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) base model. |
+| `physical-intelligence/pi0.5-libero` | `task`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) fine-tuned on LIBERO. |
+| `physical-intelligence/pi0.5-droid` | `task`, `images`, `state`, `action`, `frame_rate` | pi0.5 (Physical Intelligence) fine-tuned on DROID for the Franka. It reads an exterior and a wrist camera and a state of 7 joint positions and the gripper position, and its actions are 7 joint velocities and a gripper position, at 15 Hz. |
+| `abc/dit-bottles` | `task` | [ABC](https://abc.bot)-DiT for the bimanual YAM trained on the ABC sim. |
+| `robocurve/pi0.5-yam` | `task`, `images`, `state`, `action`, `frame_rate` | pi0.5 fine-tuned by robocurve for bimanual YAM. |
+| `allenai/MolmoAct2-BimanualYAM` | `task`, `images`, `state`, `action`, `frame_rate` | MolmoAct2 (AllenAI) fine-tuned for bimanual YAM. |
+| `allenai/MolmoAct2-DROID` | `task`, `images`, `state`, `action`, `frame_rate` | MolmoAct2 (AllenAI) fine-tuned for the DROID Franka. |
+| `allenai/MolmoAct2-SO100_101` | `task`, `images`, `state`, `action`, `frame_rate` | MolmoAct2 (AllenAI) fine-tuned for SO-100/101. |
+| `vernerobotics/v0.5-libero` | `task`, `images`, `state`, `action`, `frame_rate` | Verne V0.5 (Verne Robotics) fine-tuned on the LIBERO simulator. It reads the wrist and agent-view cameras, upright, and a state of the hand pose the controller is driving to (position, then axis-angle rotation) and the gripper, 1 open and 0 closed. Its actions are the hand pose to reach next and the gripper, in the same layout, at 20 Hz. Turn each target into LIBERO's end-effector delta from the measured hand pose, as Verne's LIBERO example does. |
+| `vernerobotics/v0.5-robotwin` | `task`, `images`, `state`, `action`, `frame_rate` | Verne V0.5 (Verne Robotics) fine-tuned on the RoboTwin 2.0 simulator's aloha-agilex robot. It reads the left wrist, right wrist and head cameras and a state of each arm's 6 joints and gripper, left then right, then the left and right end-effector poses as RoboTwin gives them (position, then quaternion w first). Its actions are each arm's 6 joints and gripper, at 50/3 Hz (`frame_rate=50 / 3`). |
+| `black-forest-labs/flux-3-action-droid` | `task`, `images`, `state`, `action`, `frame_rate` | FLUX 3 Action (Black Forest Labs), a world action model fine-tuned on DROID for the Franka. It reads the wrist, left exterior and right exterior cameras, in that order, and a state of 7 joint positions and the gripper closed fraction, and its actions are 7 joint positions and the gripper closed fraction, at 15 Hz. It does not use real-time chunking. FLUX Kommunity License. |
+| `black-forest-labs/flux-3-action-so101` | `task`, `images`, `state`, `action`, `frame_rate` | FLUX 3 Action (Black Forest Labs) fine-tuned for SO-101, a base to adapt to a task rather than a zero-shot policy. It reads a scene and a wrist camera, in that order, and a state of 5 joint positions in degrees and the gripper in percent, as LeRobot reads a calibrated SO-101, and its actions are the same 6 values. Run it at `frame_rate=30`: it conditions on the last 8 ticks and the actions it sent. It does not use real-time chunking. FLUX Kommunity License. |
+| `openwam/OpenWAM-Alpha-LIBERO` | `task`, `images`, `state`, `action`, `frame_rate` | [OpenWAM](https://openwam-official.github.io/)-α fine-tuned on LIBERO. It reads the agent view and wrist cameras, turned upright as in openpi's LIBERO example, and the same state and actions as `physical-intelligence/pi0.5-libero`: the end-effector position and axis-angle and the two finger positions, then end-effector deltas and a gripper command, at 20 Hz. |
+| `openwam/OpenWAM-Alpha-RoboTwin` | `task`, `images`, `state`, `action`, `frame_rate` | [OpenWAM](https://openwam-official.github.io/)-α fine-tuned on the RoboTwin 2.0 simulator's aloha-agilex robot. It reads the head, left wrist and right wrist cameras, in that order, and the same state as `vernerobotics/v0.5-robotwin`. Its actions are each arm's end-effector pose and gripper, left then right, as RoboTwin's `take_action(action, action_type="ee")` takes them. |
 
 ## Changing the task
 
 A long job is a sequence of steps, and a policy trained on single steps does best when it is given one at a time: pick up the red cube, then place it in the red box. `run.set_task` gives the running policy its next step without restarting it, so a planner, such as a vision-language model watching the cameras, can steer the robot through the job.
 
 ```python
-with robot.inference("sort-cubes/gr00t-pick-place/final", prompt="pick up the red cube") as run:
+with robot.inference("sort-cubes/gr00t-pick-place/final", task="pick up the red cube") as run:
     for task in ["place the red cube in the red box", "pick up the blue cube", "place the blue cube in the blue box"]:
         wait_until_done()
         run.set_task(task)
@@ -55,7 +55,7 @@ with robot.inference("sort-cubes/gr00t-pick-place/final", prompt="pick up the re
 
 `wait_until_done` stands for your own check, for example a vision-language model asked about the latest frame. `set_task` returns once the policy has taken the new task, and raises if the run stops first. The policy does not wait for its current chunk to run out: it starts a chunk for the new task at once, so the robot changes course after one inference without stopping. A model with real-time chunking conditions that chunk on the actions the robot is still executing.
 
-The task is the robot's [state](/state/) `task`, on `{robot}/state/task`: `robot.inference(prompt=...)` sets it when the run starts and `set_task` changes it. A policy you [run on your own GPU](#running-a-policy-on-your-own-gpu) reads its task there:
+The task is the robot's [state](/state/) `task`, on `{robot}/state/task`: `robot.inference(task=...)` sets it when the run starts and `set_task` changes it. A policy you [run on your own GPU](#running-a-policy-on-your-own-gpu) reads its task there:
 
 ```python
 session.subscribe(f"{ROBOT}/state/task", callback=lambda sample: latest.update(task=sample.payload.decode()))
@@ -111,7 +111,7 @@ The same calls are available over HTTP with your organization API key:
 ```bash
 API=https://api.adamohq.com/api/inference
 INFERENCE_ID=$(curl -X POST $API/start -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
-  -d '{"robot_name": "yam-london", "policy": "my-fine-tuned-policy/final", "arguments": {"prompt": "stack four cubes"}}' | jq -r .inference_id)
+  -d '{"robot_name": "yam-london", "policy": "my-fine-tuned-policy/final", "arguments": {"task": "stack four cubes"}}' | jq -r .inference_id)
 curl "$API/status?inference_id=$INFERENCE_ID" -H "X-API-Key: $ADAMO_API_KEY"
 curl -X POST $API/stop -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
   -d "{\"inference_id\": \"$INFERENCE_ID\"}"
@@ -256,7 +256,7 @@ Every field is optional; the web app shows the ones you send:
 
 | Field | Description |
 |-------|-------------|
-| `policy`, `task` | The policy's name and the prompt it runs. |
+| `policy`, `task` | The policy's name and the task it runs. |
 | `owner` | `"model"` while the policy drives, `"human"` while an operator has taken over. |
 | `host` | Where the policy runs: `provider`, `region` and `gpu`, for example `{"provider": "On-prem", "region": "London", "gpu": "RTX 4090"}`. |
 | `relay_rtt_ms` | Round trip from your machine to its relay, from `session.relay_rtt()`. With the robot's own relay round trip, it gives the model-to-robot leg. |
