@@ -42,6 +42,24 @@ robot.inference(
 | `openwam/OpenWAM-Alpha-LIBERO` | `prompt`, `images`, `state`, `action`, `frame_rate` | [OpenWAM](https://openwam-official.github.io/)-α fine-tuned on LIBERO. It reads the agent view and wrist cameras, turned upright as in openpi's LIBERO example, and the same state and actions as `physical-intelligence/pi0.5-libero`: the end-effector position and axis-angle and the two finger positions, then end-effector deltas and a gripper command, at 20 Hz. |
 | `openwam/OpenWAM-Alpha-RoboTwin` | `prompt`, `images`, `state`, `action`, `frame_rate` | [OpenWAM](https://openwam-official.github.io/)-α fine-tuned on the RoboTwin 2.0 simulator's aloha-agilex robot. It reads the head, left wrist and right wrist cameras, in that order, and the same state as `vernerobotics/v0.5-robotwin`. Its actions are each arm's end-effector pose and gripper, left then right, as RoboTwin's `take_action(action, action_type="ee")` takes them. |
 
+## Changing the task
+
+A long job is a sequence of steps, and a policy trained on single steps does best when it is given one at a time: pick up the red cube, then place it in the red box. `run.set_task` gives the running policy its next step without restarting it, so a planner, such as a vision-language model watching the cameras, can steer the robot through the job.
+
+```python
+with robot.inference("sort-cubes/gr00t-pick-place/final", prompt="pick up the red cube") as run:
+    for task in ["place the red cube in the red box", "pick up the blue cube", "place the blue cube in the blue box"]:
+        wait_until_done()
+        run.set_task(task)
+```
+
+`wait_until_done` stands for your own check, for example a vision-language model asked about the latest frame. `set_task` returns once the policy has taken the new task, and raises if the run stops first. The policy does not wait for its current chunk to run out: it starts a chunk for the new task at once, so the robot changes course after one inference without stopping. A model with real-time chunking conditions that chunk on the actions the robot is still executing.
+
+The task is the robot's [state](/state/) `task`, on `{robot}/state/task`: `robot.inference(prompt=...)` sets it when the run starts and `set_task` changes it. A policy you [run on your own GPU](#running-a-policy-on-your-own-gpu) reads its task there:
+
+```python
+session.subscribe(f"{ROBOT}/state/task", callback=lambda sample: latest.update(task=sample.payload.decode()))
+```
 
 ## Actions
 
@@ -67,6 +85,7 @@ The policy holds the robot like a teleoperator in the web app. When a teleoperat
 |--------|-------------|
 | `status()` | A dict: `policy` (`"waiting"`, `"loading"`, `"ready"`, then `"stopped"`), `run`, `last_stop`, `policy_error`, `start_pending`. |
 | `wait()` | Blocks until the run stops. Raises `RuntimeError` if the policy failed, for example because the robot does not publish one of its keys. |
+| `set_task(task)` | Gives the policy a new task and returns once the policy has taken it. See [Changing the task](#changing-the-task). |
 | `stop()` | Stops the run. Leaving the `with` block or `robot.close()` also stops it. |
 | `id` | The run's id. |
 
