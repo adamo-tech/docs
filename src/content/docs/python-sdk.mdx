@@ -266,7 +266,7 @@ with adamo.Robot(name="yam-london") as robot:
         run.wait()
 ```
 
-`Inference.status()` returns a dict, `wait()` blocks until the run stops, and `stop()` ends it. See [Cloud Inference](/inference/) for the keys a policy reads and writes, the control messages it publishes, and the HTTP calls.
+`Inference.status()` returns a dict, `wait()` blocks until the run stops, `set_task(task)` gives the policy its next task, and `stop()` ends it. See [Cloud Inference](/inference/) for the keys a policy reads and writes, the control messages it publishes, and the HTTP calls.
 
 ### Lifecycle
 
