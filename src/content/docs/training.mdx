@@ -153,8 +153,6 @@ embodiment = adamo.Embodiment(state={"end_effector": adamo.Controls(6), "fingers
 
 `seed` sets the adapters' initial weights, the training noise and the frames `dataset.batches(training, ...)` draws, so two runs with the same seed train on the same data. `name` and `tags` label the run on the [Training page](https://operate.adamohq.com/#/training). A `/` in `name` groups runs into folders there: `pi0.5/stack-cubes` sits in the `pi0.5` folder.
 
-Every batch travels from your machine to the worker, so a distant GPU slows every step. By default the run takes a GPU on your continent, and looks further out only when none is free there. To keep it closer, list the regions it may use, nearest first, as for [inference](/inference/#choosing-the-region): `regions=["uk", "eu", "global"]` tries London, then Europe, then anywhere. Without `global`, the run waits until one of the listed regions has a GPU.
-
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `forward_backward(data, loss_fn="flow_matching")` | `ForwardBackwardOutput` | Adds the gradients of a list of `Datum` to the run's gradient sum. `.loss` is the mean loss of the call. `.metrics["example_count"]` counts the datums since the last `optim_step`. |
