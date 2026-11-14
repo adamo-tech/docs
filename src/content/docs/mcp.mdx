@@ -1,6 +1,6 @@
 ---
 title: "MCP Server"
-description: "Let an AI agent find, label and train on your recordings, and run policies on your robots."
+description: "Let an AI agent find, label and train on your recordings, run policies on your robots and design their operator pages."
 ---
 
 Hand the busywork to an agent. Adamo's MCP server lets Claude, Codex, Cursor or any MCP client list your recordings, look at their frames and signals, label them into tasks, split them, build datasets, train policies and start them on your robots, in your organization and with your permissions.
@@ -51,3 +51,65 @@ claude mcp add --transport http adamo https://api.adamohq.com/mcp
 ```
 
 The hosted server has every tool except those of the local server above.
+
+## Robot widgets and layouts
+
+An agent can design what operators see on a robot's page: widgets that show the robot's live state and send it commands, and the default layout of cameras and widgets the page opens on. Both are saved per robot, and operators can still switch to their own layouts.
+
+| Tool | What it does |
+|---|---|
+| `robot_widgets_guide` | How to write widgets and layouts. Agents read it before saving either. |
+| `list_robot_widgets` | A robot's widgets. |
+| `save_robot_widget` | Creates or replaces a widget. |
+| `delete_robot_widget` | Deletes a widget. |
+| `get_robot_layout` | A robot's default layout. |
+| `save_robot_layout` | Creates or replaces the default layout. |
+| `delete_robot_layout` | Deletes the default layout. |
+
+Tell the agent which cameras and state keys your robot publishes, then ask for what you want, for example "a drive widget with a speedometer, the gear and a reset button, under the front camera".
+
+### Widgets
+
+A widget is an [A2UI](https://a2ui.org) v1.0 surface, drawn by the official A2UI renderer: a flat list of components, starting from the one whose id is `root`. It can use every component of the A2UI basic catalog (rows, columns, cards, text, buttons, images, inputs and more) and four made for robots: `Gauge`, `Bar`, `Badge` and `Sparkline`.
+
+```json
+{
+  "components": [
+    {"id": "root", "component": "Row", "children": ["speed", "side"]},
+    {"id": "speed", "component": "Gauge", "value": {"@path": "/drive/speed_kmh"}, "max": 12, "unit": "km/h", "weight": 1},
+    {"id": "side", "component": "Column", "children": ["gear", "reset"], "justify": "center"},
+    {"id": "gear", "component": "Badge", "text": {"@path": "/drive/gear"}, "color": "sky"},
+    {"id": "reset", "component": "Button", "child": "reset_label", "action": {"event": {"name": "reset_episode"}}},
+    {"id": "reset_label", "component": "Text", "text": "Reset episode"}
+  ]
+}
+```
+
+A value like `{"@path": "/drive/speed_kmh"}` reads the robot's [state](/state/): the first segment is the state key and the rest points into its value. The robot streams it with its SDK:
+
+```python
+state = robot.state_store()
+state.set("drive", {"speed_kmh": 4.2, "gear": "D"})
+```
+
+A button publishes a [control](/control/) to the robot on `json/widget/{widget name}`, or on the channel its event context names, such as `"context": {"channel": "json/estop"}`. Either way the channel is under the robot's controls:
+
+```python
+@robot.on("json/widget/drive")
+def on_drive_widget(sample):
+    if sample.message["action"]["name"] == "reset_episode":
+        reset_episode()
+```
+
+### Layout
+
+The default layout is a tree of rows and columns holding cameras and widgets. `weight` is a node's share of its parent, 1 by default:
+
+```json
+{"row": [
+  {"camera": "front", "weight": 3},
+  {"column": [{"widget": "drive"}, {"camera": "fork", "fit": "cover"}], "weight": 1}
+]}
+```
+
+A camera node takes `crop` (fractions cut from each edge), `rotation` (0, 90, 180 or 270) and `fit`: `contain`, the default, shows the whole frame, and `cover` fills its cell by trimming the edges. They change only how the page shows the camera, never the video the robot sends. Agents are asked to fill the whole page, shaping cells to the cameras and giving the leftover space to widgets.
