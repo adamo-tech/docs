@@ -6,7 +6,7 @@ description: "Run a policy on Adamo's GPUs to drive your robot."
 Run your policy on Adamo's hosted GPUs to drive your robot remotely. The robot streams its cameras and state, and receives actions on its control channels.
 
 ```python
-robot.inference(policy: str, **arguments) -> Inference
+robot.inference(policy: str, *, regions: list[str] = [], **arguments) -> Inference
 ```
 
 `robot.inference` runs a policy on Adamo's GPUs and drives your robot with it. `policy` is a path you [saved weights or a state at](/training/#saving-states-and-policies), or the name of a model Adamo serves:
@@ -61,6 +61,18 @@ The task is the robot's [state](/state/) `task`, on `{robot}/state/task`: `robot
 session.subscribe(f"{ROBOT}/state/task", callback=lambda sample: latest.update(task=sample.payload.decode()))
 ```
 
+## Choosing the region
+
+Every action travels from the GPU to the robot, so a distant GPU adds that distance to every step. By default the run takes a GPU on the robot's continent, and looks further out only when none is free there. To keep it closer, list the regions it may use, nearest first:
+
+```python
+robot.inference("my-fine-tuned-policy/final", task="stack four cubes", regions=["uk", "eu", "global"])
+```
+
+The run tries London, then Europe, then `global`, which is anywhere. Without `global`, it waits until one of the listed regions has a GPU.
+
+The regions are `us`, `us-east`, `us-central`, `us-south`, `us-west`, `eu`, `eu-west`, `eu-north`, `eu-south`, `ap`, `ap-northeast`, `ap-southeast`, `ap-south`, `ap-melbourne`, `jp`, `au`, `uk`, `ca`, `me`, `sa`, `af`, `mx` and `global`.
+
 ## Actions
 
 The policy publishes one action per frame at `frame_rate`:
@@ -111,7 +123,7 @@ The same calls are available over HTTP with your organization API key:
 ```bash
 API=https://api.adamohq.com/api/inference
 INFERENCE_ID=$(curl -X POST $API/start -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
-  -d '{"robot_name": "yam-london", "policy": "my-fine-tuned-policy/final", "arguments": {"task": "stack four cubes"}}' | jq -r .inference_id)
+  -d '{"robot_name": "yam-london", "policy": "my-fine-tuned-policy/final", "arguments": {"task": "stack four cubes"}, "regions": ["uk", "eu", "global"]}' | jq -r .inference_id)
 curl "$API/status?inference_id=$INFERENCE_ID" -H "X-API-Key: $ADAMO_API_KEY"
 curl -X POST $API/stop -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
   -d "{\"inference_id\": \"$INFERENCE_ID\"}"
