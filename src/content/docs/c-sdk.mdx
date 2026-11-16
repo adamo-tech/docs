@@ -9,13 +9,13 @@ import { Aside } from "@astrojs/starlight/components";
 
 ## Install
 
-The C SDK is built from [`adamo-tech/adamo`](https://github.com/adamo-tech/adamo/tree/main/sdks/c). Version **1.0.23** fixes generic C sessions opening with the wrong relay role and includes the session, pub/sub, robot, media and diagnostics bindings over the canonical Rust SDK. The same verified build is published to [GitHub Releases](https://github.com/adamo-tech/adamo/releases/tag/c-sdk-v1.0.23) and `install.adamohq.com/sdk/`.
+The C SDK is built from [`adamo-tech/adamo`](https://github.com/adamo-tech/adamo/tree/main/sdks/c). Version **1.0.24** adds [`adamo_announce_control`](#announcing-control) and includes the session, pub/sub, robot, media and diagnostics bindings over the canonical Rust SDK. The same verified build is published to [GitHub Releases](https://github.com/adamo-tech/adamo/releases/tag/c-sdk-v1.0.24) and `install.adamohq.com/sdk/`.
 
 Pin a version in production. For Linux arm64 (Jetson / Ubuntu 22.04 aarch64):
 
 ```sh
-sdk=adamo-sdk-linux-arm64-video-1.0.23
-base=https://install.adamohq.com/sdk/v1.0.23
+sdk=adamo-sdk-linux-arm64-video-1.0.24
+base=https://install.adamohq.com/sdk/v1.0.24
 curl -fLO "$base/$sdk.tar.gz"
 curl -fLO "$base/$sdk.tar.gz.sha256"
 shasum -a 256 -c "$sdk.tar.gz.sha256"
@@ -49,7 +49,7 @@ Software H.264 encoding requires Cisco's separately downloaded OpenH264 binary (
 Then in your project's `CMakeLists.txt`:
 
 ```cmake
-list(APPEND CMAKE_PREFIX_PATH "/opt/adamo-sdk-linux-arm64-video-1.0.23")
+list(APPEND CMAKE_PREFIX_PATH "/opt/adamo-sdk-linux-arm64-video-1.0.24")
 find_package(Adamo CONFIG REQUIRED)
 target_link_libraries(my_robot PRIVATE Adamo::adamo)
 # C++17 wrapper:
@@ -328,6 +328,29 @@ void adamo_liveliness_sub_free(adamo_liveliness_sub_t *sub);
 ```
 
 Watch for liveliness changes. The callback fires with `(key, 1)` when a token appears and `(key, 0)` when it disappears. `key` is valid only for the duration of the call. Runs on a background receive thread; `user` must outlive the subscriber.
+
+---
+
+## Announcing control
+
+A station that drives a robot should say so, so the operate page shows who is driving and [recordings](/recording/#when-it-records) file the time under that controller. The data service reads control from the robot's control token, not from the commands the robot receives: without the token, the time counts as `UNATTENDED` even while your commands move the robot.
+
+```c
+adamo_liveliness_token_t *adamo_announce_control(
+    const adamo_session_t *sess,
+    const char *robot,
+    const char *controller,   // "policy" for a policy, any other ID for a person
+    const char *session_id
+);
+```
+
+Declares `{robot}/operator/active/{controller}/{session_id}`, the token an operate tab holds while in control. A `controller` of `"policy"` records as `POLICY`; any other value records as `HUMAN` under that ID. Each argument must be one non-empty key segment without `/`, `*`, `$`, `?` or `#`, otherwise the call returns NULL and `adamo_last_error()` says which. Hold the token for as long as the station drives the robot, and free it with `adamo_liveliness_token_free` when it stops:
+
+```c
+adamo_liveliness_token_t *control = adamo_announce_control(sess, "my-robot", "operator-7", "station-1");
+// ... adamo_put(sess, "my-robot/control/joy", ...) while driving ...
+adamo_liveliness_token_free(control);
+```
 
 ---
 
@@ -1073,6 +1096,10 @@ public:
 
     LivelinessToken alive(const std::string &token_key);
 
+    LivelinessToken announce_control(const std::string &robot,
+                                     const std::string &controller,
+                                     const std::string &session_id);
+
     std::vector<std::string> live_tokens(const std::string &pattern = "**/alive");
 
     template <class F>
@@ -1125,7 +1152,7 @@ Empty optional means timeout (`recv`) or empty queue (`try_recv`). Real errors t
 
 ### `LivelinessToken` / `LivelinessSubscriber`
 
-Both are RAII move-only handles. `LivelinessToken` keeps the token alive until destruction; `LivelinessSubscriber` keeps the callback registered until destruction.
+Both are RAII move-only handles. `LivelinessToken` keeps the token alive until destruction, including the control token from `Session::announce_control`; `LivelinessSubscriber` keeps the callback registered until destruction.
 
 ### Video — `Robot` and `VideoTrack`
 
