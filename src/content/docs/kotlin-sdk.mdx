@@ -127,6 +127,18 @@ suspend fun publisher(key: String, priority: Int = Priority.DATA, express: Boole
 
 `Priority` holds the constants `REAL_TIME` (250), `INTERACTIVE_HIGH` (220), `INTERACTIVE_LOW` (190), `DATA_HIGH` (150), `DATA` (100), `DATA_LOW` (80) and `BACKGROUND` (20).
 
+### Discovery
+
+```kotlin
+suspend fun robots(): List<String>
+suspend fun videoTracks(robot: String): List<String>
+suspend fun videoTrackInfo(robot: String, track: String, timeout: Duration = 3.seconds): VideoTrackInfo?
+suspend fun audioTracks(robot: String): List<String>
+suspend fun depthTracks(robot: String): List<String>
+```
+
+`robots()` names the robots online now. A `VideoTrackInfo` is what the robot says about a track: `codec` (`h264` or `av1`), `width`, `height`, `fps`, `stereo` (both eyes side by side in one frame), `stereoEye` (`left` or `right` when the eyes are two tracks) and `encoder`.
+
 ### Presence
 
 ```kotlin
@@ -135,6 +147,8 @@ suspend fun announceControl(robot: String, controller: String, sessionId: String
 suspend fun liveTokens(pattern: String): List<String>
 fun liveliness(pattern: String, history: Boolean = true): Flow<LivelinessEvent>
 ```
+
+`announcePresence(robot, userId, displayName)` shows this operator in the robot's viewer list, `operators(robot)` follows who is viewing, and `controlHolders(robot)` who holds control.
 
 `announceControl` marks `controller` as in control of `robot` until the token is closed, the way the operate page does when it takes control. Pass `"policy"` for a policy, otherwise the operator's user id. `LivelinessEvent` has `key` and `alive`.
 
@@ -164,6 +178,20 @@ suspend fun sendRumble(robot: String, rumble: Rumble)
 fun rumble(robot: String): Flow<Rumble>
 ```
 
+To hold control the way the operate page does, use a lease, and send high-rate streams through a declared publisher:
+
+```kotlin
+val lease = session.takeControl("arm", userId = userId, displayName = "Sam")
+lease.steer(videoReceiver)                 // this operator's reception steers loss protection
+val head = session.controlPublisher("arm", "json/xr/head/pose", ControlFormat.COMPACT)
+// each tracking frame:
+head.sendBlocking(ControlMessage.PoseStamped(position, orientation, stamp))
+// when the operator lets go:
+lease.release()
+```
+
+`takeControl` tells the robot who acquired control, sends the heartbeat robots treat as a lease once a second, and holds the token the operate page and the data service read. `release()` sends the release and stops the heartbeat.
+
 `sendControl` is the operator side and `control` the robot side. A channel is the part of the key below `<robot>/control/`, such as `json/joy`, and may use wildcards. See [Control messages](#control-messages).
 
 ### State, logs and inference
@@ -180,6 +208,8 @@ suspend fun startInference(robot: String, policy: String, arguments: JSONObject 
 `StateStore` has `set(key, value)` for bytes, strings and `JSONObject`, `get(key): ByteArray?` and `delete(key)`. Operators read a robot's state with `get(Adamo.stateTopic(robot, key))` and follow it with `subscribe(Adamo.stateTopicAll(robot))`.
 
 `TaskRunner` has `select(taskSetId, name, subtasks)`, `advance()` and `reset()`.
+
+To watch a robot: `logs(robot)` is its log lines, `pose(robot)` its position reports and `stateChanges(robot)` each state key as it changes, all as flows; `state(robot, key)` reads one value now.
 
 `Inference` has `id`, `status()`, `setTask(task, timeout)` to hand a running policy a new task, and `stop()`.
 
@@ -267,7 +297,24 @@ val receiver = session.videoReceiver("arm", "main")
 VideoPlayer(receiver, surfaceView.holder.surface).run()   // until cancelled
 ```
 
-`VideoPlayer(receiver, surface)` decodes onto a `Surface`, showing each frame as soon as it decodes and requesting a keyframe after a late or broken frame. It reports `framesRendered`, `framesDropped` and `lastCaptureTimeUs`.
+`VideoPlayer(receiver, surface, info, onFrame)` decodes onto a `Surface` with the device's hardware decoder, showing each frame as soon as it decodes and requesting a keyframe after a late or broken frame. Pass the track's `VideoTrackInfo` so the decoder is opened for its codec (H.264 or AV1) and size.
+
+It reports `framesRendered`, `framesDropped`, `decoderName`, `decodeMs` (time in the decoder) and `captureToRenderMs` (robot capture to display, on the fabric clock). `onFrame` is called for each displayed frame with a `FrameTiming`: `captureTimeUs`, `arrivalMs`, `decodeMs`, `captureToRenderMs` and `sequence`.
+
+#### Headsets and custom renderers
+
+The surface does not have to be a view. Make a `Surface` from a `SurfaceTexture`, give it to the player, and draw that texture in your OpenGL scene or OpenXR layer; `onFrame` tells you a new frame is ready, so call `updateTexImage()` on your render thread. For stereo, read `VideoTrackInfo.stereo` (both eyes in one frame, left half and right half) or play the `left` and `right` tracks with two players.
+
+```kotlin
+val texture = SurfaceTexture(textureId)
+val info = session.videoTrackInfo("arm", "main")
+val player = VideoPlayer(session.videoReceiver("arm", "main"), Surface(texture), info) { timing ->
+    frameReady.set(true)                    // then texture.updateTexImage() on the GL thread
+}
+scope.launch { player.run() }
+```
+
+On a Snapdragon phone the decoder holds a 720p60 frame for about 5 ms.
 
 To decode yourself, collect `receiver.accessUnits()`. An `AccessUnit` has `payload` (Annex-B bytes for one frame), `captureTimeUs`, `sequence` and `keyframe`. Start from a keyframe, and call `receiver.requestKeyframe()` after dropping a frame. `receiver.counters()` returns transport counters, and `setFeedbackControlOwner(controller, sessionId)` names the operator whose reception steers the sender's loss protection.
 
