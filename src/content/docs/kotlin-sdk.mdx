@@ -299,7 +299,7 @@ VideoPlayer(receiver, surfaceView.holder.surface).run()   // until cancelled
 
 `VideoPlayer(receiver, surface, info, onFrame)` decodes onto a `Surface` with the device's hardware decoder, showing each frame as soon as it decodes and requesting a keyframe after a late or broken frame. Pass the track's `VideoTrackInfo` so the decoder is opened for its codec (H.264 or AV1) and size.
 
-It reports `framesRendered`, `framesDropped`, `decoderName`, `decodeMs` (time in the decoder) and `captureToRenderMs` (robot capture to display, on the fabric clock). `onFrame` is called for each displayed frame with a `FrameTiming`: `captureTimeUs`, `arrivalMs`, `decodeMs`, `captureToRenderMs` and `sequence`.
+It reports where a frame's time went: `arrivalMs` (robot capture to arriving here, the network's share), `decodeMs` (time in the decoder), `framesHeldByDecoder` (0 when each frame comes out before the next goes in) and `captureToRenderMs` (robot capture to handing the decoded frame to the surface), all on the fabric clock. It also has `framesReceived`, `receivedKbps`, `framesRendered`, `framesDropped` and `decoderName`. `onFrame` is called for each displayed frame with a `FrameTiming`: `captureTimeUs`, `arrivalMs`, `decodeMs`, `captureToRenderMs` and `sequence`.
 
 #### Headsets and custom renderers
 
@@ -314,7 +314,11 @@ val player = VideoPlayer(session.videoReceiver("arm", "main"), Surface(texture),
 scope.launch { player.run() }
 ```
 
-On a Snapdragon phone the decoder holds a 720p60 frame for about 5 ms.
+On a Snapdragon phone, 720p streams from NVENC and VAAPI robots decode in about 5 ms with no frames held back. The step after that, from decoded frame to lit pixels, is one or two display refreshes.
+
+<Aside>
+  A viewer that does not hold control does not steer the robot's bitrate yet, so a stream larger than the viewer's link falls behind rather than adapting. `arrivalMs` and `receivedKbps` show when that is happening.
+</Aside>
 
 To decode yourself, collect `receiver.accessUnits()`. An `AccessUnit` has `payload` (Annex-B bytes for one frame), `captureTimeUs`, `sequence` and `keyframe`. Start from a keyframe, and call `receiver.requestKeyframe()` after dropping a frame. `receiver.counters()` returns transport counters, and `setFeedbackControlOwner(controller, sessionId)` names the operator whose reception steers the sender's loss protection.
 
