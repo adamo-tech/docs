@@ -1,0 +1,376 @@
+---
+title: "Kotlin SDK"
+description: "Reference for adamo-android: sessions, pub/sub, control, video, audio and depth for Android apps that operate robots or are the robot"
+sidebar:
+  badge:
+    text: Alpha
+    variant: caution
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Alpha">
+  The Kotlin SDK is new. Its API may change between releases, and it has been tested on an emulator and one phone model. It is not on Maven Central yet.
+</Aside>
+
+`adamo-android` is the Adamo SDK for Android, in Kotlin. An app can operate a robot (video, audio, control, state) or be the robot (camera, microphone, control, recording). The networking is the same Rust code as the Python, Rust and C SDKs; Kotlin adds coroutines, `Flow`s, typed messages and Android's own codecs.
+
+Package `tech.adamo.sdk`. Requires Android 9 (API 28). The AAR includes native code for `arm64-v8a` and `x86_64`; an app needs neither Rust nor the NDK.
+
+## Install
+
+The AAR is built from [`adamo-tech/adamo`](https://github.com/adamo-tech/adamo/tree/main/sdks/android) and attached to each SDK release on [GitHub Releases](https://github.com/adamo-tech/adamo/releases) as `adamo-android-<version>-maven.tar.gz`, a Maven repository holding the AAR, its POM and sources. Unpack it into your project:
+
+```sh
+mkdir -p libs/adamo && tar -xzf adamo-android-<version>-maven.tar.gz -C libs/adamo
+```
+
+```kotlin
+// settings.gradle.kts
+dependencyResolutionManagement {
+    repositories {
+        google()
+        mavenCentral()
+        maven { url = uri("libs/adamo") }
+    }
+}
+
+// app/build.gradle.kts
+dependencies {
+    implementation("tech.adamo:adamo-android:<version>")
+}
+```
+
+The release also carries the bare `adamo-android-<version>.aar`, for builds that add `org.jetbrains.kotlinx:kotlinx-coroutines-android` themselves. To build from source, see the [README](https://github.com/adamo-tech/adamo/tree/main/sdks/android#build-and-stage).
+
+The library declares the `INTERNET` permission. Your app declares and requests `CAMERA` and `RECORD_AUDIO` if it streams them.
+
+<Aside type="caution">
+  Supply the API key at run time, from sign-in or device provisioning. Do not ship one inside an APK. The SDK neither logs nor stores it.
+</Aside>
+
+## Conventions
+
+- Every `suspend` function and `Flow` is safe to call from the main dispatcher. Blocking work runs on `Dispatchers.IO`.
+- `close()` and the methods named `…Blocking` block. Call them off the main thread.
+- Flows are cold. Each collector owns a subscription that closes when collection ends, and a flow completes normally if its session is closed. Nothing published before collection starts is replayed.
+- Closing a `Session` closes every publisher, subscription, token, store and track opened from it. `close()` is idempotent everywhere.
+- Cancelling a coroutine does not abort a request already on the wire. Receive loops notice cancellation within 250 ms.
+- Keys are relative to the organization: `robot/topic`, never `adamo/<org>/…`.
+- The SDK's own diagnostics go to logcat under the tag `adamo`.
+
+### Errors
+
+Failures from the SDK throw `AdamoException`, with the SDK's explanation as its message and a `category`:
+
+```kotlin
+enum class ErrorCategory { AUTH, NETWORK, TIMEOUT, INVALID, VIDEO, AUDIO, FFI, INTERNAL, NOT_IMPLEMENTED, UNKNOWN }
+```
+
+Using a closed object throws `IllegalStateException`. Invalid Kotlin arguments throw `IllegalArgumentException`.
+
+---
+
+## `Session`
+
+A connection to an Adamo organization.
+
+```kotlin
+val session = Session.connect(apiKey)
+try {
+    session.put("arm/notes", "hello".toByteArray())
+    session.subscribe("arm/state/**").collect { sample ->
+        println("${sample.key}: ${sample.payload.decodeToString()}")
+    }
+} finally {
+    withContext(NonCancellable + Dispatchers.IO) { session.close() }
+}
+```
+
+### Opening
+
+| Function | Use |
+|----------|-----|
+| `Session.connect(apiKey, protocol = Protocol.QUIC)` | An operator or application. |
+| `Session.connectDirect(apiKey, robot)` | As `connect`, then moves onto a direct path to `robot` when it offers one. Falls back to the relay; check `isDirect`. |
+| `Session.connectLocal(address, pairingKey)` | Straight to a robot on the local network. No account or internet. |
+| `Session.openRobot(apiKey, protocol, directFor, direct)` | A robot's session. Prefer [`Robot.open`](#robot). |
+| `Session.listenLocal(robot, options)` | An offline robot session that operators join with `connectLocal`. |
+
+`Protocol` is `QUIC`, `TCP` or `UDP`. `LocalOptions(port, pairingKey, stunServers)` configures listening; every field is optional.
+
+### Properties
+
+| Property | Meaning |
+|----------|---------|
+| `organization` | The organization the session belongs to. |
+| `isDirect` | True when the session reaches the robot directly rather than through a relay. |
+| `localPairingKey`, `localPort` | Set when the session listens for local operators. Never send the key to a cloud API. |
+| `localRobot` | The robot a direct session is connected to. |
+| `isClosed` | True after `close()`. |
+
+### Publish, subscribe, query
+
+```kotlin
+suspend fun put(key: String, payload: ByteArray, priority: Int = Priority.DATA,
+                express: Boolean = false, compression: Boolean = true)
+suspend fun get(key: String, timeout: Duration = 1.seconds): List<Sample>
+fun subscribe(key: String): Flow<Sample>
+suspend fun openSubscriber(key: String): Subscriber
+suspend fun publisher(key: String, priority: Int = Priority.DATA, express: Boolean = false,
+                      reliable: Boolean = false, compression: Boolean = true): Publisher
+```
+
+`subscribe` accepts `*` and `**` wildcards. A `Publisher` is cheaper than `put` for a key written repeatedly; it has `put(payload)` and `putBlocking(payload)`. A `Subscriber` is a pull subscription with `receive(timeout): Sample?`.
+
+`Sample` has `key`, `payload`, `isDelete` and `timestampUs` (the publisher's fabric-clock send time, when it stamped one).
+
+`Priority` holds the constants `REAL_TIME` (250), `INTERACTIVE_HIGH` (220), `INTERACTIVE_LOW` (190), `DATA_HIGH` (150), `DATA` (100), `DATA_LOW` (80) and `BACKGROUND` (20).
+
+### Presence
+
+```kotlin
+suspend fun alive(key: String): LivelinessToken
+suspend fun announceControl(robot: String, controller: String, sessionId: String): LivelinessToken
+suspend fun liveTokens(pattern: String): List<String>
+fun liveliness(pattern: String, history: Boolean = true): Flow<LivelinessEvent>
+```
+
+`announceControl` marks `controller` as in control of `robot` until the token is closed, the way the operate page does when it takes control. Pass `"policy"` for a policy, otherwise the operator's user id. `LivelinessEvent` has `key` and `alive`.
+
+### Link quality
+
+```kotlin
+suspend fun relays(): List<String>
+suspend fun relayRtt(): Duration?
+suspend fun measureRtt(robot: String, timeout: Duration = 1.seconds): Duration
+fun latency(robot: String): Flow<LatencyStats>
+suspend fun connectionInfo(): ConnectionInfo?
+suspend fun certificateHealth(): CertificateHealth?
+```
+
+`relays()` names the relays the session is connected to, such as `fra`. DNS picks the relay from where the device's traffic appears to come from, so a roaming SIM or a VPN can land a device far from where it is; compare `relays()` with `relayRtt()` when latency is higher than expected.
+
+`measureRtt` throws a timeout `AdamoException` when the robot does not answer. `LatencyStats` has `regime` (`STABLE`, `DEGRADING`, `VOLATILE`, `RECOVERING`), `jitterHintMs`, `rttVariationMs`, `targetBitrateKbps`, `lossRate`, `queuingDelayMs` and `timestampMs`.
+
+### Control
+
+```kotlin
+suspend fun sendControl(robot: String, channel: String, message: ControlMessage,
+                        format: ControlFormat = ControlFormat.JSON, priority: Int = Priority.REAL_TIME)
+fun control(robot: String, channel: String, maxAge: Duration? = 1.seconds): Flow<ControlSample>
+suspend fun openControl(robot: String, channel: String, maxAge: Duration? = 1.seconds): ControlSubscription
+suspend fun sendRumble(robot: String, rumble: Rumble)
+fun rumble(robot: String): Flow<Rumble>
+```
+
+`sendControl` is the operator side and `control` the robot side. A channel is the part of the key below `<robot>/control/`, such as `json/joy`, and may use wildcards. See [Control messages](#control-messages).
+
+### State, logs and inference
+
+```kotlin
+suspend fun stateStore(robot: String): StateStore
+suspend fun taskRunner(robot: String): TaskRunner
+suspend fun log(robot: String, message: String, level: String = "info")
+suspend fun setPose(robot: String, x: Double, y: Double, z: Double, frame: String = "map", heading: Double? = null)
+suspend fun startInference(robot: String, policy: String, arguments: JSONObject = JSONObject(),
+                           regions: List<String> = emptyList()): Inference
+```
+
+`StateStore` has `set(key, value)` for bytes, strings and `JSONObject`, `get(key): ByteArray?` and `delete(key)`. Operators read a robot's state with `get(Adamo.stateTopic(robot, key))` and follow it with `subscribe(Adamo.stateTopicAll(robot))`.
+
+`TaskRunner` has `select(taskSetId, name, subtasks)`, `advance()` and `reset()`.
+
+`Inference` has `id`, `status()`, `setTask(task, timeout)` to hand a running policy a new task, and `stop()`.
+
+---
+
+## `Robot`
+
+This device acting as a robot: it is announced as online, answers operators' round-trip probes, sends the heartbeat viewers draw the media path from, and tells the data service what to record. There is no `run()`; the robot is live from `open` until `close`.
+
+```kotlin
+val robot = Robot.open(apiKey, name = "phone")
+val track = SurfaceVideoTrack(robot.video("main", 1280, 720, fps = 60, stateDirectory = context.filesDir))
+// Point a Camera2 or CameraX output, or an EGL context, at track.inputSurface.
+
+robot.control("json/**").collect { command ->
+    when (val message = command.message) {
+        is ControlMessage.Joy -> drive(message.axes)
+        is ControlMessage.Keyboard -> if (message.isDown) press(message.key)
+        else -> {}
+    }
+}
+```
+
+| Function | Use |
+|----------|-----|
+| `Robot.open(apiKey, name, protocol, recording, direct)` | A robot in the organization that owns `apiKey`. |
+| `Robot.openLocal(name, options)` | A robot on the local network with no account. Operators use `Session.connectLocal` with this device's address and `robot.session.localPairingKey`. |
+
+With `direct` (the default), the robot also listens for viewers on its own network, as robots built with the other SDKs do. A viewer on the same Wi-Fi then reaches it without a relay in between. Pass `direct = null` to use the relay only.
+
+`recording` is a [`Recording`](#recording). `Robot.open` uses the default, which records while a human or a policy is in control; pass `Recording.OFF` to record only on `startRecording()`.
+
+| Member | Meaning |
+|--------|---------|
+| `name`, `session` | The robot's name, and its connection for your own keys. |
+| `control(channel, maxAge)`, `openControl(channel, maxAge)` | Control from operators. |
+| `video(track, width, height, fps, bitrateKbps, minBitrateKbps, maxBitrateKbps, stateDirectory)` | A [`VideoPublisher`](#publishing-video). |
+| `audio(track, options, stateDirectory)` | An [`AudioPublisher`](#audio). |
+| `depth(track, width, height, options, fps, bitrateKbps, stateDirectory)` | A [`DepthTrack`](#depth). |
+| `stateStore()`, `taskRunner()`, `log(message, level)`, `setPose(…)` | As on `Session`, for this robot. |
+| `inference(policy, arguments, regions)` | Runs a hosted policy against this robot. |
+| `sendRumble(rumble)` | Asks the operator's gamepad to rumble. |
+| `startRecording()`, `stopRecording()` | Record from now until stopped, whoever is in control. |
+
+`stateDirectory` is durable app-private storage, such as `context.filesDir`. It keeps frame sequence numbers across restarts.
+
+---
+
+## Control messages
+
+`ControlMessage` is a sealed interface. Every type has the JSON shape the browser and the other SDKs use.
+
+| Type | Fields |
+|------|--------|
+| `Joy` | `axes`, `buttons`, `stamp` |
+| `JoystickCommand` | `sequenceId`, `axes`, `buttons`, `stamp` |
+| `Keyboard` | `key`, `code`, `action` (`down` or `up`), `stamp`; `isDown` |
+| `Mouse` | `motionXTotal`, `motionYTotal`, `position`, `buttonMask`, `wheelTotal`, `horizontalWheelTotal`, `stamp` |
+| `JointState` | `names`, `positions`, `velocity`, `effort`, `stamp`, `frameId` |
+| `PoseStamped` | `position`, `orientation`, `stamp`, `frameId` |
+| `PoseArray` | `poses`, `stamp`, `frameId` |
+| `Bool` | `data`, `stamp` |
+| `XrFrame` | `head`, `left`, `right`, `resumed`, `stamp`; `controller(hand)` |
+| `OperatorControl` | `version`, `active`, `event`, `operator`, `timestampMs` |
+| `Safety` | `state`, `reason`, `stamp`; `isOk`; `Safety.forState(state)` |
+| `OperatorLayout` | `layout`, `stamp` |
+| `Raw` | `value`: any other JSON or MessagePack value, as sent |
+
+`message.encode(format)` returns the bytes to publish and `ControlMessage.decode(payload, channel)` reads any format. `ControlFormat` is `JSON`, `MSGPACK` or `COMPACT`; the compact form is fixed-point and exists for joystick, pose, boolean and XR messages.
+
+A `ControlSample` has `channel`, `key`, `message`, `payload` (the bytes as they arrived) and `timestampUs`.
+
+`control` drops messages older than `maxAge` once the fabric clock is synchronized; pass `null` to accept any age. When a collector falls behind, the oldest queued messages are discarded rather than delivered late. `ControlSubscription.stats()` counts what was `received`, `delivered`, `stale`, `undecodable` and `dropped`.
+
+---
+
+## Video
+
+Video is H.264, encoded and decoded by the device's own codecs.
+
+### Receiving video
+
+```kotlin
+val receiver = session.videoReceiver("arm", "main")
+VideoPlayer(receiver, surfaceView.holder.surface).run()   // until cancelled
+```
+
+`VideoPlayer(receiver, surface)` decodes onto a `Surface`, showing each frame as soon as it decodes and requesting a keyframe after a late or broken frame. It reports `framesRendered`, `framesDropped` and `lastCaptureTimeUs`.
+
+To decode yourself, collect `receiver.accessUnits()`. An `AccessUnit` has `payload` (Annex-B bytes for one frame), `captureTimeUs`, `sequence` and `keyframe`. Start from a keyframe, and call `receiver.requestKeyframe()` after dropping a frame. `receiver.counters()` returns transport counters, and `setFeedbackControlOwner(controller, sessionId)` names the operator whose reception steers the sender's loss protection.
+
+### Publishing video
+
+```kotlin
+val publisher = robot.video("main", 1280, 720, fps = 60, stateDirectory = context.filesDir)
+val track = SurfaceVideoTrack(publisher)
+```
+
+`SurfaceVideoTrack(publisher, timestamps, onError)` encodes whatever is drawn on `inputSurface` and publishes it. It follows the SDK's bitrate targets and keyframe requests by itself, and when the network cannot keep up it drops queued frames and restarts from a keyframe rather than adding latency. `captureToSendMs` reports how long frames take from capture to the network, and `framesDropped` how many were discarded.
+
+To run your own encoder, call `publisher.sendBlocking(accessUnit, captureTimeUs)` with complete Annex-B access units, the first IDR including SPS and PPS, from one thread. Each call returns `VideoStats`. When `stats.bitrateCommandId` is set, apply `stats.targetBitrateKbps` to the encoder and call `publisher.reportBitrateResult(id, error)` before the next send, also when the encoder refuses. Send an IDR when `stats.requestKeyframe` is set.
+
+### Latency
+
+- A phone camera holds about three frames between the sensor and the encoder, whatever the capture settings, so frame rate is the lever. On a Galaxy Z Fold, sensor to network is about 100 ms at 30 fps and 66 ms at 60 fps. The hardware encoder itself adds about 10 ms.
+- Frames are stamped from the camera's own timestamps and moved onto the Adamo fabric clock, so a viewer's latency figure includes the camera and encoder and excludes any error in the phone's clock.
+- On the same Wi-Fi, viewers reach a robot directly. On mobile data the stream goes through a relay, and carriers block the direct path.
+
+---
+
+## Audio
+
+Audio is Opus on the wire and interleaved signed 16-bit PCM in your code.
+
+```kotlin
+// Listen to a robot.
+AudioPlayer(session.audioReceiver("arm", "mic")).run()
+
+// Stream this device's microphone.
+val microphone = MicrophoneTrack(robot.audio("mic", stateDirectory = context.filesDir))
+```
+
+| Class | Use |
+|-------|-----|
+| `session.audioTracks(robot)` | Names of the audio tracks a robot is publishing. |
+| `AudioReceiver` | Decoded frames after reordering and loss recovery: `frames()`, `receive(timeout)`, `stats()`. |
+| `AudioPlayer(receiver, usage)` | Plays a receiver on the device's audio output. |
+| `AudioPublisher` | `send(samples, captureTimeUs)` and `sendBlocking(…)` take PCM in chunks of any length. |
+| `MicrophoneTrack(publisher, source, onError)` | Captures the microphone into a publisher. Needs `RECORD_AUDIO`. |
+
+`AudioOptions(sampleRate, channels, frameDuration, bitrateKbps, application, inbandFec, dtx)` defaults to 48 kHz mono, 10 ms frames and 48 kbps. Sample rates are 8000, 12000, 16000, 24000 and 48000 Hz. An `AudioFrame` has `samples`, `sampleRate`, `channels`, `sequence`, `captureTimeUs` and `concealed`.
+
+---
+
+## Depth
+
+Depth tracks carry 16-bit depth images as phase-coded H.264, the same coding the other SDKs use, so a depth track from a phone is viewable wherever depth tracks are.
+
+```kotlin
+val track = robot.depth("tof", 320, 240, DepthOptions(depthFor = "main"), stateDirectory = context.filesDir)
+track.send(depthMillimetres)        // ShortArray of width × height unsigned samples; 0 is invalid
+
+val receiver = session.depthReceiver("arm", "tof")
+receiver.frames().collect { frame -> println(frame[160, 120]) }   // millimetres
+```
+
+`DepthOptions(depthFor, intrinsics, extrinsics, maxDepthMm, rangeMm, depthScaleMm, edgeErosion, temporalFilter, spatialSmoothing)`: depth is good to a couple of centimetres up to `maxDepthMm` (4096 by default), and `rangeMm` extends the range beyond it. A `DepthFrame` has `depthMm`, `width`, `height`, `captureTimeUs` and `sequence`.
+
+---
+
+## Recording
+
+What the data service records for a robot.
+
+```kotlin
+Robot.open(apiKey, "phone", recording = Recording(
+    controllers = setOf(Recording.Controller.HUMAN),
+    mode = Recording.Mode.Interventions(preRoll = 5.seconds, postRoll = 2.seconds),
+    format = Recording.Format.MCAP,
+))
+```
+
+`Recording(controllers, mode, minDuration, maxDuration, maxSizeBytes, topics, recordAudio, format)`. `mode` is `Episodes`, `Continuous` or `Interventions`, each with a `frameRate` of `Raw`, `Max(gop)` or `Fixed(rate, gop)`. `format` is `RRD` or `MCAP`.
+
+`Recordings.open(apiKey)` lists and fetches what was recorded: `list(filter)`, `download(recordings, directory)` and `read(recording, ranges)` for byte ranges of one file.
+
+---
+
+## Training
+
+`Dataset.build(apiKey, recordings, export, decoders)` builds a dataset on Adamo from recordings, and `Training.start(apiKey, baseModel, …)` runs fine-tuning on it: `forwardBackward(dataset, batchSize)`, `optimStep(AdamParams(learningRate))`, `saveWeights(path)` and `saveState(path)`. Close the run when done; compute is billed while it exists.
+
+<Aside type="caution">
+  The training classes are checked for the shape of what they send, not against a full training run. Assembling your own batches and exporting datasets locally are Python-only; see [Training](/training/).
+</Aside>
+
+---
+
+## `Adamo`
+
+Process-wide helpers.
+
+| Member | Meaning |
+|--------|---------|
+| `Adamo.version` | Version of the SDK the library was built from. |
+| `Adamo.fabricNowUs()` | Time on the Adamo fabric clock, in microseconds. |
+| `Adamo.fabricSynced()` | Whether a session has synchronized the fabric clock with its relay. |
+| `Adamo.stateTopic(robot, key)`, `Adamo.stateTopicAll(robot)` | Keys for reading and following a robot's state. |
+| `Adamo.heartbeatTopic(robot)` | The key a robot's heartbeat is published on. |
+| `Adamo.doctor(apiKey, timeoutMs)` | The connectivity checks `adamo doctor` runs, as a list of `DoctorCheck(status, message, remedy)`. Blocks; call it off the main thread. |
+
+## Not on Android
+
+ROS 2 bridging, V4L2 and GStreamer attachment, and the software and desktop-GPU encoders and decoders are Linux and macOS facilities. On Android the camera, microphone and codecs are the platform's own, which is what `SurfaceVideoTrack`, `MicrophoneTrack`, `VideoPlayer` and `AudioPlayer` use.

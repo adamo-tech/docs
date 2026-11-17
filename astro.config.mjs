@@ -11,15 +11,32 @@ const sections = (prefix) =>
       items: ["control", "audio", "ros", "data", "recording", ...(prefix ? [] : ["training", "inference"]), "state", "discovery"],
     },
     { label: "Operating Robots", items: ["web-interface", "operator"] },
-    { label: "SDK References", items: ["python-sdk", "rust-sdk", "c-sdk", "typescript-sdk"] },
+    {
+      label: "SDK References",
+      items: [
+        "python-sdk",
+        "rust-sdk",
+        "c-sdk",
+        "typescript-sdk",
+        ...(prefix ? [] : [{ slug: "kotlin-sdk", badge: { text: "Alpha", variant: "caution" } }]),
+      ],
+    },
   ].map(({ label, items }) => ({
     label,
-    // The introductions live at / and /v0/.
-    items: items.map((slug) => (slug === "index" ? (prefix ? prefix.slice(0, -1) : "index") : prefix + slug)),
+    // The introductions live at / and /v0/. An entry is a slug, or an object
+    // with a slug and its sidebar options.
+    items: items.map((item) => {
+      const slug = typeof item === "string" ? item : item.slug;
+      const target = slug === "index" ? (prefix ? prefix.slice(0, -1) : "index") : prefix + slug;
+      return typeof item === "string" ? target : { ...item, slug: target };
+    }),
   }));
 
 // The 1.0 docs used to live under /v1/; keep those links working.
-const v1Pages = sections("").flatMap(({ items }) => items).map((slug) => (slug === "index" ? "" : slug));
+const v1Pages = sections("")
+  .flatMap(({ items }) => items)
+  .map((item) => (typeof item === "string" ? item : item.slug))
+  .map((slug) => (slug === "index" ? "" : slug));
 const v1Redirects = Object.fromEntries(
   v1Pages.map((slug) => [slug ? `/v1/${slug}` : "/v1", slug ? `/${slug}/` : "/"]),
 );
