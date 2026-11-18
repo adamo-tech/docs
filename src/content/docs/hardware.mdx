@@ -21,6 +21,7 @@ include camera capture, the network, or decoding on the operator's side.
 | Device | Encoder (`auto`) | Input | 1×1080p30 | 4×1080p30 | 4K30 | 4K60 | Comment |
 |---|---|---|---|---|---|---|---|
 | NVIDIA Jetson Thor<br/>JetPack 7.2.1, 120 W | `nvenc` | NV12 | ✅ 13.8 | ✅ 7.4 | ✅ 15.3 | ✅ 14.3 | Keep the default. Forcing `encoder="jetson"` copies each frame into V4L2 buffers (7.9 ms at 4K) and drops 12% of frames at 4K60. A single 1080p stream is slower per frame than four (12.5 ms vs 6.8 ms encode) because the encoder clocks down when lightly loaded; we have not yet measured with `sudo jetson_clocks`. |
+| NVIDIA Jetson AGX Orin 64 GB<br/>JetPack 6 (L4T 36.4.7), MAXN | `jetson` | NV12 | ✅ 5.2 | ✅ 5.4 | ✅ 16.6 | ✅ 15.6 | Uses the V4L2 encoder: the CUDA `nvenc` path is not available on JetPack 6, and forcing it fails with a missing `libnvidia-encode.so.1`. 4K60 keeps up with little to spare: p95 is 16.2 ms against the 16.7 ms frame budget. About 4.7 ms of each 4K frame is the copy into the encoder's buffers. At 4K60 the encoder used only about 16 Mbps of the 32 Mbps requested. |
 | Desktop: AMD Ryzen 7 7700X<br/>NVIDIA RTX 5070 | `nvenc` | NV12 | ✅ 2.3 | ✅ 4.0 | ✅ 8.7 | ✅ 8.8 | Lowest latency measured. Copying the frame to the GPU costs under 0.5 ms even at 4K. If the CPU also has a Radeon iGPU, do not force `encoder="vaapi"`: it stalls for about 35 ms a few times a second at 4K. |
 | Intel Core i5-12400<br/>UHD Graphics 730 | `vaapi` | NV12 | ✅ 3.7 | ✅ 6.7 | ✅ 13.5 | ✅ 14.2 | 4K60 fits the 16.7 ms frame budget with about 2.5 ms to spare. A third of the time at 4K is the CPU copying each frame into the GPU (4.4 ms); the encoder itself takes 9 ms. |
 | Intel Tiger Lake laptop<br/>UHD Graphics G4, 4 cores | `vaapi` | NV12 | ✅ 6.9 | ✅ 9.7 | ✅ 22.0 | ❌ 22.9 | 4K60 drops about a quarter of its frames. The encoder is fast enough (12.6 ms), but copying each 4K frame into the GPU takes about 10 ms on this laptop's memory. Use 4K30 or 1080p here; at 1080p the copy is still 2.7 ms of the 6.9 ms. |
@@ -28,7 +29,8 @@ include camera capture, the network, or decoding on the operator's side.
 <Aside type="tip" title="Getting the lowest latency">
 
 - **Leave `encoder` unset.** Adamo picked the fastest working encoder on every
-  machine above. The alternatives we tried were slower or dropped frames.
+  machine above. The alternatives we tried were slower, dropped frames, or
+  were not available.
 - **Send NV12.** All results above use NV12 input, which the hardware encoders
   take directly. Other formats such as BGR are converted on the CPU first,
   which adds time on top of these numbers.
