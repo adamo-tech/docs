@@ -1,0 +1,56 @@
+---
+title: "Hardware Compatibility"
+description: "Measured H.264 encode latency on common robot computers"
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Adamo encodes every camera with the robot's hardware H.264 encoder. This page
+lists the computers we have measured, the encoder Adamo picks on each, and how
+long a frame takes to get through the pipeline.
+
+## Results
+
+The numbers are the median **pipeline latency** in milliseconds: the time from
+Adamo receiving a frame to the encoded H.264 frame being ready to send. It
+includes copying the frame into the encoder and the encode itself. It does not
+include camera capture, the network, or decoding on the operator's side.
+
+✅ every frame encoded on time · ❌ frames dropped · — not measured
+
+| Device | Encoder (`auto`) | Input | 1×1080p30 | 4×1080p30 | 4K30 | 4K60 | Comment |
+|---|---|---|---|---|---|---|---|
+| NVIDIA Jetson Thor<br/>JetPack 7.2.1, 120 W | `nvenc` | NV12 | ✅ 13.8 | ✅ 7.4 | ✅ 15.3 | ✅ 14.3 | Keep the default. Forcing `encoder="jetson"` copies each frame into V4L2 buffers (7.9 ms at 4K) and drops 12% of frames at 4K60. A single 1080p stream is slower per frame than four (12.5 ms vs 6.8 ms encode) because the encoder clocks down when lightly loaded; we have not yet measured with `sudo jetson_clocks`. |
+| Desktop: AMD Ryzen 7 7700X<br/>NVIDIA RTX 5070 | `nvenc` | NV12 | ✅ 2.3 | ✅ 4.0 | ✅ 8.7 | ✅ 8.8 | Lowest latency measured. Copying the frame to the GPU costs under 0.5 ms even at 4K. If the CPU also has a Radeon iGPU, do not force `encoder="vaapi"`: it stalls for about 35 ms a few times a second at 4K. |
+| Intel Core i5-12400<br/>UHD Graphics 730 | `vaapi` | NV12 | ✅ 3.7 | ✅ 6.7 | ✅ 13.5 | ✅ 14.2 | 4K60 fits the 16.7 ms frame budget with about 2.5 ms to spare. A third of the time at 4K is the CPU copying each frame into the GPU (4.4 ms); the encoder itself takes 9 ms. |
+| Intel Tiger Lake laptop<br/>UHD Graphics G4, 4 cores | `vaapi` | NV12 | ✅ 6.9 | ✅ 9.7 | ✅ 22.0 | ❌ 22.9 | 4K60 drops about a quarter of its frames. The encoder is fast enough (12.6 ms), but copying each 4K frame into the GPU takes about 10 ms on this laptop's memory. Use 4K30 or 1080p here; at 1080p the copy is still 2.7 ms of the 6.9 ms. |
+
+<Aside type="tip" title="Getting the lowest latency">
+
+- **Leave `encoder` unset.** Adamo picked the fastest working encoder on every
+  machine above. The alternatives we tried were slower or dropped frames.
+- **Send NV12.** All results above use NV12 input, which the hardware encoders
+  take directly. Other formats such as BGR are converted on the CPU first,
+  which adds time on top of these numbers.
+- **Prefer several 1080p cameras over one 4K camera.** Four 1080p streams
+  carry the same pixels as one 4K stream, but each frame is ready sooner
+  because it is a quarter of the size.
+
+</Aside>
+
+## How these were measured
+
+- **Content.** A 2-second test clip of a camera panning across a cluttered,
+  textured scene, with objects moving through it and one object rotating and
+  growing close to the camera. It is generated from a fixed seed, so every
+  machine encodes the same pixels. Encoders use their full bitrate on it, as
+  they do with real camera footage.
+- **Input.** The clip is loaded into memory and sent through `robot.video()`
+  tracks as NV12 at the clip's frame rate, so reading frames costs nothing.
+  4×1080p30 runs four tracks at once.
+- **Bitrate.** Fixed, with adaptive bitrate off: 4 Mbps per 1080p30 stream,
+  16 Mbps at 4K30 and 32 Mbps at 4K60.
+- **Timing.** A 2-second warm-up is discarded, then 10 seconds are measured.
+  The latency comes from the robot's own per-stage timings, which Adamo
+  publishes once a second.
+- **Software.** Adamo 1.0.27 in local mode, measured in November 2026.
