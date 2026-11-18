@@ -15,7 +15,7 @@ import { Aside } from "@astrojs/starlight/components";
 
 `adamo-android` is the Adamo SDK for Android, in Kotlin. An app can operate a robot (video, audio, control, state) or be the robot (camera, microphone, control, recording). The networking is the same Rust code as the Python, Rust and C SDKs; Kotlin adds coroutines, `Flow`s, typed messages and Android's own codecs.
 
-Package `tech.adamo.sdk`. Requires Android 9 (API 28). The AAR includes native code for `arm64-v8a` and `x86_64`; an app needs neither Rust nor the NDK.
+Package `com.adamohq.sdk`. Requires Android 9 (API 28). The AAR includes native code for `arm64-v8a` and `x86_64`; an app needs neither Rust nor the NDK.
 
 ## Install
 
@@ -37,7 +37,7 @@ dependencyResolutionManagement {
 
 // app/build.gradle.kts
 dependencies {
-    implementation("tech.adamo:adamo-android:<version>")
+    implementation("com.adamohq:adamo-android:<version>")
 }
 ```
 
@@ -338,6 +338,28 @@ To run your own encoder, call `publisher.sendBlocking(accessUnit, captureTimeUs)
 - A phone camera holds about three frames between the sensor and the encoder, whatever the capture settings, so frame rate is the lever. On a Galaxy Z Fold, sensor to network is about 100 ms at 30 fps and 66 ms at 60 fps. The hardware encoder itself adds about 10 ms.
 - Frames are stamped from the camera's own timestamps and moved onto the Adamo fabric clock, so a viewer's latency figure includes the camera and encoder and excludes any error in the phone's clock.
 - On the same Wi-Fi, viewers reach a robot directly. On mobile data the stream goes through a relay, and carriers block the direct path.
+
+### VR teleoperation
+
+`session.xrTeleop(robot)` sends head and controller tracking to a robot the way the operate page's VR mode does, on the same channels and with the same bytes, so a robot cannot tell a native headset app from the web one.
+
+```kotlin
+val lease = session.takeControl("arm", userId = userId)
+val teleop = session.xrTeleop("arm")
+// once per rendered frame, from the render thread:
+teleop.submit(XrInput(head, left = XrHandInput(gripPose, buttons, axes), right = rightHand, visible = hasFocus))
+// when your own menu opens:
+teleop.pause()
+```
+
+- Nothing is sent until the operator releases both grips and then squeezes both. Grips already held cannot start it.
+- Losing focus (`visible = false`) or `pause()` stops it until the next release-and-squeeze.
+- The first frame after a resume carries the clutch signal, and poses are rebased so they continue from the last ones sent rather than jumping to where the hands drifted.
+- At most 60 frames a second are sent, and the operator's safety state twice a second.
+
+`XrHandInput` uses WebXR's `xr-standard` layout so indices mean what they mean on the operate page: buttons are trigger, grip, touchpad, thumbstick click, A or X, B or Y; axes are touchpad x and y, then thumbstick x and y with up negative (OpenXR reports up positive, so negate it). `teleop.state` is `WAITING_FOR_GRIPS` or `ACTIVE`.
+
+The repository's [`xr-sample`](https://github.com/adamo-tech/adamo/tree/main/sdks/android/xr-sample) is a complete headset app built this way: OpenXR for tracking, and the video as a compositor layer fed directly by the decoder.
 
 ---
 
