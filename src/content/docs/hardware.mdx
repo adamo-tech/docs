@@ -16,7 +16,7 @@ Adamo receiving a frame to the encoded H.264 frame being ready to send. It
 includes copying the frame into the encoder and the encode itself. It does not
 include camera capture, the network, or decoding on the operator's side.
 
-✅ every frame encoded on time · ❌ frames dropped · — not measured
+✅ every frame encoded on time · ❌ frames dropped · 🚫 the encoder refuses this stream · — not measured
 
 | Device | Encoder (`auto`) | Input | 1×1080p30 | 4×1080p30 | 4K30 | 4K60 | Comment |
 |---|---|---|---|---|---|---|---|
@@ -25,6 +25,7 @@ include camera capture, the network, or decoding on the operator's side.
 | Desktop: AMD Ryzen 7 7700X<br/>NVIDIA RTX 5070 | `nvenc` | NV12 | ✅ 2.3 | ✅ 4.0 | ✅ 8.7 | ✅ 8.8 | Lowest latency measured. Copying the frame to the GPU costs under 0.5 ms even at 4K. If the CPU also has a Radeon iGPU, do not force `encoder="vaapi"`: it stalls for about 35 ms a few times a second at 4K. |
 | Intel Core i5-12400<br/>UHD Graphics 730 | `vaapi` | NV12 | ✅ 3.7 | ✅ 6.7 | ✅ 13.5 | ✅ 14.2 | 4K60 fits the 16.7 ms frame budget with about 2.5 ms to spare. A third of the time at 4K is the CPU copying each frame into the GPU (4.4 ms); the encoder itself takes 9 ms. |
 | Intel Tiger Lake laptop<br/>UHD Graphics G4, 4 cores | `vaapi` | NV12 | ✅ 6.9 | ✅ 9.7 | ✅ 22.0 | ❌ 22.9 | 4K60 drops about a quarter of its frames. The encoder is fast enough (12.6 ms), but copying each 4K frame into the GPU takes about 10 ms on this laptop's memory. Use 4K30 or 1080p here; at 1080p the copy is still 2.7 ms of the 6.9 ms. |
+| Arduino UNO Q<br/>Qualcomm QRB2210, Debian 13 | `v4l2m2m` | NV12 | ❌ 36.8 | 🚫 | 🚫 | 🚫 | Uses the Venus encoder through V4L2. About one 1080p stream is the limit: each 1080p frame takes about 32 ms to encode, so 1080p30 manages only 27 fps, while 1080p25 (36.9 ms) and 720p30 (26.3 ms) keep up, as do two 720p30 streams. Lowering the bitrate does not speed it up. Venus refuses a total load above about one 1080p30 stream at the first frame, and its largest frame is 1920×1920, so 4K is not possible; Adamo's error says which limit was hit. The encoder used only about half the requested bitrate (1.9 of 4 Mbps at 1080p30). |
 
 <Aside type="tip" title="Getting the lowest latency">
 
