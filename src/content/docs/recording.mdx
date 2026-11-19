@@ -110,9 +110,9 @@ To record for training, give a clock:
 adamo.RecordingMode.Episodes(frame_rate=adamo.FrameRate.Fixed(30))
 ```
 
-The data service then encodes every camera onto that clock as it records, so frame *k* of each camera is at *k* / `rate` seconds. `gop` is the number of frames between keyframes (see [Reducing recording size](#reducing-recording-size)).
+Encoding video is heavy, so the data service saves each camera as the robot sent it and leaves the clock to Adamo compute. Once the recording is stored, it is [exported](#exporting-recordings) onto that clock, so frame *k* of each camera is at *k* / `rate` seconds, and the export replaces the raw file. Until it finishes, the recording shows as processing on the [Recordings page](https://operate.adamohq.com/#/recordings). The export is billed like one you start. `gop` is the number of frames between keyframes (see [Reducing recording size](#reducing-recording-size)).
 
-`FrameRate.Raw()` is usually the most compact way to store video, but it must be put on one clock and encoded again before training, which `Recordings.export` does for you.
+`FrameRate.Raw()` is usually the most compact way to store video. `Recordings.export` puts it on one clock when you need it.
 
 In Rust, the choices are `FrameRate::Raw`, `FrameRate::Fixed { rate, gop }` and `FrameRate::Max { gop }`.
 
@@ -171,7 +171,7 @@ let recording = Recording { format: RecordingFormat::Mcap, ..Recording::default(
 - An `.rrd` logs each numeric field of a JSON topic as its own series, ready to plot.
 - An MCAP file keeps each camera as a `foxglove.CompressedVideo` channel and each other topic as the payload the robot sent, so any MCAP reader can open it.
 - A recording's `format` says which kind of file it is.
-- [Exporting to LeRobot](#exporting-to-lerobot), [exporting audio](#exporting-audio) and `adamo replay` read `.rrd` recordings only. For an MCAP recording they stop before downloading anything and say so.
+- [Exporting audio](#exporting-audio), `adamo replay` and [exporting recordings](#exporting-recordings) read both formats.
 
 ### Tasks
 
@@ -240,11 +240,20 @@ client.download(recordings, "recordings")
 
 The Copy Query button on the [Recordings page](https://operate.adamohq.com/#/recordings) writes this code for the current filters.
 
-## Exporting to LeRobot
+## Exporting recordings
 
-Export your recordings to train outside Adamo, with LeRobot's training scripts or your own code. To train on Adamo, skip the export and use [`adamo.Dataset`](/training/#datasets).
+Training wants every camera on one clock with frequent keyframes, and without the minutes where nobody touched the controls. Re-encoding video for that needs a GPU, so `Recordings.export` runs on Adamo compute: a GPU when the video is encoded again, a CPU otherwise, billed by the minute. Nothing is downloaded or encoded on your machine, and the result stays in your organization's Adamo storage until you fetch it with `client.download`.
 
-`Recordings.export` writes recordings as a LeRobot dataset and returns the `LeRobotDataset`. Each labelled task is one episode, from its start to its end, so tasks that overlap, such as a whole sort and each cube it moves, give episodes that share frames. A recording without tasks is one episode. It cleans them on the way, so a model trains only on frames worth learning from. It needs `pip install "adamo[export]"` and Python 3.12 or newer.
+`format` picks what comes out:
+
+| `format` | Result |
+|---|---|
+| `"lerobot"` | One [LeRobot](https://github.com/huggingface/lerobot) dataset, returned as an [`adamo.Dataset`](/training/#datasets). |
+| `"rrd"`, `"mcap"` | One file per recording, at the export's frame rate and keyframe interval, returned as the exported recordings. |
+
+### LeRobot datasets
+
+Each labelled task is one episode, from its start to its end, so tasks that overlap, such as a whole sort and each cube it moves, give episodes that share frames. A recording without tasks is one episode. The export cleans the frames on the way, so a model trains only on frames worth learning from.
 
 ```python
 dataset = client.export(recordings, adamo.Export(
@@ -252,45 +261,49 @@ dataset = client.export(recordings, adamo.Export(
     action=["left/joint_cmd"],
     outcomes=["success"],
     tasks={"PickUpCube": "Pick up the cube."},
-))
+), "lerobot", save_folder="pick-up-cube")
+client.download(dataset, "datasets")
 ```
+
+`client.export` returns at once, and `client.download` waits for the build, then writes the dataset's files to `datasets/{name}`, where the name is derived from the export. To train on Adamo, skip the download and pass the dataset to [training](/training/#datasets): `client.export(recordings, export, "lerobot")` and `adamo.Dataset(...)` are the same dataset.
 
 | `Export` field | Description |
 |-------|-------------|
-| `state`, `action` | Recorded topics, or fields of a JSON topic such as `"arm/state.position"`, or one element of a list by its index, such as `"joint_states.position.4"`, concatenated in order. Each frame holds the latest value sent at or before it. |
+| `state`, `action` | Recorded topics, or fields of a JSON topic such as `"arm/state.position"`, or one element of a list by its index, such as `"joint_states.position.4"`, concatenated in order. Each frame holds the latest value sent at or before it. A LeRobot export needs both; an `.rrd` or `.mcap` export needs neither, and reads `action` only to drop idle frames. |
 | `outcomes` | Keeps only episodes that ended this way: `"success"`, `"failure"` or `"abort"`. Every outcome is kept by default. |
 | `tasks` | Maps each task to its prompt, and keeps only those tasks. Without it, every task is kept, and `PickUpCube` becomes the prompt `"Pick up cube."`. Recordings without a task are always kept, with an empty prompt. |
 | `images` | The camera tracks to keep, such as `["front", "zed.left"]`. Every camera is kept by default. See [Choosing cameras](/training/#choosing-cameras). |
-| `frame_rate` | The dataset's frames per second. Defaults to the rate the recordings were saved at. Recordings saved at another rate or with `FrameRate.Raw()` are put on this clock. |
-| `gop` | The most frames between two keyframes of the dataset's videos, 2 by default, so a training loop decodes any frame quickly. A recording with longer gaps between keyframes is encoded again. |
+| `frame_rate` | Frames per second. Defaults to the rate the recordings were saved at. Recordings saved at another rate or with `FrameRate.Raw()` are put on this clock. |
+| `gop` | The most frames between two keyframes, 2 by default, so a training loop decodes any frame quickly. A recording with longer gaps between keyframes is encoded again. |
 | `idle_seconds` | Drops frames whose action stays the same for longer than this, such as while the operator lets go of the controls. 10 by default; `None` keeps every frame. |
 
-Frames where a camera has no fresh picture are always dropped: after a lost video packet, the pictures until the next keyframe decode as smears, and a camera can stall. A frame is dropped when any camera's latest picture that decodes is 300 ms old or more. A value that cannot be read, or whose size differs from the topic's usual size, is dropped too, and the value before it is held. When frames are dropped from the middle of a recording, each run of frames left becomes its own episode, so an action chunk never spans a cut. [`adamo.Dataset`](/training/#datasets) takes the same `Export` and cleans the same way.
+Frames where a camera has no fresh picture are always dropped from a LeRobot dataset: after a lost video packet, the pictures until the next keyframe decode as smears, and a camera can stall. A frame is dropped when any camera's latest picture that decodes is 300 ms old or more. A value that cannot be read, or whose size differs from the topic's usual size, is dropped too, and the value before it is held. When frames are dropped from the middle of a recording, each run of frames left becomes its own episode, so an action chunk never spans a cut.
 
 The Export Dataset button on the [Recordings page](https://operate.adamohq.com/#/recordings) writes this code for the current filters.
 
-### Output folder
+### Rerun and MCAP files
 
-The dataset goes to `lerobot-{hash}` in the current folder, or to `output_folder=`. The hash covers the recordings, the export and the decoders, so running the same export again opens the existing dataset instantly.
-
-### One Rerun file
-
-To look at the cleaned data or send it to someone, write it to a single `.rrd` file instead of a LeRobot dataset. It holds the same frames, on one clock and with a keyframe every `gop` frames, and opens in the Rerun viewer:
+To change how recordings are stored, such as putting raw recordings on one clock, adding keyframes for fast seeking or switching to MCAP, export them as `.rrd` or `.mcap`. Each recording keeps its name. Without `save_folder`, the export replaces it; with it, the export is a new recording in that folder, and the original stays as it was:
 
 ```python
-path = client.export(recordings, export, decoders=decoders, format="rrd")
+exported = client.export(recordings, adamo.Export(frame_rate=30, gop=2), "mcap", save_folder="yam-london/30fps")
+client.download(exported, "out")
 ```
 
-The file is `export-{hash}.rrd` in the current folder, or in `output_folder=`. Each camera is at `/observation/images/{camera}`, the state and action at `/observation/state` and `/action` with their field names, and the prompt and recording id at `/prompt` and `/recording`, on the `capture_time` and `frame` timelines.
+The call waits for the export and returns the exported recordings. With `action`, frames whose action stays the same for longer than `idle_seconds` are cut out, along with the messages sent during them.
 
-The recordings are downloaded to a temporary folder, or to `download_folder=` to keep them.
+### Exports that are already done
+
+An export never redoes work. An export made before from the same files with the same settings returns its result at once, and a recording the export would not change starts no job: it is already at that frame rate, with a keyframe at least every `gop` frames, in that format, and no idle frames are dropped. With `save_folder`, such a recording is copied there.
+
+An export of a recording that is still being exported, such as one the data service is putting on its clock, fails at once with a `ValueError` that names it. Try again once it finishes.
 
 ### Decoders
 
 Binary payloads, such as packed structs or MessagePack, are smaller to send than JSON, but the export cannot read them on its own. Give each such topic a decoder that turns a payload into numbers. For a fixed binary layout, `adamo.Struct` takes a [`struct` format](https://docs.python.org/3/library/struct.html#format-strings):
 
 ```python
-dataset = client.export(recordings, export, decoders={
+dataset = client.export(recordings, export, "lerobot", decoders={
     "proprioception/joints": adamo.Struct(">8x14f"),  # skip an 8-byte timestamp, then 14 big-endian float32s
 })
 ```
@@ -309,9 +322,9 @@ decoders={"control/joy": adamo.Struct("<86x3fb3x4f4x4?9x", field="e", timestamp=
 
 When several messages carry the same time, the last one received is kept. A message that reached the relay more than 1 s after its time is left out. Without `timestamp`, a message is filed at its capture time when the recording has one, and otherwise when it reached the relay.
 
-Any function of the payload's bytes also works. Only an `adamo.Struct` decodes a [training dataset](/training/#datasets), which is built on Adamo.
+An export runs on Adamo, so it cannot call your Python: decoders are `adamo.Struct` layouts only.
 
-A topic without its decoder stops the export before it downloads anything, with a `ValueError` that names the topic.
+A topic without its decoder stops the export before it starts, with a `ValueError` that names the topic.
 
 ## Exporting audio
 
