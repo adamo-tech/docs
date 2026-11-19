@@ -640,12 +640,12 @@ recordings.list(
     folder=None,                   # everything under this path
 ) -> list[RecordingInfo]
 
-recordings.download(recordings: list[RecordingInfo], directory=".") -> list[Path]
-recordings.export(recordings, config: Export, output_folder=None, download_folder=None, decoders=None) -> LeRobotDataset
+recordings.download(recordings: list[RecordingInfo] | Dataset, directory=".") -> list[Path] | Path
+recordings.export(recordings, config: Export, format: Literal["lerobot", "rrd", "mcap"], save_folder=None, decoders=None) -> Dataset | list[RecordingInfo]
 recordings.export_audio(recordings, output_folder="audio", tracks=None, format="wav", download_folder=None) -> list[Path]
 ```
 
-`list` returns recordings that overlap `start`..`end`, oldest first. `download` writes each recording to `{directory}/{device}/{name}.rrd`, or `.mcap` for an MCAP recording, with its `.json` entry beside it, skipping files already there. A download that fails is retried with a fresh link, resuming from the bytes already written, with 1, 2, 4 and up to 30 s between attempts for up to 5 minutes, unless the recordings API refuses it (400, 401, 403 or 404). Each `RecordingInfo` carries `id`, `device`, `session_id`, `display_name`, `description`, `tags`, `folder`, `controller`, `user_id`, `started_at`, `ended_at`, `frame_count`, `frame_rate`, `cameras`, `audio_tracks`, `topics`, `tasks`, `size_bytes`, `complete`, and `format` (`"rrd"` or `"mcap"`). See [Exporting to LeRobot](/recording/#exporting-to-lerobot) and [Exporting audio](/recording/#exporting-audio).
+`list` returns recordings that overlap `start`..`end`, oldest first. `download` writes each recording to `{directory}/{device}/{name}.rrd`, or `.mcap` for an MCAP recording, with its `.json` entry beside it, skipping files already there. For a `Dataset`, it waits for the build and writes the LeRobot files to `{directory}/{name}`. `export` runs on Adamo compute: `"lerobot"` returns a `Dataset` at once, and `"rrd"` or `"mcap"` waits and returns the exported recordings. A download that fails is retried with a fresh link, resuming from the bytes already written, with 1, 2, 4 and up to 30 s between attempts for up to 5 minutes, unless the recordings API refuses it (400, 401, 403 or 404). Each `RecordingInfo` carries `id`, `device`, `session_id`, `display_name`, `description`, `tags`, `folder`, `controller`, `user_id`, `started_at`, `ended_at`, `frame_count`, `frame_rate`, `cameras`, `audio_tracks`, `topics`, `tasks`, `size_bytes`, `complete`, and `format` (`"rrd"` or `"mcap"`). See [Exporting recordings](/recording/#exporting-recordings) and [Exporting audio](/recording/#exporting-audio).
 
 ---
 

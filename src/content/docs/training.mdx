@@ -32,10 +32,10 @@ The training loop runs in your script, so you control every step. See [Cloud Inf
 ## Datasets
 
 ```python
-adamo.Dataset(recordings: list[RecordingInfo], export: Export, cache_ttl_seconds: int | None = 86400, decoders: dict[str, Struct] | None = None)
+adamo.Dataset(recordings: list[RecordingInfo], export: Export, cache_ttl_seconds: int | None = 86400, decoders: dict[str, Struct] | None = None, save_folder: str | None = None)
 ```
 
-Train on your recordings without downloading them. `adamo.Dataset` builds a training dataset from [recordings](/recording/#finding-recordings) made with Adamo. It runs the same checks as [`Recordings.export`](/recording/#exporting-to-lerobot), keeping everything on the cloud.
+Train on your recordings without downloading them. `adamo.Dataset` builds a training dataset from [recordings](/recording/#finding-recordings) made with Adamo. It is the same dataset as [`Recordings.export`](/recording/#exporting-recordings) with `format="lerobot"`, built on Adamo compute.
 
 It returns at once and builds in the background, so a `Training` started meanwhile gets its GPU during the build. `result()` waits for the build.
 

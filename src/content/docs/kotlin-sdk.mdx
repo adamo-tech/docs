@@ -426,7 +426,7 @@ Robot.open(apiKey, "phone", recording = Recording(
 `Dataset.build(apiKey, recordings, export, decoders)` builds a dataset on Adamo from recordings, and `Training.start(apiKey, baseModel, …)` runs fine-tuning on it: `forwardBackward(dataset, batchSize)`, `optimStep(AdamParams(learningRate))`, `saveWeights(path)` and `saveState(path)`. Close the run when done; compute is billed while it exists.
 
 <Aside type="caution">
-  The training classes are checked for the shape of what they send, not against a full training run. Assembling your own batches and exporting datasets locally are Python-only; see [Training](/training/).
+  The training classes are checked for the shape of what they send, not against a full training run. Assembling your own batches and exporting recordings are Python-only; see [Training](/training/).
 </Aside>
 
 ---
