@@ -1,0 +1,138 @@
+---
+title: "Custom Layouts"
+description: "Design the page operators see for a robot: where its cameras sit, and widgets that show its live state and send it commands."
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+Operators drive better when the page is built for the robot. A custom layout puts the cameras that matter where operators look, cropped and sized to fill the screen, and adds widgets: panels that show the robot's live state, such as its speed, its battery or how many episodes are left, and buttons that send it commands, such as resetting an episode or starting a policy.
+
+A robot's layout is one JSON file: the tree of cameras and widgets its page opens on, and the widgets it places.
+
+```json title="layout.json"
+{
+  "layout": {"row": [
+    {"camera": "front", "weight": 3},
+    {"column": [{"widget": "drive"}, {"camera": "fork", "fit": "cover"}], "weight": 1}
+  ]},
+  "widgets": {
+    "drive": {
+      "components": [
+        {"id": "root", "component": "Row", "children": ["speed", "side"]},
+        {"id": "speed", "component": "Gauge", "value": {"@path": "/drive/speed_kmh"}, "max": 12, "unit": "km/h", "weight": 1},
+        {"id": "side", "component": "Column", "children": ["gear", "reset"], "justify": "center"},
+        {"id": "gear", "component": "Badge", "text": {"@path": "/drive/gear"}, "color": "sky"},
+        {"id": "reset", "component": "Button", "child": "reset_label", "action": {"event": {"name": "reset_episode"}}},
+        {"id": "reset_label", "component": "Text", "text": "Reset episode"}
+      ]
+    }
+  }
+}
+```
+
+| Field | What it holds |
+|---|---|
+| `layout` | The tree of cameras and widgets the robot's page opens on, or `null` to open on the operator's own layout. |
+| `widgets` | The robot's widgets by name. A name uses only letters, digits, `_` and `-`. |
+
+Operators can still switch to their own layouts, and add any of the robot's widgets to them.
+
+## Publishing a layout
+
+Keep the layout file next to the robot's code, so the page always matches what the robot publishes. The robot sets it when it starts:
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+robot = adamo.Robot(name="forklift")
+robot.set_layout("layout.json")
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+robot.set_layout(Path::new("layout.json"))?;
+```
+
+</TabItem>
+</Tabs>
+
+To change a layout without starting the robot, use the `adamo` command. It signs in with `ADAMO_API_KEY` or the key [`adamo login`](/quickstart/#get-an-api-key) saved:
+
+```bash
+adamo layout get forklift > layout.json    # the current layout
+adamo layout set forklift layout.json      # replace it
+```
+
+Setting a layout replaces the whole file, widgets and tree together, so a widget left out of it is deleted. An operate page that is already open shows the new layout after a reload. API keys, owners, admins and developers can set layouts; operators cannot.
+
+## Arranging the page
+
+`layout` decides where cameras and widgets sit, so operators see what matters at a glance. It nests rows and columns:
+
+| Node | Fields |
+|---|---|
+| Row, column | `row` or `column`: the child nodes |
+| Camera | `camera`: the video track's name, `crop` (`{"top", "right", "bottom", "left"}`, fractions cut from each edge), `rotation` (0, 90, 180 or 270), `fit` (`contain` shows the whole frame, `cover` fills the cell and trims the edges) |
+| Widget | `widget`: the widget's name |
+
+Every node takes `weight` (1 by default), its share of its parent. `crop`, `rotation` and `fit` change only how the page shows a camera, never the video the robot sends.
+
+The page is the operator's whole screen, so fill it. A camera keeps its aspect ratio, so with the default `contain` it leaves bars wherever its cell's shape differs from the frame's:
+
+- Shape the cells to the cameras: pick weights so each cell has about its camera's aspect ratio on a 16:9 screen, after `crop` and `rotation`. A side-by-side stereo camera is about 3.5 times as wide as it is tall, and `"crop": {"right": 0.5}` shows only its left eye.
+- Crop what operators do not need, such as the robot's own body.
+- Rotate a camera mounted sideways.
+- Use `"fit": "cover"` when a small trim at the edges is fine.
+- Give leftover space to widgets, which stretch to any shape.
+
+## Widgets
+
+Widgets give operators what the cameras cannot show. A widget is an [A2UI](https://a2ui.org) v1.0 surface, drawn by the official A2UI React renderer: a flat list of components, each with a unique `id`, starting from the one whose id is `root`. Containers name their children by id.
+
+| Component | Properties |
+|---|---|
+| `Row`, `Column` | `children` (ids), `justify` (`start`, `center`, `end`, `spaceBetween`, `spaceAround`, `spaceEvenly`, `stretch`), `align` (`start`, `center`, `end`, `stretch`) |
+| `Text` | `text` (Markdown), `variant` (`body`, `caption`) |
+| `Card` | `child` |
+| `Divider` | `axis` (`horizontal`, `vertical`) |
+| `Button` | `child`, `variant` (`default`, `primary`, `borderless`), `action` |
+| `Image`, `Icon`, `Video`, `AudioPlayer`, `List`, `Tabs`, `Modal`, `TextField`, `CheckBox`, `ChoicePicker`, `Slider`, `DateTimeInput` | As the [A2UI v1.0 basic catalog](https://a2ui.org) defines them |
+| `Gauge` | `value`, `min` (0), `max` (1), `unit`, `color`, `decimals` (1) |
+| `Bar` | `value`, `min` (0), `max` (1), `label`, `color`, `axis` (`vertical`, `horizontal`) |
+| `Badge` | `text`, `color` |
+| `Sparkline` | `values` (numbers, newest last), `min`, `max` (the values' range by default), `label`, `unit`, `color`, `decimals` |
+
+`Gauge`, `Bar`, `Badge` and `Sparkline` are made for robots; the rest come from the A2UI basic catalog. Any component in a `Row` or `Column` takes `weight`, its share of the free space. Colors are `sky`, `amber`, `emerald`, `red`, `white`, `gray` or any CSS color.
+
+`Text` is Markdown, so `#` to `#####` make headings, and `#####` is a small uppercase label. The basic catalog's functions format values: `{"@call": "formatNumber", "args": {"value": ..., "decimals": 2}}` shows a number, and `{"@call": "formatString", "args": {"value": "## ${/mast/height_m} m"}}` mixes text and values.
+
+### Showing the robot's state
+
+A widget is only useful if it is live. Any value, such as `value`, `values`, `text`, `color`, `min`, `max`, `unit` or `label`, can be `{"@path": "/key/field"}` instead of a literal, which reads the robot's [state](/state/). The first segment is the state key and the rest is a JSON pointer into its value, so `/drive/speed_kmh` reads `speed_kmh` from the state key `drive`, and `/arms/left/2` reads the third item of the list `left`. Style properties (`variant`, `justify`, `align`, `axis`, `decimals`, `weight`) take literals only.
+
+The robot streams the state with its SDK, and the widget updates as it changes:
+
+```python
+state = robot.state_store()
+state.set("drive", {"speed_kmh": 4.2, "gear": "D"})
+```
+
+### Sending commands
+
+Buttons let operators act without leaving the page. A button's `action` is `{"event": {"name": ..., "context": {...}}}`. A press publishes a [control](/control/) to the robot on `json/widget/{widget name}`, or on the channel the context names, such as `"context": {"channel": "json/estop"}`. Either way the channel is under the robot's controls, and uses only letters, digits, `_`, `-` and `/`.
+
+```python
+@robot.on("json/widget/drive")
+def on_drive_widget(sample):
+    if sample.message["action"]["name"] == "reset_episode":
+        reset_episode()
+```
+
+The message is `{"version": "1.0", "action": {"name", "surfaceId", "sourceComponentId", "timestamp", "context"}}`, where `surfaceId` is the widget's name. Context values can read the state too, at the moment of the press. Pressing a button takes control of the robot first, as driving it would.
+
+## With an agent
+
+An agent can design the layout for you through Adamo's [MCP server](/mcp/): tell it which cameras and state keys your robot publishes, and ask for what you want, for example "a drive widget with a speedometer, the gear and a reset button, under the front camera".
