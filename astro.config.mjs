@@ -8,7 +8,7 @@ const sections = (prefix) =>
     { label: "Getting Started", items: ["index", "quickstart", ...(prefix ? [] : ["simulator"]), "cameras", ...(prefix ? [] : ["local-streaming", "mcp"])] },
     {
       label: "Building Robots",
-      items: ["control", "audio", "ros", "data", "recording", ...(prefix ? [] : ["training", "inference"]), "state", "discovery"],
+      items: ["control", "audio", "ros", "data", "recording", ...(prefix ? [] : ["training", "inference"]), "state", ...(prefix ? [] : ["custom-layouts"]), "discovery"],
     },
     { label: "Operating Robots", items: ["web-interface", "operator"] },
     {

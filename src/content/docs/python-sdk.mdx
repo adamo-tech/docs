@@ -268,6 +268,14 @@ with adamo.Robot(name="yam-london") as robot:
 
 `Inference.status()` returns a dict, `wait()` blocks until the run stops, `set_task(task)` gives the policy its next task, and `stop()` ends it. See [Cloud Inference](/inference/) for the keys a policy reads and writes, the control messages it publishes, and the HTTP calls.
 
+### Layout
+
+```python
+robot.set_layout(path: str | os.PathLike) -> None
+```
+
+Replace the robot's layout with the JSON file at `path`: its widgets and the tree of cameras and widgets its page opens on. See [Custom Layouts](/custom-layouts/) for the file and the `adamo layout` command.
+
 ### Lifecycle
 
 ```python
