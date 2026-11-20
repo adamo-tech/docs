@@ -134,7 +134,8 @@ robot.record_ros(["/joint_states", "/gripper/state"], max_age=1.0)
 ```
 
 - `/joint_states` is recorded as `joint_states`, and its fields export as `joint_states.position`.
-- Messages older than `max_age` seconds are skipped.
+- Every message is recorded, in order, by default. `reliable=False` records only the newest message of each topic. See [Choosing reliable or best effort](/ros/#choosing-reliable-or-best-effort).
+- Messages that waited longer than `max_age` seconds to leave the robot are skipped and counted. The default is 1.0 s, or 0.1 s with `reliable=False`.
 - Custom message types need their `.msg` definitions: `definitions={"package/msg/Type": msg_text}`.
 - Call it once, with every ROS topic to record.
 

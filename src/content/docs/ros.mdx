@@ -131,6 +131,79 @@ robot.enable_ros_control(control_topics=["/joy", "/teleop/clutch"])
   same messages arrive as native topics instead of envelopes.
 </Aside>
 
+## Recording ROS topics
+
+`record_ros` reads ROS topics from the local graph and publishes each message as JSON under the robot's name, where it is [recorded](/recording/#ros-topics) and can be subscribed to live. `/joint_states` on robot `my-arm` arrives on `my-arm/joint_states`. Declare each topic and its type when enabling ROS:
+
+```python
+ros = robot.enable_ros_control(subscribe_topics={
+    "/joint_states": "sensor_msgs/msg/JointState",
+    "/ee_pose": "geometry_msgs/msg/PoseStamped",
+})
+robot.record_ros(["/joint_states", "/ee_pose"])
+```
+
+### Choosing reliable or best effort
+
+`reliable` sets how messages leave the robot when the link cannot keep up. It applies to every topic in the call.
+
+| | `reliable=True` (default) | `reliable=False` |
+| --- | --- | --- |
+| Delivers | Every message, in order | The newest message of each topic |
+| When the link is slow | Queues up to 4096 messages or 32 MiB per topic and waits | Replaces the unsent message and never waits |
+| `max_age` default | 1.0 s | 0.1 s |
+| Use for | Data you train on or replay: joint states, commands, poses | Live readouts where only the current value matters |
+
+`record_ros` is called once per robot, so pick the mode that suits all its topics:
+
+```python
+robot.record_ros(["/joint_states", "/ee_pose"])               # every message, in order
+# or
+robot.record_ros(["/battery_state"], reliable=False)          # newest only, never more than 100 ms old
+```
+
+A message that has waited longer than `max_age` to leave the robot is skipped. On a reliable recording, `max_age` is how long a network stall may last before messages are lost. Raise it for a link with long stalls. Lower it only if a late message is worse than a missing one.
+
+<Aside type="caution" title="Best effort is for small messages">
+  A large message is sent in fragments, and losing any fragment loses the
+  whole message. Over a lossy link, best-effort messages of tens of kilobytes
+  can almost all be lost. Keep large topics, such as many-joint states or point
+  clouds, on `reliable=True`.
+</Aside>
+
+### Checking for loss
+
+Messages that reach the bridge but do not leave the robot are counted in `ros_control_status()`:
+
+```python
+status = robot.ros_control_status()
+status["recording_dropped"]  # not sent: beyond a full reliable queue, or replaced in best-effort mode
+status["recording_stale"]    # skipped for waiting longer than max_age
+```
+
+A reliable recording that loses messages also prints a warning naming each topic, at most every 5 seconds:
+
+```
+adamo ROS recording fell behind: /joint_states dropped 120 (the queue holds 4096 messages / 32 MiB per topic). The link or this host is not keeping up with the topic rate: lower the publish rate or message size, or check the network. Totals are in ros_control_status().
+```
+
+In best-effort mode, replacements are the requested behaviour, so they are counted but not warned about.
+
+When a ROS node starts publishing, its first message can be missed while DDS discovery connects it to the bridge. This is standard DDS behaviour for any newly matched subscriber.
+
+### Reading topics in your own code
+
+`RosSession.subscribe` returns only the newest message by default, which suits state. Pass `queue_size` to receive every message in order:
+
+```python
+with adamo.RosSession(subscribe_topics={"/joint_states": "sensor_msgs/msg/JointState"}) as ros:
+    states = ros.subscribe("/joint_states", queue_size=1024)
+    sample = states.recv(timeout=0.1)  # sample.cdr is the complete ROS message
+    states.stats()["overwritten"]      # messages discarded because the queue was full
+```
+
+Video tracks always use the newest frame only. A late frame is never worth showing.
+
 ## Notes
 
 - The bridge participates in local DDS discovery only. It does not extend your DDS domain off the robot, and remote operators cannot reach topics beyond the control fan-out.
