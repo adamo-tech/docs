@@ -11,6 +11,8 @@ const sections = (prefix) =>
       items: ["control", "audio", "ros", "data", "recording", ...(prefix ? [] : ["training", "inference"]), "state", ...(prefix ? [] : ["custom-layouts"]), "discovery"],
     },
     { label: "Operating Robots", items: ["web-interface", "operator"] },
+    // The 0.x docs have no compatibility page.
+    ...(prefix ? [] : [{ label: "Compatibility", items: ["hardware"] }]),
     {
       label: "SDK References",
       items: [
