@@ -143,6 +143,8 @@ ros = robot.enable_ros_control(subscribe_topics={
 robot.record_ros(["/joint_states", "/ee_pose"])
 ```
 
+Each message is stamped with the time the robot received it from ROS, on the same clock as the video. A message that waits on the robot behind a slow link still lines up with the frames from the moment it arrived. The original `header.stamp` stays in the message.
+
 ### Choosing reliable or best effort
 
 `reliable` sets how messages leave the robot when the link cannot keep up. It applies to every topic in the call.
