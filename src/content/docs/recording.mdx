@@ -219,6 +219,35 @@ Each interval has a `task_name`, `start_us`, `end_us` and an `outcome` of `"succ
 
 When one long recording holds several takes, split it so each take can be tagged, labelled, kept or deleted on its own. `POST $API/split` cuts the recording at each capture time in `times_us` and returns the new recordings' `ids` in order. The first keeps the recording's id, and each other is named after the time it starts, like any new recording. `intervals` are the tasks to save, each clipped to the recordings it spans.
 
+## Tagging recordings
+
+Tags mark the recordings you want to find again, across robots and folders: the ones for a dataset, the ones to review, the ones to keep. Add them on the [Recordings page](https://operate.adamohq.com/#/recordings), from your own code, or through an AI agent with the [MCP server](/mcp/#recordings).
+
+The tags API takes your `ADAMO_API_KEY`. To tag a recording, send the tags it should have. Its path is its `id`, `{device}/{name}`:
+
+```bash
+API=https://api.adamohq.com/api
+curl -X PATCH "$API/recordings/my-arm/my-recording" -H "X-API-Key: $ADAMO_API_KEY" -H 'content-type: application/json' \
+  -d '{"tags": ["data_collection", "keep"]}'
+```
+
+`tags` is the full set: it replaces the recording's tags, so read the recording first to add one, and leave a tag out to remove it. A tag your organization does not have yet is added to its tags. The call returns the recording.
+
+| Route | Description |
+|-------|-------------|
+| `GET /tags` | Your organization's tags |
+| `PUT /tags/{tag}` | Add a tag to your organization |
+| `DELETE /tags/{tag}` | Remove a tag from your organization and from every recording |
+| `GET /recordings/{device}/{name}` | A recording, with its `tags` |
+| `PATCH /recordings/{device}/{name}` | Set a recording's tags: `{"tags"}` |
+| `GET /recordings?tags=a,b` | The recordings that have all of these tags |
+
+- The star on the Recordings page is the tag `favourite`.
+- Only an owner or an admin can remove a tag from the organization, signed in on the Recordings page. An API key cannot.
+- `PATCH` also takes `display_name`, `description` and `folder`. Fields left out stay as they are.
+
+To select recordings by tag in Python, pass `tags` to `Recordings.list`, as shown below.
+
 ## Finding recordings
 
 Select the recordings to download, export or train on. `adamo.Recordings` reads your organization's recordings, using your `ADAMO_API_KEY`:
