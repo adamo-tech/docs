@@ -52,7 +52,83 @@ claude mcp add --transport http adamo https://api.adamohq.com/mcp
 
 The hosted server has every tool except those of the local server above.
 
-## Custom layouts
+## Tools
+
+Both servers have the tools below. You rarely name one yourself: say what you want, such as "tag last week's recordings on my-arm as `data_collection`", and the agent picks the tools. The tables tell you what it can do.
+
+A recording's `id` is `{device}/{name}`, as `list_recordings` returns it. The tools give times in seconds from the start of the recording.
+
+### Recordings
+
+Find the recordings worth keeping and put them in order, without clicking through the [Recordings page](https://operate.adamohq.com/#/recordings).
+
+| Tool | What it does |
+|---|---|
+| `list_recordings` | Recordings, oldest first, narrowed by time, device, controller, task, tag, folder or search words. Returns 50 at a time, and how many more match. |
+| `get_recording` | One recording's cameras, topics, data keys, tasks, outcomes, frame count, duration, size and web page. |
+| `update_recording` | Changes a recording's display name, description, tags or folder. Fields left out stay as they are. |
+| `split_recording` | Splits a recording into separate recordings at the given times. The first keeps the id, and the saved labels are divided between the pieces. |
+| `list_recording_tags` | Your organization's recording tags. |
+| `list_recording_tasks` | Every task name used in your recordings. |
+| `list_recording_folders` | Your recording folders, as paths. |
+| `rename_recording_folder` | Renames or moves a folder with everything in it. |
+| `delete_recording_folder` | Deletes a folder. Its recordings move to the top level, and none is deleted. |
+
+`update_recording` takes `tags` as the full set, replacing the recording's tags, so the agent reads them first to add one. A tag your organization does not have yet is added to its tags, and a folder that does not exist is created. See [Tagging recordings](/recording/#tagging-recordings).
+
+### Labelling
+
+Turn hours of teleoperation into labelled episodes. The agent looks at the frames, proposes where each task starts and ends, and you review its draft in the Task Editor before anything is saved. See [Labelling tasks](/recording/#labelling-tasks).
+
+| Tool | What it does |
+|---|---|
+| `recordings_segmentation_guide` | How to segment recordings: choosing task names, finding boundaries, judging outcomes. Agents read it before labelling. |
+| `list_recording_label_schemas` | Your label schemas: the rules for segmenting, and the task names to use. |
+| `save_recording_label_schema` | Creates or replaces a label schema. |
+| `get_recording_labels` | A recording's saved tasks, any draft awaiting review, and links to the Task Editor. |
+| `save_recording_label_draft` | Proposes tasks as a draft for you to review. Replaces any earlier draft and leaves the saved tasks alone. |
+| `save_recording_labels` | Saves tasks into the recording file directly, with no review. |
+| `delete_recording_label_draft` | Withdraws the draft, leaving the saved tasks as they are. |
+
+Each task has a `task_name`, a `start_s`, an `end_s` and an `outcome` of `success`, `failure` or `abort`. Until tasks are saved, a recording's tasks are the ones the robot logged.
+
+The servers also offer the prompt `segment_recordings`, for clients that show prompts. It takes the recordings to segment, as ids or a description such as "today's recordings on my-arm", and optionally the label schema to follow.
+
+### Datasets and training
+
+Go from labelled recordings to a trained policy in one conversation. See [Training](/training/).
+
+| Tool | What it does |
+|---|---|
+| `build_dataset` | Builds a training dataset from recordings on Adamo's servers, the build `adamo.Dataset(...)` starts. Building again with the same arguments returns the cached dataset. |
+| `dataset_status` | A dataset build's status: building, ready or failed, with the error. |
+| `list_base_models` | The base models a run can fine-tune, each with its authors' training recipe. |
+| `list_training_runs` | Your training runs, newest first: name, state, base model, times, and the last output lines of a run that failed. |
+| `training_metrics` | A run's logged metrics per step, at most 200 rows at a time. |
+| `rename_training_run` | Renames a training run. |
+| `tag_training_run` | Sets a training run's tags. |
+| `stop_training` | Stops a training run. Its saved weights and states stay. |
+
+`build_dataset` needs the Pro or Enterprise plan. Runs are started with the local server's `start_training`.
+
+### Policies and inference
+
+Try a policy on a robot as soon as it is trained. `start_inference` moves the robot: the policy drives it until you stop the run, a person takes over, or its data goes stale. See [Inference](/inference/).
+
+| Tool | What it does |
+|---|---|
+| `list_policies` | The policies that can run on a robot: your saved weights and states, and the base policies. |
+| `rename_policy` | Moves a saved policy to a new path. Robots and scripts that run it by its old path stop finding it. |
+| `tag_policy` | Sets a policy's tags. |
+| `list_robots` | Your robots: online now, or when last seen. |
+| `start_inference` | Starts a policy on a robot, with its arguments such as the task. |
+| `inference_status` | A run's status: waiting, loading, ready or stopped, what it waits for, and why it stopped. |
+| `wait_inference` | Waits up to 50 seconds for a run to start driving the robot or to stop, and returns its status. |
+| `stop_inference` | Stops a run, so the policy no longer drives the robot. |
+
+`start_inference` needs the Pro or Enterprise plan.
+
+### Custom layouts
 
 An agent can design a robot's [custom layout](/custom-layouts/), the page operators see: where its cameras sit, and widgets that show its live state and send it commands. The layout is one JSON document holding both.
 
@@ -64,3 +140,28 @@ An agent can design a robot's [custom layout](/custom-layouts/), the page operat
 | `delete_robot_layout` | Deletes a robot's layout. |
 
 Tell the agent which cameras and state keys your robot publishes, then ask for what you want, for example "a drive widget with a speedometer, the gear and a reset button, under the front camera".
+
+### Account and documentation
+
+Let the agent answer its own questions: what your plan allows, how to set up a robot, and what the SDK offers.
+
+| Tool | What it does |
+|---|---|
+| `get_usage` | Your plan and a month's usage: storage against the plan's allowance, training and inference GPU minutes with their prices, and teleoperation minutes. |
+| `sdk_setup` | How to put a robot on Adamo: installing the SDK, signing in on the robot's computer, the robot program, and teleoperating it from the web app. |
+| `read_docs` | These docs as markdown: the index of pages, or one page. Agents read it before writing code with the SDK. |
+
+## Permissions
+
+You decide what an agent may do. When a client connects to the hosted server, the sign-in page lists four permissions, and you tick the ones to grant:
+
+| Permission | Tools |
+|---|---|
+| See your recordings, datasets, training runs, policies and running inference | Every tool that only reads |
+| Edit, label and split recordings, and rename and tag policies and training runs | `update_recording`, `split_recording`, `rename_recording_folder`, `delete_recording_folder`, `save_recording_label_schema`, `save_recording_label_draft`, `save_recording_labels`, `delete_recording_label_draft`, `rename_policy`, `tag_policy`, `rename_training_run`, `tag_training_run` |
+| Build datasets and stop training runs | `build_dataset`, `stop_training` |
+| Start and stop policies on your robots, and change their widgets and layouts | `start_inference`, `stop_inference`, `save_robot_layout`, `delete_robot_layout` |
+
+Only owners, admins and developers can grant the last two. A call to a tool the agent was not granted is refused.
+
+The local server signs in with an API key, which can use every tool.
