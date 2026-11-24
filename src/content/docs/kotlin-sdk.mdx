@@ -415,7 +415,7 @@ Robot.open(apiKey, "phone", recording = Recording(
 ))
 ```
 
-`Recording(controllers, mode, minDuration, maxDuration, maxSizeBytes, topics, recordAudio, format)`. `mode` is `Episodes`, `Continuous` or `Interventions`, each with a `frameRate` of `Raw`, `Max(gop)` or `Fixed(rate, gop)`. `format` is `RRD` or `MCAP`.
+`Recording(controllers, mode, minDuration, maxDuration, maxSizeBytes, topics, recordAudio, format, tags)`. `mode` is `Episodes`, `Continuous` or `Interventions`, each with a `frameRate` of `Raw`, `Max(gop)` or `Fixed(rate, gop)`. `Continuous` also takes a `postRoll` and an `idleTimeout`: a teleoperator's time in control after their last input is left out once it passes (2 minutes by default), and `null` keeps it. `format` is `RRD` or `MCAP`. `tags` are put on every recording.
 
 `Recordings.open(apiKey)` lists and fetches what was recorded: `list(filter)`, `download(recordings, directory)` and `read(recording, ranges)` for byte ranges of one file.
 
