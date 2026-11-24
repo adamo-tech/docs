@@ -624,15 +624,19 @@ adamo.Recording(
     controller_mask: ControllerMask = ControllerMask.HUMAN | ControllerMask.POLICY,
     *,
     mode: RecordingMode.Episodes | RecordingMode.Continuous | RecordingMode.Interventions = RecordingMode.Continuous(),
+    min_duration: float = 5,
     max_duration: float = 1800,
     max_size: int = 1_500_000_000,
     topics: list[str] = [],
     record_audio: bool = False,
     format: Literal["rrd", "mcap"] = "rrd",
+    tags: list[str] = [],
 )
 ```
 
-What the Adamo data service records for a robot; pass it as `adamo.Robot(record=...)`. `controller_mask` selects when to record, `mode` how the recording is cut into files and on which clock, `topics` the data to record next to the cameras and controls, `record_audio` the robot's audio tracks, and `format` the kind of file each recording is written as, a Rerun `.rrd` or an [MCAP](/recording/#file-format) file. See [Recording a robot](/recording/#recording-a-robot).
+What the Adamo data service records for a robot; pass it as `adamo.Robot(record=...)`. `controller_mask` selects when to record, `mode` how the recording is cut into files and on which clock, `topics` the data to record next to the cameras and controls, `record_audio` the robot's audio tracks, `format` the kind of file each recording is written as, a Rerun `.rrd` or an [MCAP](/recording/#file-format) file, and `tags` the [tags](/recording/#tags) put on every recording. Files shorter than `min_duration` seconds are left out. See [Recording a robot](/recording/#recording-a-robot).
+
+`mode` is one of `RecordingMode.Episodes(frame_rate=FrameRate.Raw())`, `RecordingMode.Continuous(frame_rate=FrameRate.Raw(), post_roll=0.0, idle_timeout=120.0)` or `RecordingMode.Interventions(pre_roll=5.0, post_roll=0.0, frame_rate=FrameRate.Raw())`. In Continuous mode, a teleoperator's time in control after their last input is left out once `idle_timeout` seconds pass without another, and `idle_timeout=None` keeps it. See [Modes](/recording/#modes).
 
 ### `Recordings`
 

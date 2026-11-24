@@ -41,12 +41,11 @@ for _ in adamo.Rate(30):
 
 ```rust
 use std::num::NonZeroU32;
-use std::time::Duration;
 use adamo::{ControllerMask, FrameRate, Mode, PublisherOptions, Rate, Recording, Robot};
 
 let robot = Robot::new_default("ak_...", Some("my-arm"))?.with_recording(Recording {
     controller_mask: ControllerMask::HUMAN | ControllerMask::POLICY,
-    mode: Mode::Episodes { frame_rate: FrameRate::Fixed { rate: NonZeroU32::new(30).unwrap(), gop: NonZeroU32::new(2).unwrap() }, min_duration: Duration::from_secs(2) },
+    mode: Mode::Episodes { frame_rate: FrameRate::Fixed { rate: NonZeroU32::new(30).unwrap(), gop: NonZeroU32::new(2).unwrap() } },
     topics: vec!["left/joint_pos".to_owned(), "left/joint_cmd".to_owned()],
     ..Recording::default()
 });
@@ -87,11 +86,12 @@ Adamo supports three recording modes, set with `mode`:
 
 | Mode | Description |
 |---|---|
-| `RecordingMode.Episodes(frame_rate, min_duration=2.0)` | Creates one recording file per episode, from the start of a task to its end. Tasks shorter than `min_duration` seconds are left out. |
+| `RecordingMode.Episodes(frame_rate)` | Creates one recording file per episode, from the start of a task to its end. |
 | `RecordingMode.Continuous(frame_rate, post_roll=0.0, idle_timeout=120.0)` (default) | Creates one recording file per stretch of recorded time, with `post_roll` seconds after it. |
 | `RecordingMode.Interventions(pre_roll=5.0, post_roll=0.0, frame_rate)` | Creates one recording file whenever the controller changes, with `pre_roll` seconds before it and `post_roll` seconds after. |
 
 - In Continuous mode, a teleoperator's time in control after their last input is left out once `idle_timeout` seconds pass without another. `idle_timeout=None` keeps it.
+- Files shorter than `min_duration` seconds (default 5), not counting their pre and post roll, are left out.
 - Files are cut into parts after `max_duration` seconds (default 1800) or `max_size` bytes (default 1.5 GB).
 
 ### Frame rate
@@ -173,6 +173,33 @@ let recording = Recording { format: RecordingFormat::Mcap, ..Recording::default(
 - An MCAP file keeps each camera as a `foxglove.CompressedVideo` channel and each other topic as the payload the robot sent, so any MCAP reader can open it.
 - A recording's `format` says which kind of file it is.
 - [Exporting audio](#exporting-audio), `adamo replay` and [exporting recordings](#exporting-recordings) read both formats.
+
+### Tags
+
+Tag a robot's recordings as they are made, to find them later. `tags` puts the same tags on every recording of the robot:
+
+<Tabs syncKey="lang">
+<TabItem label="Python" icon="seti:python">
+
+```python
+recording = adamo.Recording(tags=["pick-place", "lab-2"])
+```
+
+</TabItem>
+<TabItem label="Rust" icon="seti:rust">
+
+```rust
+use adamo::Recording;
+
+let recording = Recording { tags: vec!["pick-place".to_owned(), "lab-2".to_owned()], ..Recording::default() };
+```
+
+</TabItem>
+</Tabs>
+
+- The tags show on the [Recordings page](https://operate.adamohq.com/#/recordings), where you can filter by them, add more or remove them.
+- A tag your organization does not have yet is added to its tags.
+- `Recordings.list(tags=[...])` selects the recordings with all of the given tags. See [Finding recordings](#finding-recordings).
 
 ### Tasks
 
