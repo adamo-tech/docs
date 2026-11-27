@@ -662,6 +662,8 @@ loop {
 
 The `subscribe` calls return an error if the requested codec, output format or memory has no decoder on this host. They never fall back silently to a different output. If a picture fails to decode, `recv` returns that error once. The receiver then resets its decoder and asks the robot for a keyframe, so the next calls deliver frames again. If the worker itself stops, every later `recv` returns an error that says to close and reopen the receiver. The CUDA output paths have the same requirements and limits as in [Python](/python-sdk/#copies-cpu-access-and-requirements).
 
+`VideoReceiver` sends [delivery and throughput reports](/cameras/#receiver-feedback) automatically. To let the robot adjust bitrate using those reports, pass `adamo::ReceiverFeedbackOptions { receiver_abr_enabled: true }` to `VideoReceiver::subscribe_with_options` or `VideoReceiver::subscribe_auto_with_options`. The encoded access-unit receiver exposes the same option through `AccessUnitReceiver::subscribe_with_options` and `AccessUnitReceiver::subscribe_depth_with_options`. If your app holds control, associate the receiver with that claim using `receiver.set_feedback_control_owner(Some((controller, session_id)))` and pass `None` when releasing control.
+
 ---
 
 ## Audio: `feature = "audio"`

@@ -316,9 +316,7 @@ scope.launch { player.run() }
 
 On a Snapdragon phone, 720p streams from NVENC and VAAPI robots decode in about 5 ms with no frames held back. The step after that, from decoded frame to lit pixels, is one or two display refreshes.
 
-<Aside>
-  A viewer that does not hold control does not steer the robot's bitrate yet, so a stream larger than the viewer's link falls behind rather than adapting. `arrivalMs` and `receivedKbps` show when that is happening.
-</Aside>
+The receiver sends [delivery and throughput reports](/cameras/#receiver-feedback) automatically. Pass `receiverAbrEnabled = true` to `session.videoReceiver` or `session.depthReceiver` to allow the robot to adjust the track's bitrate using receiver feedback. If your app holds control, call `lease.steer(receiver)` on its `ControlLease` to associate a video receiver with that claim.
 
 To decode yourself, collect `receiver.accessUnits()`. An `AccessUnit` has `payload` (Annex-B bytes for one frame), `captureTimeUs`, `sequence` and `keyframe`. Start from a keyframe, and call `receiver.requestKeyframe()` after dropping a frame. `receiver.counters()` returns transport counters, and `setFeedbackControlOwner(controller, sessionId)` names the operator whose reception steers the sender's loss protection.
 
