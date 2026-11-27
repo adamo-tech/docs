@@ -137,6 +137,10 @@ adamo doctor   # uses the key adamo login saved, or pass --api-key ak_...
 
 It checks API key validity, QUIC reachability (including whether this network blocks UDP), encoder availability, and the video extras — and prints output you can paste straight into a support request.
 
+### Startup fails with `EncoderSelectionError`
+
+No hardware video encoder started on this host. In a Docker container, VM or CI runner this almost always means the GPU is not passed through. Fix the environment and leave `encoder` unset; do not switch to a CPU encoder to get past the error. See [No hardware encoder found](/cameras/#no-hardware-encoder-found).
+
 ### The robot starts but never connects
 
 The default transport is **QUIC**, which runs over UDP (port 443). Some corporate networks, lab firewalls, VPNs, and hotel Wi-Fi block outbound UDP even when normal HTTPS works.

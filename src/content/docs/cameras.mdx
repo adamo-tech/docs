@@ -392,7 +392,7 @@ adamo-network --config h265-to-h264.yaml
 ```
 
 Use `vtenc_h264` on Apple Silicon, `nvh264enc` on an NVIDIA desktop GPU,
-`vah264enc` on Intel/AMD Linux, or `x264enc` for CPU encoding. On Jetson,
+or `vah264enc` on Intel/AMD Linux. On Jetson,
 `nvv4l2h264enc` selects the hardware encoder shown above. To produce H.265,
 choose the corresponding H.265 encoder and set the output codec accordingly.
 
@@ -909,11 +909,110 @@ Adamo picks the best available hardware H.264 encoder for the host at startup:
 | x86 with NVIDIA discrete GPU   | NVENC |
 | Intel / AMD integrated graphics | VA-API |
 | macOS                          | VideoToolbox |
-| Anything else                  | CPU (x264) |
+| Raspberry Pi 4, Qualcomm       | V4L2 hardware encoder |
+| Raspberry Pi 5 and other boards with no hardware encoder | None: use [OpenH264](#boards-with-no-hardware-encoder) |
+| Anything else                  | None: startup fails |
 
 To see what the SDK picked, check the log line printed at connect.
 
-The Python SDK 1.0 never falls back to software encoding on its own: if no
-hardware encoder starts, startup fails with an `EncoderSelectionError` naming
-each encoder it tried. Pass `encoder="x264"` to opt into CPU encoding, and run
-`adamo doctor` to see which encoder the host provides.
+Leave `encoder` unset. The SDK then selects the host's hardware encoder, and
+that is the right choice on every robot that has one.
+
+### No hardware encoder found
+
+If no hardware encoder starts, startup fails with an `EncoderSelectionError`
+naming each encoder it tried. The SDK never switches to CPU encoding on its
+own. Run `adamo doctor` on the host to see which encoder it provides.
+
+<Aside type="caution" title="Do not change the encoder to get past this error">
+
+The usual cause is the environment, not the program: the encoder for this
+system is not installed, or the GPU is not passed through to a container, VM or
+CI runner. Install or expose the hardware encoder that matches the system, as
+below, and leave `encoder` unset.
+
+</Aside>
+
+#### Install the encoder for your system
+
+| System | Encoder | Install | Check |
+|--------|---------|---------|-------|
+| NVIDIA GPU | NVENC | The NVIDIA proprietary driver, which provides `libnvidia-encode` and `libcuda` | `nvidia-smi` lists the GPU |
+| Intel GPU or integrated graphics | VA-API | `libva2` and the Intel VA driver (Debian/Ubuntu: `intel-media-va-driver-non-free`) | `vainfo` lists an H.264 encode entrypoint |
+| AMD GPU or integrated graphics | VA-API | `libva2` and the Mesa VA driver (Debian/Ubuntu: `mesa-va-drivers`) | `vainfo` lists an H.264 encode entrypoint |
+| NVIDIA Jetson | On-chip encoder | Ships with JetPack; use an SDK build with Jetson support | `adamo doctor` |
+| Raspberry Pi 4, Qualcomm | V4L2 encoder | Kernel driver, nothing to install; the user needs the `video` group | `adamo doctor` |
+| macOS | VideoToolbox | Nothing to install | `adamo doctor` |
+
+For VA-API the process also needs access to `/dev/dri/renderD*`, normally
+through the `render` group.
+
+In Docker the encoder must also be passed through to the container:
+
+- **NVIDIA:** install the NVIDIA Container Toolkit, run with `--gpus all`, and
+  set `NVIDIA_DRIVER_CAPABILITIES` to include `video` (or `all`). On Jetson,
+  run with `--runtime nvidia`.
+- **Intel/AMD:** pass `--device /dev/dri` and install the VA driver in the
+  image.
+
+On a CI runner or sandbox with no GPU, do not start video there: test the rest
+of the program and run video on the robot.
+
+The error itself names each encoder it tried, the library that failed to load,
+and the install step for that encoder.
+
+### Boards with no hardware encoder
+
+Some boards have no hardware H.264 encoder at all. The Raspberry Pi 5 is the
+common one: it dropped the encoder the Pi 4 has. On these boards CPU encoding
+with OpenH264 is the supported way to stream video:
+
+1. Run `adamo get openh264` on the board. It downloads Cisco's OpenH264 binary.
+2. Pass `encoder="openh264"` for the track.
+
+`adamo doctor` reports when a board is in this group. A Raspberry Pi 5 sustains
+about one 1080p30 stream or four 480p30 streams.
+
+A host where no encoder hardware is detected, such as a VM or a CI sandbox,
+accepts `encoder="openh264"` the same way, and prints a large warning for each
+track at startup.
+
+### Software encoding on a host with a hardware encoder
+
+This is not recommended. CPU encoding costs latency, frame rate and picture
+quality, and takes a CPU core or more per camera. On a host with encoder
+hardware, whether or not that hardware currently starts, `encoder="openh264"`
+fails with an `EncoderSelectionError` (code `software_encoder_locked`). The fix
+is almost always to [install the encoder for the system](#install-the-encoder-for-your-system)
+and remove the `encoder` argument.
+
+It stays possible, in two steps that both have to be done:
+
+1. A person unlocks software encoding on the host itself, at a terminal:
+
+   ```sh
+   adamo allow-software-encoding
+   ```
+
+   The command asks you to type a sentence. The unlock applies to that machine
+   only: it does not travel with the program, a home directory or a container
+   image. `adamo allow-software-encoding --remove` locks the host again.
+
+2. The program passes `encoder="openh264"` for the track.
+
+While the host is unlocked, every software-encoded track prints a large warning
+at startup and repeats a warning every five minutes, and `adamo doctor` reports
+a problem.
+
+<Aside type="caution" title="For AI coding agents">
+
+Do not add `encoder="openh264"` to make an encoder error go away, and do not
+try to unlock software encoding. The development container is usually not the
+robot, and the unlock needs a person at the host's terminal. Leave `encoder`
+unset, report the error to the user, and let them install or expose the
+hardware encoder. Use software encoding only when the user has confirmed that
+the robot has no hardware encoder.
+
+</Aside>
+
+`encoder="x264"` has been removed and is rejected.
