@@ -84,7 +84,7 @@ class adamo.Robot:
     ): ...
 ```
 
-Connects to your organization's router. `protocol="quic"` is the right choice in every case; `"tcp"` is a diagnostic or telemetry-only fallback for networks that block UDP — don't teleoperate over it. A rejected API key raises `ConnectionError`.
+With a valid API key, `Robot` connects to your organization's relay and publishes video over that connection. `protocol="quic"` is the right choice in every case; `"tcp"` is a diagnostic or telemetry-only fallback for networks that block UDP — don't teleoperate over it. A rejected API key raises `ConnectionError`.
 
 With no API key at all (no `api_key`, no `ADAMO_API_KEY` and no key saved by `adamo login`), the robot warns and runs locally instead, like `Robot.local()`: it doesn't reach the relay, and receivers connect with `adamo.connect_local()` using the address and pairing key it prints.
 
@@ -124,9 +124,6 @@ robot.attach_video(
     stereo_right: bool = False,         # right eye of a two-track stereo pair
     backend: str | None = None,         # "auto" or "hw_pipeline"
     allow_missing: bool = False,
-    route: str | None = None,           # "auto", "relay", or "local"
-    direct_target: str | None = None,
-    direct_credentials: str | None = None,
     face_blur: bool | FaceBlur | None = None,
 ) -> None
 ```
@@ -146,8 +143,6 @@ Omitting `encoder` selects a hardware encoder for `codec`, which is the recommen
 `rate_control` overrides the hardware encoder's rate-control mode: `"cbr"` (constant bitrate) or `"vbr"` (variable bitrate). Omit it to keep the encoder's default, which follows `adaptive_bitrate`. Pair `"vbr"` with `adaptive_bitrate=False` to hold a fixed quality budget while simple scenes use fewer bits. On VA-API, an explicit `rate_control` is strict for H.264: startup fails if the GPU lacks that mode. With it omitted, the encoder switches to CBR when the GPU lacks VBR (and the reverse), and fails only if the GPU supports neither, for example a GPU limited to constant-QP.
 
 With `allow_missing=True` a track waits for a late or idle source until `close()`; otherwise it fails after ten seconds without a frame.
-
-`route` selects relay or direct delivery for the track: `"auto"` (default) races a LAN candidate against the relay, `"relay"` never dials one, and `"local"` requires the direct link named by `direct_target`.
 
 `stereo_left=True` and `stereo_right=True` mark the two eyes of the robot's one two-track stereo pair. Both eyes need matching geometry, fps, codec, and bitrate settings. See [Stereo Cameras](/cameras/#stereo-cameras).
 
@@ -177,9 +172,6 @@ robot.video(
     stereo_right: bool = False,         # right eye of a two-track stereo pair
     backend: str | None = None,   # "auto" or "hw_pipeline"
     allow_missing: bool = False,
-    route: str | None = None,
-    direct_target: str | None = None,
-    direct_credentials: str | None = None,
     face_blur: bool | FaceBlur | None = None,
 ) -> VideoTrack
 ```
