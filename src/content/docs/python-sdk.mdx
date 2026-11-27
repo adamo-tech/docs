@@ -399,8 +399,8 @@ video. By default, frames are available as CPU NumPy arrays. Receivers also
 support CUDA NV12 and CUDA RGBA output for GPU perception or inference.
 
 Open a shared client session with `adamo.connect()`. It reads `ADAMO_API_KEY`
-or the key `adamo login` saved by default, or accepts an API key explicitly. Select the robot and track, and
-set `codec` to match the publisher's encoded stream:
+or the key `adamo login` saved by default, or accepts an API key explicitly.
+Select the robot and track. The receiver detects the codec by default.
 
 ```python
 session.video_receiver(
@@ -408,8 +408,9 @@ session.video_receiver(
     track: str,
     *,
     max_queued_frames: int = 1,
-    codec: str = "h264",          # "h264" or "av1"
+    codec: str | None = None,     # "h264", "av1", "auto", or None
     output: adamo.VideoOutput | None = None,
+    receiver_abr_enabled: bool = False,
 ) -> adamo.VideoReceiver
 ```
 
@@ -434,10 +435,9 @@ with adamo.connect() as session:  # reads ADAMO_API_KEY or the saved key
         rgb = rgba[..., :3].copy()  # writable RGB array for image processing
 ```
 
-Replace `"my-robot"` and `"head"` with the robot and track names. H.264 is
-the default; pass `codec="av1"` for an AV1 stream. The codec must match the
-publisher; automatic codec discovery is not supported. Receiving video does
-not register a new robot or claim control of the remote robot.
+Replace `"my-robot"` and `"head"` with the robot and track names. If you
+specify a codec, use the one the publisher sends. A client can receive video
+without registering a robot or claiming control.
 
 Call `receiver.recv(...)` repeatedly to consume the stream. The native worker
 continues decoding between calls. `max_queued_frames=1` (the default) retains
@@ -447,6 +447,36 @@ preserving the decoder's reference chain. Each camera has its own worker.
 Frames also expose `width`, `height`, `sequence`, `keyframe`, and
 `capture_time_us` (the sender's Unix timestamp in microseconds). The NumPy
 array remains valid after the next receive or after the session closes.
+
+### Enable receiver-driven bitrate adaptation
+
+`session.video_receiver()` sends [delivery and throughput reports](/cameras/#receiver-feedback)
+automatically. Pass `receiver_abr_enabled=True` when opening each track whose
+reports should be allowed to adjust the robot's bitrate.
+
+```python
+import adamo
+
+with adamo.connect() as session:
+    with session.video_receiver("my-robot", "head", receiver_abr_enabled=True) as receiver:
+        frame = receiver.recv(timeout=5.0)
+```
+
+If your app holds control, associate the receiver with that active claim. Use
+the same controller and session ID as the app's `session.announce_control()`
+token. This lets the robot identify the operator's receiver when multiple
+viewers are watching.
+
+```python
+# Call inside the receiver's context while the control token is held.
+receiver.set_feedback_control_owner(
+    controller=operator_user_id,
+    session_id=control_session_id,
+)
+```
+
+Call `receiver.set_feedback_control_owner()` when releasing control if the
+receiver stays open.
 
 ### Receive NV12 in CUDA memory
 

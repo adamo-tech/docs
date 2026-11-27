@@ -677,6 +677,10 @@ adamo_video_receiver_t *adamo_video_receiver_open_configured(
 
 The defaults are right for almost every case: the codec is detected from the stream and hardware decoding is used when the host has it (VideoToolbox, NVDEC, VA-API), falling back to software.
 
+#### Receiver-driven bitrate adaptation
+
+C and C++ video receivers send [delivery and throughput reports](/cameras/#receiver-feedback) automatically. To allow receiver-driven bitrate adjustments, open the receiver with `adamo_video_receiver_open_with_receiver_abr(sess, robot, track, NULL, true)`, or pass your decoder options in place of `NULL`. For encoded video, use `adamo_access_unit_receiver_open_with_receiver_abr` or `adamo_encoded_receiver_open_with_receiver_abr` with the last argument set to `true`. In C++, use the `adamo::VideoReceiver::open` overload that takes decoder options and a final `true` argument.
+
 #### Stereo tracks
 
 A stereo track packs both eyes into each frame — side-by-side or stacked top-bottom. `adamo_video_receiver_stereo` returns `1` for stereo, `0` for mono, and `-1` while the track's metadata hasn't arrived yet. The packing layout follows from the frame shape: frames taller than wide are top-bottom, wider are side-by-side. To show one eye, crop half the frame (or use texture coordinates — see the streaming UI section below).

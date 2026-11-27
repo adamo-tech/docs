@@ -899,6 +899,14 @@ Two knobs cover almost everything:
 
 If video looks blocky, raise the bitrate before anything else. If bandwidth is the bottleneck, lower fps first.
 
+### Receiver feedback
+
+The SDK's video receiver sends delivery reports automatically for each track. The reports include frame outcomes, missing and recovered chunks, and capture-to-reassembly latency when available. On `<track-topic>/delivery/v3`, the receiver also reports measured media throughput when available, even with receiver ABR off. This is the rate of incoming media over a rolling 250 ms window, including media headers and repair packets. It excludes transport overhead and measures how much traffic arrived. If you manage relay permissions, allow the receiver to publish and the robot to subscribe on `/delivery/v3` for the track.
+
+Receiver-driven adaptive bitrate (ABR) is off by default in the SDKs. Enable it when opening the receiver to let the robot reduce video bitrate in response to sustained high latency or a throughput shortfall. With one reporting viewer, the robot can use that viewer's reports without a control claim. With multiple viewers, the robot uses the unique receiver associated with the current control holder. A matching control claim also lets that receiver inform the robot's forward error correction (FEC), independently of the ABR setting.
+
+See the receiver settings for [Python](/python-sdk/#enable-receiver-driven-bitrate-adaptation), [Rust](/rust-sdk/#videoreceiver), [C/C++](/c-sdk/#receiver-driven-bitrate-adaptation), [Kotlin](/kotlin-sdk/#receiving-video), or [TypeScript](/typescript-sdk/#streamplayeroptions).
+
 ### Encoder selection
 
 Adamo picks the best available hardware H.264 encoder for the host at startup:

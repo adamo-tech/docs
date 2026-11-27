@@ -1270,6 +1270,9 @@ type StreamPlayerOptions = {
   org?: string;         // Organization slug
   videoTopic?: string;  // Override the full video topic (skips org/robot/track)
   canvas: HTMLCanvasElement;
+  feedback?: boolean;            // Defaults to true
+  receiverAbrEnabled?: boolean;  // Defaults to false
+  feedbackControlOwner?: { controller: string; sessionId: string } | null;
   viewerId?: number;    // Viewer ID for encoder resize hints (default: 0)
   fec?: {
     type: "reed-solomon";
@@ -1287,10 +1290,14 @@ type StreamPlayerOptions = {
 };
 ```
 
+The player sends [delivery and throughput reports](/cameras/#receiver-feedback) automatically. Keep `feedback` enabled and set `receiverAbrEnabled: true` to let those reports influence the robot's bitrate. You can also call `player.setReceiverAbrEnabled(true)` after opening the player. If your app holds control, set `feedbackControlOwner` with the controller and session ID from its active claim, or update it later with `player.setFeedbackControlOwner(owner)`. Pass `null` on release.
+
 ### `StreamPlayerHandle`
 
 ```ts
 type StreamPlayerHandle = {
+  setReceiverAbrEnabled: (enabled: boolean) => void;
+  setFeedbackControlOwner: (owner: { controller: string; sessionId: string } | null) => void;
   requestKeyframe: () => Promise<void>; // Ask the robot to send a keyframe
   sendResize: (width: number, height: number) => Promise<void>; // Tell the encoder your display size
   close: () => void; // Tear down all subscriptions and the decoder
